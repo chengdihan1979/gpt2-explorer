@@ -1,0 +1,5 @@
+/* src/katex-overrides.css */
+.katex-display {
+  text-align: left !important;
+  margin-left: 0 !important; /* optional */
+}
