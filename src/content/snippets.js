@@ -14,7 +14,7 @@ class GPT2(nn.Module):
         ])
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
-        
+
         # weight tying: LM head shares weights with token embeddings
         self.lm_head.weight = self.tok_emb.weight
 
@@ -157,8 +157,8 @@ export const content = {
   final_ln:  { title: "Final LayerNorm", summary: "Normalizes hidden states.", code: "", anchors: [] },
   lm_head:   { title: "LM Head (Linear Layer)", summary: "Linear projection to vocab logits.", code: "", anchors: [] },
   loss_fn: {
-    title: "Training Loss",
-    summary: "CrossEntropy loss for next-token prediction.",
+    title: "GPT-2 (model & training)",
+    summary: "Full model definition and a minimal training loop.",
     code: gpt2TrainingCode,
     anchors: [{ id: "loss_line", label: "loss line", match: "loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))" }],
   },
