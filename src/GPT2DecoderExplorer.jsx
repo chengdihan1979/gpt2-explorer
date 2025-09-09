@@ -250,6 +250,8 @@ $$
     md: `
   **Maps token IDs to dense vectors.**
   
+  &nbsp;
+
   **Weight matrix:**
   $$
   W \\in \\mathbb{R}^{\\text{vocab\\_size} \\times \\text{n\\_embd}}
@@ -272,7 +274,13 @@ $$
 
   &nbsp;
   
+  ---
+
+  &nbsp;
+
   **Training**
+
+  &nbsp;
 
   - $W$ is learned via backprop.
   - Only rows for tokens in the batch get updated.
@@ -280,7 +288,13 @@ $$
 
   &nbsp;
 
+  ---
+
+  &nbsp;
+
   **Why use embedding? Not one hot encoding.**  
+
+  &nbsp;
 
   A one-hot token vector would be length $vocab\\_size$ and extremely sparse. $nn.Embedding$ is equivalent to multiplying a one-hot vector by $W$, but it:
 
@@ -312,6 +326,8 @@ $$
   &nbsp;
   
   **Runtime usage**
+  
+  &nbsp;
   
   1. Token IDs → token embeddings:  
   $$
@@ -353,6 +369,8 @@ $$
   
   **Shapes at a glance**
   
+  &nbsp;
+
   - Weight: $[\\text{max\\_toks}, n\\_embd]$  
   - Positions: $[T]$  
   - Pos embeddings: $[T, n\\_embd]$  
