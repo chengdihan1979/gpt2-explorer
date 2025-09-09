@@ -1,21 +1,3 @@
-import React, {
-  useMemo,
-  useState,
-  useEffect,
-  useRef,
-  createContext,
-  useContext,
-} from "react";
-
-import ReactMarkdown from "react-markdown";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
-import rehypeSlug from "rehype-slug"; // adds id=... to headings
-import "katex/dist/katex.min.css";
-
-/** =========================
- *  Info Registry (Scalable)
- *  ========================= */
 const INFO = {
   dimension_change_notes: {
     title: "Dimension changes during forward",
@@ -209,8 +191,8 @@ $$
 &nbsp;
 
 1. **Stabilizes training**  
-   Prevents exploding/vanishing activations by keeping values centered and scaled.  
-   For each token embedding $x \\in \\mathbb{R}^D$:
+  LayerNorm is the key mechanism that keeps activations and gradients from exploding or vanishing as depth grows. 
+  This mainly stabilizes the forward pass. For each token embedding $x \\in \\mathbb{R}^D$:
 
    $$
    \\text{LayerNorm}(x) = \\frac{x - \\mu}{\\sigma + \\epsilon} \\cdot \\gamma + \\beta
@@ -772,7 +754,7 @@ This computes the **average negative log-likelihood** across all tokens in the b
     md: `
 **Key projection**
 
-$self.key(x)$ — applies a linear layer to every token:
+$k(x)$ — applies a linear layer to every token:
 
 $$
 (B, T, C) \\;\\rightarrow\\; (B, T, C).
@@ -780,19 +762,19 @@ $$
 
 **Split channels into heads**
 
-$.view(B, T, n_{\\text{head}}, h_s)$ — splits the last dim $C$ into $n_{\\text{head}}\\times h_s$ with
-$h_s = \\left\\lfloor \\dfrac{C}{n_{\\text{head}}} \\right\\rfloor$:
+$.view(B, T, n\\_head, hs)$ — splits the last dim $C$ into $n\\_head\\times hs$ with
+$hs = \\left\\lfloor \\dfrac{C}{n\\_head} \\right\\rfloor$:
 
 $$
-(B, T, C) \\;\\rightarrow\\; (B, T, n_{\\text{head}}, h_s).
+(B, T, C) \\;\\rightarrow\\; (B, T, n\\_head, hs).
 $$
 
 **Move heads dimension next to batch**
 
-$.transpose(1, 2)$ — swaps the $T$ and $n_{\\text{head}}$ axes:
+$.transpose(1, 2)$ — swaps the $T$ and $n\\_head$ axes:
 
 $$
-(B, T, n_{\\text{head}}, h_s) \\;\\rightarrow\\; (B, n_{\\text{head}}, T, h_s).
+(B, T, n\\_head, hs) \\;\\rightarrow\\; (B, n\\_head, T, hs).
 $$
     `,
   },
@@ -802,7 +784,7 @@ $$
     md: `
 **Query projection**
 
-$self.query(x)$ — applies a linear layer to every token:
+$q(x)$ — applies a linear layer to every token:
 
 $$
 (B, T, C) \\;\\rightarrow\\; (B, T, C).
@@ -810,19 +792,19 @@ $$
 
 **Split channels into heads**
 
-$.view(B, T, n_{\\text{head}}, h_s)$ — splits the last dim $C$ into $n_{\\text{head}}\\times h_s$ with
-$h_s = \\left\\lfloor \\dfrac{C}{n_{\\text{head}}} \\right\\rfloor$:
+$.view(B, T, n\\_head, hs)$ — splits the last dim $C$ into $n\\_head\\times hs$ with
+$hs = \\left\\lfloor \\dfrac{C}{n\\_head} \\right\\rfloor$:
 
 $$
-(B, T, C) \\;\\rightarrow\\; (B, T, n_{\\text{head}}, h_s).
+(B, T, C) \\;\\rightarrow\\; (B, T, n\\_head, hs).
 $$
 
 **Move heads dimension next to batch**
 
-$.transpose(1, 2)$ — swaps the $T$ and $n_{\\text{head}}$ axes:
+$.transpose(1, 2)$ — swaps the $T$ and $n\\_head$ axes:
 
 $$
-(B, T, n_{\\text{head}}, h_s) \\;\\rightarrow\\; (B, n_{\\text{head}}, T, h_s).
+(B, T, n\\_head, hs) \\;\\rightarrow\\; (B, n\\_head, T, hs).
 $$
     `,
   },
@@ -832,7 +814,7 @@ $$
     md: `
 **Value projection**
 
-$self.value(x)$ — applies a linear layer to every token:
+$v(x)$ — applies a linear layer to every token:
 
 $$
 (B, T, C) \\;\\rightarrow\\; (B, T, C).
@@ -840,19 +822,19 @@ $$
 
 **Split channels into heads**
 
-$.view(B, T, n_{\\text{head}}, h_s)$ — splits the last dim $C$ into $n_{\\text{head}}\\times h_s$ with
-$h_s = \\left\\lfloor \\dfrac{C}{n_{\\text{head}}} \\right\\rfloor$:
+$.view(B, T, n\\_head, hs)$ — splits the last dim $C$ into $n\\_head\\times hs$ with
+$hs = \\left\\lfloor \\dfrac{C}{n\\_head} \\right\\rfloor$:
 
 $$
-(B, T, C) \\;\\rightarrow\\; (B, T, n_{\\text{head}}, h_s).
+(B, T, C) \\;\\rightarrow\\; (B, T, n\\_head, hs).
 $$
 
 **Move heads dimension next to batch**
 
-$.transpose(1, 2)$ — swaps the $T$ and $n_{\\text{head}}$ axes:
+$.transpose(1, 2)$ — swaps the $T$ and $n\\_head$ axes:
 
 $$
-(B, T, n_{\\text{head}}, h_s) \\;\\rightarrow\\; (B, n_{\\text{head}}, T, h_s).
+(B, T, n\\_head, hs) \\;\\rightarrow\\; (B, n\\_head, T, hs).
 $$
     `,
   },
@@ -894,15 +876,15 @@ Result: for each head, a $T \\times T$ matrix of raw attention scores (one row p
 
 Given
 $$
-q, k \\in \\mathbb{R}^{B \\times n\\_head \\times T \\times h_s},
+q, k \\in \\mathbb{R}^{B \\times n\\_head \\times T \\times hs},
 $$
 the attention logits are computed as
 $$
-\\mathrm{att} \\;=\\; \\bigl(q \\; k^\\top\\bigr)\\;\\frac{1}{\\sqrt{h_s}},
+\\mathrm{att} \\;=\\; \\bigl(q \\; k^\\top\\bigr)\\;\\frac{1}{\\sqrt{hs}},
 $$
 where the transpose is over the last two axes of $k$:
 $$
-k^\\top \\in \\mathbb{R}^{B \\times n\\_head \\times h_s \\times T},
+k^\\top \\in \\mathbb{R}^{B \\times n\\_head \\times hs \\times T},
 \\qquad
 q\\,k^\\top \\in \\mathbb{R}^{B \\times n\\_head \\times T \\times T}.
 $$
@@ -911,18 +893,18 @@ Elementwise, for batch $b$, head $h$, query position $t_q$, and key position $t_
 $$
 \\mathrm{att}_{b,h,t_q,t_k}
 \\;=\\;
-\\frac{ q_{b,h,t_q,:}\\cdot k_{b,h,t_k,:} }{\\sqrt{h_s}}.
+\\frac{ q_{b,h,t_q,:}\\cdot k_{b,h,t_k,:} }{\\sqrt{hs}}.
 $$
 
-**Why the $1/\\sqrt{h_s}$ scale**
+**Why the $1/\\sqrt{hs}$ scale**
 
 &nbsp;
 
 If the components of $q$ and $k$ are roughly zero-mean, unit-variance, then
 $$
-\\operatorname{Var}\\!\\bigl(q_{b,h,t_q,:}\\cdot k_{b,h,t_k,:}\\bigr) \\;\\propto\\; h_s.
+\\operatorname{Var}\\!\\bigl(q_{b,h,t_q,:}\\cdot k_{b,h,t_k,:}\\bigr) \\;\\propto\\; hs.
 $$
-Dividing by $\\sqrt{h_s}$ keeps the logits’ variance approximately constant (≈1), which helps prevent softmax becomes overly peaky (saturation) and stabilizes gradients.
+Dividing by $\\sqrt{hs}$ keeps the logits' variance approximately constant (≈1), which helps prevent softmax becomes overly peaky (saturation) and stabilizes gradients.
 
 After this step, a causal/padding mask is applied and then a softmax over the last dimension produces attention probabilities.
 
@@ -1053,7 +1035,7 @@ $$
 4\\. **$\\mathtt{masked\\_fill}$ on the logits**  
   &nbsp;
 
-   $\\text{att}$ has shape $(B,\\ n\\_head,\\ T,\\ T)$ and holds **raw attention logits** $\\bigl(q\\,k^\\top/\\sqrt{h_s}\\bigr)$.  
+   $\\text{att}$ has shape $(B,\\ n\\_head,\\ T,\\ T)$ and holds **raw attention logits** $\\bigl(q\\,k^\\top/\\sqrt{hs}\\bigr)$.  
    $\\mathtt{.masked\\_fill(bool\\_mask,\\ -\\infty)}$ writes $-\\infty$ into $\\text{att}$ **where the mask is True** (i.e., where attending would look **ahead**).  
    Broadcasting lets a $(1,\\ 1,\\ T,\\ T)$ mask apply to all batches and heads.
 
@@ -1415,1175 +1397,3 @@ $$
 
 // Expose original notes for refactored InfoPanel fallback
 export const ORIGINAL_INFO = INFO;
-
-
-/** =========================
- *  Info Context (Single Source of Truth)
- *  ========================= */
-const InfoContext = createContext(null);
-
-function InfoProvider({ children }) {
-  const [active, setActive] = useState(null); // 'gelu' | 'cdf' | 'layernorm' | null
-  const open = (id) => setActive(id);
-  const close = () => setActive(null);
-  return (
-    <InfoContext.Provider value={{ active, open, close }}>
-      {children}
-    </InfoContext.Provider>
-  );
-}
-
-function useInfo() {
-  const ctx = useContext(InfoContext);
-  if (!ctx) throw new Error("useInfo must be used within <InfoProvider>");
-  return ctx;
-}
-
-/** =========================
- *  CodeWithActions (event delegation for data-action clicks)
- *  ========================= */
-function CodeWithActions({ html, onSelect }) {
-  const { open } = useInfo();
-  const ref = useRef(null);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-
-    const onClick = (e) => {
-      const t = e.target.closest("[data-action]");
-      if (!t) return;
-      const action = t.getAttribute("data-action");
-      if (!action) return;
-
-      if (action.startsWith("open:")) {
-        // open info panel entries (gelu, layernorm, etc.)
-        e.preventDefault();
-        const id = action.split(":")[1];
-        if (id) open(id);
-      } else if (action.startsWith("select:")) {
-        // switch right-panel code to a content entry id
-        e.preventDefault();
-        const id = action.split(":")[1];
-        if (id && onSelect) onSelect(id);
-      }
-    };
-
-    el.addEventListener("click", onClick);
-    return () => el.removeEventListener("click", onClick);
-  }, [open, onSelect]);
-
-  return (
-    <pre className="text-sm overflow-x-auto border rounded p-2 bg-slate-50">
-      <code ref={ref} dangerouslySetInnerHTML={{ __html: html }} />
-    </pre>
-  );
-}
-
-
-/** =========================
- *  InfoPanel (renders active info; intercepts #cdf)
- *  ========================= */
-function InfoPanel() {
-  const { active, close, open } = useInfo();
-  if (!active) return null;
-
-  return (
-    <div className="mt-4 pt-3 border-t text-xs text-slate-700 prose prose-sm max-w-none">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-3">
-          {active === "weight_tying" && (
-            <button
-              className="text-xs underline"
-              onClick={() => open("embedding_tok")}
-            >
-              ← Back
-            </button>
-          )}
-          {active === "broadcasting" && (
-            <button
-              className="text-xs underline"
-              onClick={() => open("embedding_pos")}
-            >
-              ← Back
-            </button>
-          )}
-          {(active === "torch_ones_notes" || active === "torch_tril_notes" || active === "unsqueeze_notes") && (
-            <button
-              className="text-xs underline"
-              onClick={() => open("causal_mask_notes")}
-            >
-              ← Back
-            </button>
-          )}
-          {active === "contiguous_notes" && (
-            <button
-              className="text-xs underline"
-              onClick={() => open("reorder_merge_heads_notes")}
-            >
-              ← Back
-            </button>
-          )}
-          <h3 className="font-medium my-0">
-            {INFO[active]?.title ?? "Info"}
-          </h3>
-        </div>
-        <button className="text-xs underline" onClick={close}>
-          Close
-        </button>
-      </div>
-      <ReactMarkdown
-        remarkPlugins={[remarkMath]}
-        rehypePlugins={[
-          [rehypeKatex, {
-            trust: (ctx) => ctx.command === "\\href",
-            strict: "ignore",
-            fleqn: true,                // <— left-align display math at the KaTeX renderer level
-          }],
-          rehypeSlug,
-        ]}
-        components={{
-          a: ({ href, children, ...props }) => {
-            // Internal jump to another INFO entry: #info:<id>
-            if (href && href.startsWith("#info:")) {
-              const id = href.slice("#info:".length); // e.g., "weight_tying"
-              return (
-                <a
-                  href={href}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (INFO[id]) open(id);
-                  }}
-                  className="underline cursor-pointer"
-                  {...props}
-                >
-                  {children}
-                </a>
-              );
-            }
-        
-            // legacy internal link you already had
-            if (href === "#cdf") {
-              return (
-                <a
-                  href={href}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    open("cdf");
-                  }}
-                  className="underline cursor-pointer"
-                  {...props}
-                >
-                  {children}
-                </a>
-              );
-            }
-        
-            // external links
-            const isExternal = /^https?:\/\//.test(href || "");
-            return (
-              <a
-                href={href}
-                className="underline cursor-pointer"
-                {...(isExternal
-                  ? { target: "_blank", rel: "noopener noreferrer" }
-                  : {})}
-                {...props}
-              >
-                {children}
-              </a>
-            );
-          },
-        }}        
-      >
-        {INFO[active]?.md || "_No content_"}
-      </ReactMarkdown>
-    </div>
-  );
-}
-
-/** =========================
- *  Diagram + Helpers
- *  ========================= */
-
-const gpt2TrainingCode = `import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-# ----- Core model -----
-class GPT2(nn.Module):
-    def __init__(self, vocab_size, n_layer, n_embd, n_head, max_toks, dropout=0.1):
-        super().__init__()
-        self.tok_emb = nn.Embedding(vocab_size, n_embd)
-        self.pos_emb = nn.Embedding(max_toks, n_embd)
-        self.drop = nn.Dropout(dropout)
-        self.blocks = nn.ModuleList([
-            TransformerBlock(n_embd=n_embd, n_head=n_head, dropout=dropout)
-            for _ in range(n_layer)
-        ])
-        self.ln_f = nn.LayerNorm(n_embd)
-        self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
-
-        # weight tying: LM head shares weights with token embeddings
-        self.lm_head.weight = self.tok_emb.weight
-
-    // [Dimension changes during forward]
-    def forward(self, idx, targets=None):
-        B, T = idx.size()
-        pos = torch.arange(0, T, device=idx.device)
-        x = self.tok_emb(idx) + self.pos_emb(pos)[None, :, :]
-        x = self.drop(x)
-        for blk in self.blocks:
-            x = blk(x)
-        x = self.ln_f(x)
-        logits = self.lm_head(x)
-        loss = None
-        if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-        return logits, loss
-
-# ----- Simple training loop -----
-model = GPT2(vocab_size=50304, n_layer=12, n_embd=768, n_head=12, max_toks=1024, dropout=0.1)
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), weight_decay=0.1)
-
-for step, (x, y) in enumerate(dataloader):
-    model.train()
-    optimizer.zero_grad(set_to_none=True)
-    _, loss = model(x, y)              # teacher-forced next-token loss
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-    optimizer.step()
-    if step % 100 == 0:
-        print(f"step {step} loss {loss.item():.4f}")
-`;
-
-
-const attnCode = `import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-class CausalSelfAttention(nn.Module):
-    def __init__(self, n_embd, n_head, dropout):
-        super().__init__()
-        self.n_head = n_head
-        self.key   = nn.Linear(n_embd, n_embd)
-        self.query = nn.Linear(n_embd, n_embd)
-        self.value = nn.Linear(n_embd, n_embd)
-        self.proj  = nn.Linear(n_embd, n_embd)
-        self.attn_drop  = nn.Dropout(dropout)
-        self.resid_drop = nn.Dropout(dropout)
-        # causal mask for up to 1024 tokens (adjust as needed)
-        self.register_buffer("mask", torch.tril(torch.ones(1024, 1024)).unsqueeze(0).unsqueeze(0))
-
-    def forward(self, x):
-        B, T, C = x.size()
-        hs = C // self.n_head
-
-        # project and split into heads: (B, nh, T, hs)
-        k = self.key(x).view(B, T, self.n_head, hs).transpose(1, 2)
-        q = self.query(x).view(B, T, self.n_head, hs).transpose(1, 2)
-        v = self.value(x).view(B, T, self.n_head, hs).transpose(1, 2)
-
-        # scaled dot-product attention
-        att = (q @ k.transpose(-2, -1)) * (1.0 / hs**0.5)
-        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))  # causal mask
-        att = F.softmax(att, dim=-1)
-        att = self.attn_drop(att)
-
-        y = att @ v                       # (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C)  # reassemble heads
-        y = self.resid_drop(self.proj(y))
-        return y`;
-
-const mlpCode = `import torch.nn as nn
-
-class MLP(nn.Module):
-    def __init__(self, n_embd, dropout):
-        super().__init__()
-        self.fc_in = nn.Linear(n_embd, 4 * n_embd)  # GPT-2 uses 4x expansion
-        # GELU (tanh approx like GPT-2 impl)
-        try:
-            self.act = nn.GELU(approximate="tanh")
-        except TypeError:
-            self.act = nn.GELU()
-        self.fc_out = nn.Linear(4 * n_embd, n_embd)
-        self.drop = nn.Dropout(dropout)
-
-    def forward(self, x):
-        return self.drop(self.fc_out(self.act(self.fc_in(x))))`;
-
-const transformerBlockCode = `import torch.nn as nn
-
-class TransformerBlock(nn.Module):
-    def __init__(self, n_embd, n_head, dropout):
-        super().__init__()
-        # Pre-LN pattern (GPT-2)
-        self.ln1 = nn.LayerNorm(n_embd)
-        self.attn = CausalSelfAttention(n_head=n_head, n_embd=n_embd, dropout=dropout)
-        self.ln2 = nn.LayerNorm(n_embd)
-        self.mlp = MLP(n_embd=n_embd, dropout=dropout)
-        
-    def forward(self, x):
-        # Attention path
-        x = x + self.attn(self.ln1(x))
-        # MLP path
-        x = x + self.mlp(self.ln2(x))
-        return x`;
-
-const content = {
-  gpt2: {
-    title: "GPT-2 (model & training)",
-    summary: "Full model definition and a minimal training loop.",
-    code: gpt2TrainingCode,
-    anchors: [
-      { id: "tok_emb",   label: "tok_emb",   match: "self.tok_emb = nn.Embedding(vocab_size, n_embd)" },
-      { id: "tok_apply", label: "use tok",   match: "self.tok_emb(idx)" },
-      { id: "pos_emb",     label: "pos_emb",     match: "self.pos_emb = nn.Embedding(max_toks, n_embd)" },
-      { id: "pos_apply", label: "use pos",   match: "self.pos_emb(pos)[None, :, :]" },
-      { id: "drop_def",   label: "define drop", match: "self.drop = nn.Dropout(dropout)" },
-      { id: "drop_apply", label: "apply drop",  match: "x = self.drop(x)" },
-      { id: "lnf_def",     label: "final ln def", match: "self.ln_f = nn.LayerNorm(n_embd)" },
-      { id: "lnf_apply",   label: "apply ln_f",   match: "x = self.ln_f(x)" },
-      { id: "lm_head_def",   label: "lm_head def",   match: "self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)" },
-      { id: "lm_head_apply", label: "apply lm_head", match: "logits = self.lm_head(x)" },
-      { id: "blocks_assign", label: "blocks assign", match: "self.blocks = nn.ModuleList([" },
-      { id: "blocks_ctor",   label: "TransformerBlock call", match: "TransformerBlock(n_embd=n_embd, n_head=n_head, dropout=dropout)" },
-      { id: "blocks_for",    label: "for loop",   match: "for _ in range(n_layer)" },
-      { id: "blocks_close",  label: "close",      match: "])" },
-      { id: "blocks_use_for",   label: "iterate blocks", match: "for blk in self.blocks:" },
-      { id: "blocks_use_apply", label: "apply block",    match: "x = blk(x)" },
-    ],
-  },
-  token_embed: {
-    title: "Token Embeddings",
-    summary: "Maps token indices to dense vectors.",
-    code: "",
-    anchors: [],
-  },
-  pos_embed: {
-    title: "Positional Embeddings",
-    summary: "Learned positional embeddings.",
-    code: "",
-    anchors: [],
-  },
-  emb_dropout: {
-    title: "Embedding Dropout",
-    summary: "Dropout applied to token+pos embeddings before Transformer blocks.",
-    code: "",
-    anchors: [],
-  },
-  stack: {
-    title: "Transformer Block",
-    summary: "GPT-2 repeats the Transformer Block many times.",
-    code: transformerBlockCode,
-    anchors: [
-      { id: "class_def", label: "class", match: "class TransformerBlock(nn.Module):" },
-      { id: "forward", label: "forward", match: "def forward(self, x):" }
-    ]
-  },
-  block_ln: {
-    title: "LayerNorm before Attention",
-    summary: "Normalization before self-attention.",
-    code: transformerBlockCode,
-    anchors: [
-      { id: "ln1", label: "ln1", match: "self.ln1 = nn.LayerNorm(n_embd)" },
-    ],
-  },
-  block_attn: {
-    title: "Masked Multi-Head Attention",
-    summary: "Performs causal self-attention.",
-    code: transformerBlockCode,
-    anchors: [
-      {
-        id: "attn_assign",
-        label: "self.attn assignment",
-        match: "self.attn = CausalSelfAttention(n_head=n_head, n_embd=n_embd, dropout=dropout)",
-      },
-    ],
-  },
-  attn_class: {
-    title: "Causal Self-Attention",
-    summary: "Implementation of masked self-attention.",
-    code: attnCode,
-    anchors: [
-      { id: "class_def", label: "class",  match: "class CausalSelfAttention(nn.Module):" },
-      { id: "mask",      label: "mask",   match: 'self.register_buffer("mask", torch.tril(torch.ones(1024, 1024)).unsqueeze(0).unsqueeze(0))' },
-    ],
-  },
-  block_dropout_attn: {
-    title: "Dropout after Attention",
-    summary: "Dropout regularization.",
-    code: transformerBlockCode,
-    anchors: [
-      {
-        id: "dropout1",
-        label: "dropout1",
-        match: "self.drop = nn.Dropout(dropout)"
-      }
-    ],
-  },
-  block_ln2: {
-    title: "LayerNorm before MLP",
-    summary: "Normalization before feed-forward MLP.",
-    code: transformerBlockCode,
-    anchors: [
-      { id: "ln2", label: "ln2", match: "self.ln2 = nn.LayerNorm(n_embd)" },
-    ],
-  },
-  block_mlp: {
-    title: "MLP / Feed-Forward",
-    summary: "Two linear layers with GELU in between.",
-    code: transformerBlockCode,
-    anchors: [
-      {
-        id: "mlp_assign",
-        label: "self.mlp assignment",
-        match: "self.mlp = MLP(n_embd=n_embd, dropout=dropout)",
-      },
-    ],
-  },
-  block_dropout_mlp: {
-    title: "Dropout after MLP",
-    summary: "Dropout regularization.",
-    code: transformerBlockCode,
-    anchors: [
-      {
-        id: "dropout2",
-        label: "dropout2",
-        match: "self.drop = nn.Dropout(dropout)"
-      }
-    ],
-  },
-  final_ln: {
-    title: "Final LayerNorm",
-    summary: "Normalizes hidden states.",
-    code: "",
-    anchors: [],
-  },
-  lm_head: {
-    title: "LM Head (Linear Layer)",
-    summary: "Linear projection to vocab logits.",
-    code: "",
-    anchors: [],
-  },
-  loss_fn: {
-    title: "Training Loss",
-    summary: "CrossEntropy loss for next-token prediction.",
-    code: gpt2TrainingCode,                           // ← show GPT-2 code
-    anchors: [
-      {
-        id: "loss_line",
-        label: "loss line",
-        match:
-          "loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))",
-      },
-    ],
-  },
-  mlp_subdiagram: {
-    title: "MLP Architecture",
-    summary: "Linear → GELU → Linear → Dropout.",
-    code: mlpCode,
-    anchors: [
-      { id: "mlp_linear1", label: "fc_in",  match: "self.fc_in = nn.Linear(n_embd, 4 * n_embd)" },
-      { id: "mlp_fc_in_use", label: "fc_in(x) use", match: "self.fc_in(x)" }, // ⬅️ add this
-      { id: "mlp_gelu",    label: "act",    match: '        try:\n            self.act = nn.GELU(approximate="tanh")\n        except TypeError:\n            self.act = nn.GELU()' },
-      { id: "mlp_gelu_in_use",    label: "act use",    match: 'self.act(self.fc_in(x))' },
-      { id: "mlp_linear2", label: "fc_out", match: "self.fc_out = nn.Linear(4 * n_embd, n_embd)" },
-      { id: "mlp_fc_out_use",  label: "fc_out use",  match: "self.fc_out(self.act(self.fc_in(x)))" },   // ⬅️ new
-      { id: "mlp_dropout", label: "dropout", match: "self.drop = nn.Dropout(dropout)" },
-      { id: "mlp_dropout_in_use", label: "dropout use", match: "self.drop(self.fc_out(self.act(self.fc_in(x))))" },
-    ],
-  },
-};
-
-const getFillColor = (id) => {
-  if (id.includes("embed")) return "fill-amber-300";
-  if (id.includes("ln")) return "fill-purple-300";
-  if (id === "mlp_dropout" || id === "emb_dropout")
-    return "fill-red-300";
-  if (id.includes("attn")) return "fill-green-300";
-  if (id.includes("mlp_linear") || id.includes("lm_head"))
-    return "fill-indigo-300";
-  if (id.includes("mlp")) return "fill-pink-300";
-  if (id.includes("loss")) return "fill-yellow-300";
-  return "fill-slate-200";
-};
-
-const Node = ({ id, label, x, y, w, h, onClick, underline }) => (
-  <g onClick={() => onClick(id)} className="cursor-pointer">
-    <rect
-      x={x}
-      y={y}
-      width={w}
-      height={h}
-      rx={10}
-      className={`transition-all duration-200 ${getFillColor(
-        id
-      )} stroke-slate-500`}
-    />
-    <text
-      x={x + w / 2}
-      y={y + h / 2}
-      dominantBaseline="middle"
-      textAnchor="middle"
-      className="select-none text-[10px] fill-slate-800"
-      style={underline ? { textDecoration: "underline" } : undefined}
-    >
-      {label}
-    </text>
-  </g>
-);
-
-const Arrow = ({ x1, y1, x2, y2 }) => (
-  <line
-    x1={x1}
-    y1={y1}
-    x2={x2}
-    y2={y2}
-    stroke="black"
-    markerEnd="url(#arrowhead)"
-  />
-);
-
-function GPT2OuterFrame({ onClick }) {
-  // Frame sized to surround the whole left-hand diagram + MLP subdiagram
-  // Adjust width/height if you move things.
-  return (
-    <g>
-      {/* Outer frame first so inner nodes are on top; pointer-events none so it doesn't block clicks */}
-      <rect
-        x={8}
-        y={2}
-        width={820}
-        height={760}
-        rx={18}
-        className="fill-transparent stroke-slate-700"
-        pointerEvents="none"
-      />
-      {/* Clickable title */}
-      <text
-        x={18}
-        y={22}
-        className="text-[13px] fill-slate-800 cursor-pointer"
-        style={{ textDecoration: "underline", fontWeight: 600 }}
-        onClick={() => onClick("gpt2")}
-      >
-        GPT-2
-      </text>
-    </g>
-  );
-}
-
-
-const TransformerBlockGroup = ({ x, y, onClick }) => (
-  <g>
-    <rect x={x} y={y} width={380} height={290} rx={16} className="fill-slate-50 stroke-slate-400" />
-    <text
-      x={x + 190}
-      y={y + 20}
-      textAnchor="middle"
-      className="text-[11px] fill-slate-700 cursor-pointer"
-      style={{ textDecoration: "underline" }}
-      onClick={() => onClick("gpt2_blocks")}
-      underline="true"
-    >
-      Transformer Block (×12)
-    </text>
-
-    {/* Underline the LayerNorm nodes to look link-like */}
-    <Node
-      id="block_ln"
-      label="LayerNorm"
-      x={x + 20}
-      y={y + 50}
-      w={340}
-      h={30}
-      onClick={onClick}
-      underline="true"
-    />
-    <Arrow x1={x + 190} y1={y + 80} x2={x + 190} y2={y + 105} />
-
-    <Node
-      id="block_attn"
-      label="Masked Multi-Head Attention"
-      x={x + 20}
-      y={y + 110}
-      w={340}
-      h={30}
-      onClick={onClick}
-      underline="true"
-    />
-    <Arrow x1={x + 190} y1={y + 140} x2={x + 190} y2={y + 165} />
-
-    <Node
-      id="block_ln2"
-      label="LayerNorm"
-      x={x + 20}
-      y={y + 170}
-      w={340}
-      h={30}
-      onClick={onClick}
-      underline="true"
-    />
-    <Arrow x1={x + 190} y1={y + 200} x2={x + 190} y2={y + 225} />
-
-    <Node
-      id="block_mlp"
-      label="MLP / Feed-Forward"
-      x={x + 20}
-      y={y + 230}
-      w={340}
-      h={30}
-      onClick={onClick}
-      underline="true"
-    />
-    
-    <Arrow x1={x + 365} y1={y + 245} x2={590} y2={y + 245} />
-  </g>
-);
-
-const MLPSubDiagram = ({ x, y, onClick }) => (
-  <g>
-    <rect x={x} y={y} width={200} height={300} rx={12} className="fill-slate-50 stroke-slate-400" />
-    <text
-      x={x + 100}
-      y={y + 25}
-      textAnchor="middle"
-      className="text-[11px] fill-slate-700 cursor-pointer"
-      style={{ textDecoration: "underline" }}
-      onClick={() => onClick("mlp_subdiagram")}
-    >
-      MLP Architecture
-    </text>
-    <Node
-      id="mlp_linear1"
-      label="Linear"
-      x={x + 20}
-      y={y + 50}
-      w={160}
-      h={30}
-      onClick={onClick}
-    />
-    <Arrow x1={x + 100} y1={y + 80} x2={x + 100} y2={y + 110} />
-    <Node
-      id="mlp_gelu"
-      label="GELU"
-      x={x + 20}
-      y={y + 115}
-      w={160}
-      h={30}
-      onClick={onClick}
-    />
-    <Arrow x1={x + 100} y1={y + 145} x2={x + 100} y2={y + 175} />
-    <Node
-      id="mlp_linear2"
-      label="Linear"
-      x={x + 20}
-      y={y + 180}
-      w={160}
-      h={30}
-      onClick={onClick}
-    />
-    <Arrow x1={x + 100} y1={y + 210} x2={x + 100} y2={y + 240} />
-    <Node
-      id="mlp_dropout"
-      label="Dropout"
-      x={x + 20}
-      y={y + 245}
-      w={160}
-      h={30}
-      onClick={onClick}
-    />
-  </g>
-);
-
-/** =========================
- *  Utilities
- *  ========================= */
-function escapeHtml(str) {
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-/** =========================
- *  Inner Component (uses Info Center)
- *  ========================= */
-function GPT2DecoderExplorerInner() {
-  const { close } = useInfo();
-
-  const [selectedId, setSelectedId] = useState("token_embed");
-  const handleSelect = (id) => {
-    setSelectedId(id);
-    // Optional: close info when selecting other diagram parts
-    close();
-  };
-
-  const effectiveId = ["mlp_linear1", "mlp_linear2", "mlp_gelu", "mlp_dropout"].includes(selectedId)
-  ? "mlp_subdiagram"
-  : (selectedId === "token_embed"
-     || selectedId === "pos_embed"
-     || selectedId === "emb_dropout"
-     || selectedId === "gpt2_blocks"
-     || selectedId === "final_ln"
-     || selectedId === "lm_head"
-     ? "gpt2"
-     : selectedId);
-
-  const component =
-    content[effectiveId] || {
-      title: "Unknown",
-      summary: "No data",
-      code: "",
-      anchors: [],
-    };
-
-  const codeHtml = useMemo(() => {
-    if (!component.code) return null;
-    let html = escapeHtml(component.code);
-
-    // Highlight anchors depending on which LayerNorm (or MLP sub-node) was clicked
-    if (
-      (selectedId === "block_ln" || selectedId === "block_ln2" || selectedId === "block_dropout_attn" || selectedId === "block_dropout_mlp") &&
-      component.anchors?.length
-    ) {
-      component.anchors.forEach((a) => {
-        // For block_ln -> ln1, block_ln2 -> ln2
-        if (
-          (selectedId === "block_ln" && a.id === "ln1") ||
-          (selectedId === "block_ln2" && a.id === "ln2") ||
-          (selectedId === "block_dropout_attn" && a.id === "dropout1")
-        ) {
-          const escaped = escapeHtml(a.match);
-          html = html.replace(escaped, `<mark>${escaped}</mark>`);
-        }
-      });
-    } else if (
-      ["mlp_linear1", "mlp_linear2", "mlp_gelu", "mlp_dropout"].includes(selectedId) &&
-      component.anchors
-    ) {
-      component.anchors.forEach((a) => {
-        const shouldMark =
-          (selectedId === "mlp_linear1" && (a.id === "mlp_linear1" || a.id === "mlp_fc_in_use")) ||
-          (selectedId === "mlp_linear2" && (a.id === "mlp_linear2" || a.id === "mlp_fc_out_use")) ||
-          (selectedId === "mlp_gelu" && (a.id === "mlp_gelu" || a.id === "mlp_gelu_in_use")) ||
-          (selectedId === "mlp_dropout" && (a.id === "mlp_dropout" || a.id === "mlp_dropout_in_use"));
-    
-        if (shouldMark) {
-          const esc = escapeHtml(a.match);
-          html = html.replaceAll
-            ? html.replaceAll(esc, `<mark>${esc}</mark>`)
-            : html.replace(esc, `<mark>${esc}</mark>`);
-        }
-      });
-    }
-
-    {
-      const attnAssignRaw =
-        "CausalSelfAttention(n_head=n_head, n_embd=n_embd, dropout=dropout)";
-      const attnAssignEsc = escapeHtml(attnAssignRaw);
-    
-      const linked =
-        selectedId === "block_attn"
-          ? `<span data-action="select:attn_class" style="text-decoration: underline; cursor: pointer;"><mark>${attnAssignEsc}</mark></span>`
-          : `<span data-action="select:attn_class" style="text-decoration: underline; cursor: pointer;">${attnAssignEsc}</span>`;
-    
-      // replace *every* occurrence just in case (use replaceAll if available)
-      html = html.replaceAll ? html.replaceAll(attnAssignEsc, linked) : html.replace(attnAssignEsc, linked);
-    }
-
-    {
-      const mlpAssignRaw = 'MLP(n_embd=n_embd, dropout=dropout)';
-      const esc = escapeHtml(mlpAssignRaw);
-    
-      const wrapped =
-        `<span data-action="select:mlp_subdiagram" ` +
-        `style="text-decoration: underline; cursor: pointer;">` +
-        // highlight when the MLP node is selected
-        (selectedId === "block_mlp" ? `<mark>${esc}</mark>` : esc) +
-        `</span>`;
-    
-      html = html.replaceAll
-        ? html.replaceAll(esc, wrapped)
-        : html.replace(esc, wrapped);
-    }
-
-    if (selectedId === "token_embed" && component.anchors?.length) {
-      ["tok_emb", "tok_apply"].forEach(key => {     // highlight both def + use
-        const a = component.anchors.find(x => x.id === key);
-        if (!a) return;
-        const esc = escapeHtml(a.match);
-        html = html.replace(esc, `<mark>${esc}</mark>`);
-      });
-    }
-
-    if (selectedId === "pos_embed" && component.anchors?.length) {
-      ["pos_emb", "pos_apply"].forEach(key => {
-        const a = component.anchors.find(x => x.id === key);
-        if (!a) return;
-        const esc = escapeHtml(a.match);
-        html = html.replace(esc, `<mark>${esc}</mark>`);
-      });
-    }
-
-    if (selectedId === "emb_dropout" && component.anchors?.length) {
-      ["drop_def", "drop_apply"].forEach((key) => {
-        const a = component.anchors.find(x => x.id === key);
-        if (!a) return;
-        const esc = escapeHtml(a.match);
-        html = html.replace(esc, `<mark>${esc}</mark>`);
-      });
-    }
-
-    if (selectedId === "final_ln" && component.anchors?.length) {
-      ["lnf_def", "lnf_apply"].forEach((key) => {
-        const a = component.anchors.find(x => x.id === key);
-        if (!a) return;
-        const esc = escapeHtml(a.match);
-        html = html.replace(esc, `<mark>${esc}</mark>`);
-      });
-    }
-
-    if (selectedId === "lm_head" && component.anchors?.length) {
-      ["lm_head_def", "lm_head_apply"].forEach((key) => {
-        const a = component.anchors.find(x => x.id === key);
-        if (!a) return;
-        const esc = escapeHtml(a.match);
-        html = html.replace(esc, `<mark>${esc}</mark>`);
-      });
-    }
-
-    if (selectedId === "loss_fn" && component.anchors?.length) {
-      const a = component.anchors.find((x) => x.id === "loss_line");
-      if (a) {
-        const esc = escapeHtml(a.match);
-        html = html.replace(esc, `<mark>${esc}</mark>`);
-      }
-    }
-
-    {
-      // Keep constructor clickable
-      const ctor = component.anchors.find(a => a.id === "blocks_ctor");
-      if (ctor) {
-        const escCtor = escapeHtml(ctor.match);
-        html = html.replace(
-          escCtor,
-          `<span data-action="select:stack" style="text-decoration: underline; cursor: pointer;">${escCtor}</span>`
-        );
-      }
-    }
-
-    if (selectedId === "gpt2_blocks" && component.anchors?.length) {
-      // Highlight the rest of the block (definition + usage)
-      [
-        "blocks_ctor",
-        "blocks_assign",
-        "blocks_for",
-        "blocks_close",
-        "blocks_use_for",    // NEW
-        "blocks_use_apply",  // NEW
-      ].forEach(key => {
-        const a = component.anchors.find(x => x.id === key);
-        if (!a) return;
-        const esc = escapeHtml(a.match);
-        html = html.replace(esc, `<mark>${esc}</mark>`);
-      });
-    }
-    
-    if (selectedId === "emb_dropout" && component.anchors?.length) {
-      html = html.replace(
-        /nn\.Dropout\(dropout\)/g,
-        '<span data-action="open:emb_dropout_notes" style="text-decoration: underline; cursor: pointer;">nn.Dropout(dropout)</span>'
-      );
-    }
-    
-    if (selectedId === "mlp_dropout" && component.anchors?.length) {
-      html = html.replace(
-        /nn\.Dropout\(dropout\)/g,
-        '<span data-action="open:mlp_dropout_notes" style="text-decoration: underline; cursor: pointer;">nn.Dropout(dropout)</span>'
-      );
-    }
-
-    // add link on "Dimension changes during forward"
-    html = html.replace(
-      /Dimension\s+changes\s+during\s+forward/g,
-      '<span data-action="open:dimension_change_notes" style="text-decoration: underline; cursor: pointer;">Dimension changes during forward</span>'
-    );
-
-    // Make tokens clickable via data-action
-    html = html.replace(
-      /nn\.GELU\(approximate=\"tanh\"\)/g,
-      '<span data-action="open:gelu" style="text-decoration: underline; cursor: pointer;">nn.GELU(approximate="tanh")</span>'
-    );
-    html = html.replace(
-      /nn\.GELU\(\)/g,
-      '<span data-action="open:gelu" style="text-decoration: underline; cursor: pointer;">nn.GELU()</span>'
-    );
-
-    // link on text "weight tying"
-    html = html.replace(
-      /weight\s+tying/g,
-      '<span data-action="open:weight_tying_notes" style="text-decoration: underline; cursor: pointer;">weight tying</span>'
-    );
-
-    // link on text "nn.Linear(n_embd, vocab_size, bias=False)"
-    html = html.replace(
-      /nn\.Linear\([^)]*\)/g,
-      (m) =>
-        `<span data-action="open:linear" style="text-decoration: underline; cursor: pointer;">${m}</span>`
-    );
-
-    html = html.replace(
-      /nn\.Linear\(n_embd, vocab_size, bias=False\)/g,
-      '<span data-action="open:lm_head_notes" style="text-decoration: underline; cursor: pointer;">nn.Linear(n_embd, vocab_size, bias=False)</span>'
-    );
-
-    html = html.replace(
-      /nn\.LayerNorm\([^)]*\)/g,
-      (m) =>
-        `<span data-action="open:layernorm" style="text-decoration: underline; cursor: pointer;">${m}</span>`
-    );
-    html = html.replace(
-      /nn\.Embedding\(vocab_size,\s*n_embd\)/g,
-      '<span data-action="open:embedding_tok" style="text-decoration: underline; cursor: pointer;">nn.Embedding(vocab_size, n_embd)</span>'
-    );
-    
-    html = html.replace(
-      /nn\.Embedding\(max_toks,\s*n_embd\)/g,
-      '<span data-action="open:embedding_pos" style="text-decoration: underline; cursor: pointer;">nn.Embedding(max_toks, n_embd)</span>'
-    );
-    html = html.replace(
-      /F\.cross_entropy(\([^)]*\))/g,
-      '<span data-action="open:cross_entropy_notes" style="text-decoration: underline; cursor: pointer;">F.cross_entropy($1)</span>'
-    );
-
-    // multihead attention
-    html = html.replace(
-      /k\s*=\s*self\.key\(x\)\.view\(B, T, self\.n_head, hs\)\.transpose\(1, 2\)/g,
-      '<span data-action="open:key_view_notes" style="text-decoration: underline; cursor: pointer;">k = self.key(x).view(B, T, self.n_head, hs).transpose(1, 2)</span>'
-    );
-    html = html.replace(
-      /q\s*=\s*self\.query\(x\)\.view\(B, T, self\.n_head, hs\)\.transpose\(1, 2\)/g,
-      '<span data-action="open:query_view_notes" style="text-decoration: underline; cursor: pointer;">q = self.query(x).view(B, T, self.n_head, hs).transpose(1, 2)</span>'
-    );
-    html = html.replace(
-      /v\s*=\s*self\.value\(x\)\.view\(B, T, self\.n_head, hs\)\.transpose\(1, 2\)/g,
-      '<span data-action="open:value_view_notes" style="text-decoration: underline; cursor: pointer;">v = self.value(x).view(B, T, self.n_head, hs).transpose(1, 2)</span>'
-    );
-    
-    // att = (q @ k.transpose(-2, -1)) * (1.0 / hs**0.5)
-    html = html.replace(
-      /\s*\(\s*q\s*@\s*k\.transpose\(\s*-2\s*,\s*-1\s*\)\s*\)\s*\*\s*\(\s*1\.0\s*\/\s*hs\*\*0\.5\s*\)/g,
-      '<span data-action="open:q_k_product_notes" style="text-decoration: underline; cursor: pointer;"> (q @ k.transpose(-2, -1)) * (1.0 / hs**0.5)</span>'
-    );
-
-    // att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))
-    html = html.replace(
-      /\s*att\.masked_fill\(\s*self\.mask\s*\[\s*:\s*,\s*:\s*,\s*:\s*T\s*,\s*:\s*T\s*\]\s*==\s*0\s*,\s*float\(\s*'-inf'\s*\)\s*\)/g,
-      '<span data-action="open:causal_mask_notes" style="text-decoration: underline; cursor: pointer;"> att.masked_fill(self.mask[:, :, :T, :T] == 0, float(\'-inf\'))</span>'
-    );
-
-    html = html.replace(
-      /self\.attn_drop\s*=\s*nn\.Dropout\(dropout\)/g,
-      '<span data-action="open:attn_dropout_notes" style="text-decoration: underline; cursor: pointer;">self.attn_drop = nn.Dropout(dropout)</span>'
-    );
-    html = html.replace(
-      /self\.resid_drop\s*=\s*nn\.Dropout\(dropout\)/g,
-      '<span data-action="open:resid_dropout_notes" style="text-decoration: underline; cursor: pointer;">self.resid_drop = nn.Dropout(dropout)</span>'
-    );
-    
-    // create the link on only text "self.register_buffer"
-    html = html.replace(
-      /self\.register_buffer/g,
-      '<span data-action="open:register_buffer_notes" style="text-decoration: underline; cursor: pointer;">self.register_buffer</span>'
-    );
-
-    // create the link on only text "torch.tril"
-    html = html.replace(
-      /torch\.tril/g,
-      '<span data-action="open:torch_tril_notes" style="text-decoration: underline; cursor: pointer;">torch.tril</span>'
-    );
-
-    // create the link on only text "torch.ones"
-    html = html.replace(
-      /torch\.ones/g,
-      '<span data-action="open:torch_ones_notes" style="text-decoration: underline; cursor: pointer;">torch.ones</span>'
-    );
-
-    // create the link on only text "unsqueeze"
-    html = html.replace(
-      /unsqueeze/g,
-      '<span data-action="open:unsqueeze_notes" style="text-decoration: underline; cursor: pointer;">unsqueeze</span>'
-    );
-
-    // create the link on only text "F.softmax(att, dim=-1)"
-    html = html.replace(
-      /F\.softmax\(att, dim=-1\)/g,
-      '<span data-action="open:softmax_notes" style="text-decoration: underline; cursor: pointer;">F.softmax(att, dim=-1)</span>'
-    );
-
-    // create the link on only text "y = att @ v"
-    html = html.replace(
-      /y = att @ v/g,
-      '<span data-action="open:att_v_product_notes" style="text-decoration: underline; cursor: pointer;">y = att @ v</span>'
-    );
-
-    // create the link on only text " y.transpose(1, 2).contiguous().view(B, T, C)"
-    html = html.replace(
-      /y\.transpose\(1, 2\)\.contiguous\(\)\.view\(B, T, C\)/g,
-      '<span data-action="open:reorder_merge_heads_notes" style="text-decoration: underline; cursor: pointer;"> y.transpose(1, 2).contiguous().view(B, T, C)</span>'
-    );
-
-    return html;
-  }, [component.code, selectedId, component.anchors]);
-
-  return (
-    <div className="p-4">
-      <h1 className="text-2xl font-bold mb-4">GPT-2 Decoder Explorer</h1>
-
-      <div className="grid md:grid-cols-2 gap-6">
-        <section className="bg-white rounded-xl shadow p-4">
-          <svg viewBox="0 0 900 900" className="w-full h-auto">
-            <defs>
-              <marker
-                id="arrowhead"
-                markerWidth="10"
-                markerHeight="7"
-                refX="0"
-                refY="3.5"
-                orient="auto"
-              >
-                <polygon points="0 0, 10 3.5, 0 7" />
-              </marker>
-            </defs>
-
-            <GPT2OuterFrame onClick={handleSelect} />
-
-            <Node
-              id="token_embed"
-              label="Token Embeddings"
-              x={20}
-              y={40}
-              w={180}
-              h={40}
-              onClick={handleSelect}
-            />
-            <text
-              x={210}
-              y={65}
-              textAnchor="middle"
-              className="text-lg fill-slate-800"
-            >
-              +
-            </text>
-            <Node
-              id="pos_embed"
-              label="Positional Embeddings"
-              x={220}
-              y={40}
-              w={180}
-              h={40}
-              onClick={handleSelect}
-            />
-            <Arrow x1={210} y1={80} x2={210} y2={105} />
-            <Node
-              id="emb_dropout"
-              label="Dropout"
-              x={20}
-              y={110}
-              w={380}
-              h={40}
-              onClick={handleSelect}
-            />
-
-            <Arrow x1={210} y1={150} x2={210} y2={175} />
-            <TransformerBlockGroup x={20} y={180} onClick={handleSelect} />
-
-            <Arrow x1={210} y1={470} x2={210} y2={515} />
-            <Node
-              id="final_ln"
-              label="Final LayerNorm"
-              x={20}
-              y={520}
-              w={380}
-              h={40}
-              onClick={handleSelect}
-            />
-
-            <Arrow x1={210} y1={560} x2={210} y2={605} />
-            <Node
-              id="lm_head"
-              label="LM Head (Linear Layer)"
-              x={20}
-              y={610}
-              w={380}
-              h={40}
-              onClick={handleSelect}
-            />
-
-            <Arrow x1={210} y1={650} x2={210} y2={695} />
-            <Node
-              id="loss_fn"
-              label="Training Objective (CrossEntropyLoss)"
-              x={20}
-              y={700}
-              w={380}
-              h={40}
-              onClick={handleSelect}
-            />
-
-            <MLPSubDiagram x={600} y={280} onClick={handleSelect} />
-          </svg>
-        </section>
-
-        <section className="bg-white rounded-xl shadow p-4">
-          <h2 className="text-lg font-medium mb-2">{component.title}</h2>
-          <p className="text-sm text-slate-600 mb-4">{component.summary}</p>
-
-          {/* Code with actionable spans */}
-          {codeHtml && <CodeWithActions html={codeHtml} onSelect={setSelectedId} />}
-
-
-          {/* Centralized Info Panel (GELU / CDF / LayerNorm, etc.) */}
-          <InfoPanel />
-        </section>
-      </div>
-    </div>
-  );
-}
-
-/** =========================
- *  Default export with Provider
- *  ========================= */
-export default function GPT2DecoderExplorer() {
-  // Runtime guard for content keys
-  [
-    "gpt2",
-    "token_embed",
-    "pos_embed",
-    "emb_dropout",
-    "block_attn",
-    "block_mlp",
-    "block_ln",
-    "block_ln2",
-    "block_dropout_attn",
-    "block_dropout_mlp",
-    "final_ln",
-    "lm_head",
-    "loss_fn",
-    "stack",
-    "mlp_subdiagram",
-    "mlp_linear1",
-    "mlp_linear2",
-    "mlp_gelu",
-  ].forEach((k) => {
-    if (!content[k] && !["mlp_linear1", "mlp_linear2", "mlp_gelu"].includes(k))
-      throw new Error(`Test failed: ${k} missing`);
-  });
-
-  return (
-    <InfoProvider>
-      <GPT2DecoderExplorerInner />
-    </InfoProvider>
-  );
-}

@@ -12,18 +12,7 @@ export function buildCodeHtml({ component, selectedId }) {
     html = html.replace(esc, `<mark>${esc}</mark>`);
   };
 
-  // 1) Highlight anchors for LN/dropout in block
-  if ((selectedId === "block_ln" || selectedId === "block_ln2" || selectedId === "block_dropout_attn" || selectedId === "block_dropout_mlp") && anchors.length) {
-    anchors.forEach((a) => {
-      if (
-        (selectedId === "block_ln" && a.id === "ln1") ||
-        (selectedId === "block_ln2" && a.id === "ln2") ||
-        (selectedId === "block_dropout_attn" && a.id === "dropout1")
-      ) {
-        mark(a.match);
-      }
-    });
-  } else if (["mlp_linear1", "mlp_linear2", "mlp_gelu", "mlp_dropout"].includes(selectedId) && anchors.length) {
+  if (["mlp_linear1", "mlp_linear2", "mlp_gelu", "mlp_dropout"].includes(selectedId) && anchors.length) {
     anchors.forEach((a) => {
       const shouldMark =
         (selectedId === "mlp_linear1" && (a.id === "mlp_linear1" || a.id === "mlp_fc_in_use")) ||
@@ -52,6 +41,29 @@ export function buildCodeHtml({ component, selectedId }) {
     const wrapped = `<span data-action="select:mlp_subdiagram" style="text-decoration: underline; cursor: pointer;">${selectedId === "block_mlp" ? `<mark>${esc}</mark>` : esc}</span>`;
     html = html.replaceAll ? html.replaceAll(esc, wrapped) : html.replace(esc, wrapped);
   }
+  {
+    const raw = 'x = x + self.attn(self.ln1(x))';
+    const esc = escapeHtml(raw);
+    const wrapped = `<span data-action="open:attn_residual_notes" style="text-decoration: underline; cursor: pointer;">${esc}</span>`;
+    html = html.replace(esc, wrapped);
+  }
+
+  {
+    const raw = 'x = x + self.mlp(self.ln2(x))';
+    const esc = escapeHtml(raw);
+    const wrapped = `<span data-action="open:mlp_residual_notes" style="text-decoration: underline; cursor: pointer;">${esc}</span>`;
+    html = html.replace(esc, wrapped);
+  }
+
+  // 2b) Make tiktoken tokenizer assignment clickable (opens tokenizer notes)
+  {
+    const tokAssignRaw = 'tokenizer = tiktoken.get_encoding("gpt2")';
+    const esc = escapeHtml(tokAssignRaw);
+    const wrapped = selectedId === "tokenizer"
+      ? `<span data-action="open:tokenizer_notes" style="text-decoration: underline; cursor: pointer;"><mark>${esc}</mark></span>`
+      : `<span data-action="open:tokenizer_notes" style="text-decoration: underline; cursor: pointer;">${esc}</span>`;
+    html = html.replaceAll ? html.replaceAll(esc, wrapped) : html.replace(esc, wrapped);
+  }
 
   // 3) Highlight specific areas by selection
   const highlightKeys = (keys) => {
@@ -62,11 +74,16 @@ export function buildCodeHtml({ component, selectedId }) {
       html = html.replace(esc, `<mark>${esc}</mark>`);
     });
   };
+  if (selectedId === "input_data") highlightKeys(["open_file", "read_text"]);
+  if (selectedId === "tokenizer") highlightKeys(["load_tok", "encode"]);
   if (selectedId === "token_embed") highlightKeys(["tok_emb", "tok_apply"]);
   if (selectedId === "pos_embed") highlightKeys(["pos_emb", "pos_apply"]);
   if (selectedId === "emb_dropout") highlightKeys(["drop_def", "drop_apply"]);
   if (selectedId === "final_ln") highlightKeys(["lnf_def", "lnf_apply"]);
   if (selectedId === "lm_head") highlightKeys(["lm_head_def", "lm_head_apply"]);
+  if (selectedId === "block_attn") highlightKeys(["attn_assign", "attn_call"]);
+  if (selectedId === "block_ln") highlightKeys(["ln1", "ln1_use"]);
+  if (selectedId === "block_ln2") highlightKeys(["ln2", "ln2_use"]);
   if (selectedId === "loss_fn") {
     const a = find("loss_line");
     if (a) mark(a.match);
@@ -80,6 +97,29 @@ export function buildCodeHtml({ component, selectedId }) {
     }
   }
   if (selectedId === "gpt2_blocks") highlightKeys(["blocks_ctor", "blocks_assign", "blocks_for", "blocks_close", "blocks_use_for", "blocks_use_apply"]);
+  if (selectedId === "block_mlp") highlightKeys(["mlp_assign", "mlp_call"]);
+  if (selectedId === "block_attn_plus") {
+    // Stay on attention: highlight assignment and call
+    highlightKeys(["attn_assign", "attn_call"]);
+    // Emphasize 'x +' in the first residual equation only (first occurrence)
+    html = html.replace(/x\s*=\s*x\s*\+/, (m) => `<mark>${m}</mark>`);
+  }
+  if (selectedId === "block_attn") {
+    highlightKeys(["attn_assign", "attn_call"]);
+  }
+  if (selectedId === "block_mlp_plus") {
+    // Stay on MLP: highlight assignment and call
+    highlightKeys(["mlp_assign", "mlp_call"]);
+    // Emphasize 'x +' in the second residual equation only (second occurrence)
+    let occurrence = 0;
+    html = html.replace(/x\s*=\s*x\s*\+/g, (m) => {
+      occurrence += 1;
+      return occurrence === 2 ? `<mark>${m}</mark>` : m;
+    });
+  }
+  if (selectedId === "block_mlp") {
+    highlightKeys(["mlp_assign", "mlp_call"]);
+  }
 
   // 4) Contextual replacements for info links
   if (selectedId === "emb_dropout") {
@@ -94,8 +134,10 @@ export function buildCodeHtml({ component, selectedId }) {
   html = html.replace(/weight\s+tying/g, '<span data-action="open:weight_tying_notes" style="text-decoration: underline; cursor: pointer;">weight tying</span>');
   html = html.replace(/LM head shares weights with token embeddings/g, '<span data-action="open:weight_tying_notes" style="text-decoration: underline; cursor: pointer;">LM head shares weights with token embeddings</span>');
   
+  
+  
   // 6) Token clickable spans
-  html = html.replace(/nn\.GELU\(approximate=\"tanh\"\)/g, '<span data-action="open:gelu" style="text-decoration: underline; cursor: pointer;">nn.GELU(approximate="tanh")</span>');
+  html = html.replace(/nn\.GELU\(approximate="tanh"\)/g, '<span data-action="open:gelu" style="text-decoration: underline; cursor: pointer;">nn.GELU(approximate="tanh")</span>');
   html = html.replace(/nn\.GELU\(\)/g, '<span data-action="open:gelu" style="text-decoration: underline; cursor: pointer;">nn.GELU()</span>');
 
   // 7) Linear links: wrap generic, but exclude the specific lm_head form, then specific
@@ -103,16 +145,19 @@ export function buildCodeHtml({ component, selectedId }) {
   html = html.replace(/self\.fc_in\s*=\s*nn\.Linear\(n_embd,\s*4\s*\*\s*n_embd\)/g, '<span data-action="open:mlp_fc_in_notes" style="text-decoration: underline; cursor: pointer;">self.fc_in = nn.Linear(n_embd, 4 * n_embd)</span>');
   html = html.replace(/self\.fc_out\s*=\s*nn\.Linear\(4\s*\*\s*n_embd,\s*n_embd\)/g, '<span data-action="open:mlp_fc_out_notes" style="text-decoration: underline; cursor: pointer;">self.fc_out = nn.Linear(4 * n_embd, n_embd)</span>');
   html = html.replace(/nn\.Linear\(n_embd,\s*vocab_size,\s*bias=False\)/g, '<span data-action="open:lm_head_notes" style="text-decoration: underline; cursor: pointer;">nn.Linear(n_embd, vocab_size, bias=False)</span>');
+  // Specific: link nn.Linear(n_embd, n_embd) to Linear notes
+  html = html.replace(/nn\.Linear\(n_embd,\s*3\s*\*\s*n_embd,\s*bias=True\)/g, '<span data-action="open:attention_linear_notes" style="text-decoration: underline; cursor: pointer;">nn.Linear(n_embd, 3 * n_embd, bias=True)</span>');
 
   // 8) LayerNorm, Embeddings, loss, attention ops
+  html = html.replace(/TransformerBlock/g, '<span data-action="open:highlevel_transformer_introduction_notes" style="text-decoration: underline; cursor: pointer;">TransformerBlock</span>');
   html = html.replace(/nn\.LayerNorm\([^)]*\)/g, (m) => `<span data-action="open:layernorm" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
   html = html.replace(/nn\.Embedding\(vocab_size,\s*n_embd\)/g, '<span data-action="open:embedding_tok" style="text-decoration: underline; cursor: pointer;">nn.Embedding(vocab_size, n_embd)</span>');
   html = html.replace(/nn\.Embedding\(max_toks,\s*n_embd\)/g, '<span data-action="open:embedding_pos" style="text-decoration: underline; cursor: pointer;">nn.Embedding(max_toks, n_embd)</span>');
   html = html.replace(/F\.cross_entropy(\([^)]*\))/g, '<span data-action="open:cross_entropy_notes" style="text-decoration: underline; cursor: pointer;">F.cross_entropy($1)</span>');
 
-  html = html.replace(/k\s*=\s*self\.key\(x\)\.view\(B, T, self\.n_head, hs\)\.transpose\(1, 2\)/g, '<span data-action="open:key_view_notes" style="text-decoration: underline; cursor: pointer;">k = self.key(x).view(B, T, self.n_head, hs).transpose(1, 2)</span>');
-  html = html.replace(/q\s*=\s*self\.query\(x\)\.view\(B, T, self\.n_head, hs\)\.transpose\(1, 2\)/g, '<span data-action="open:query_view_notes" style="text-decoration: underline; cursor: pointer;">q = self.query(x).view(B, T, self.n_head, hs).transpose(1, 2)</span>');
-  html = html.replace(/v\s*=\s*self\.value\(x\)\.view\(B, T, self\.n_head, hs\)\.transpose\(1, 2\)/g, '<span data-action="open:value_view_notes" style="text-decoration: underline; cursor: pointer;">v = self.value(x).view(B, T, self.n_head, hs).transpose(1, 2)</span>');
+  html = html.replace(/k\s*=\s*k\.view\(B, T, self\.n_head, hs\)\.transpose\(1, 2\)/g, '<span data-action="open:key_view_notes" style="text-decoration: underline; cursor: pointer;">k = k.view(B, T, self.n_head, hs).transpose(1, 2)</span>');
+  html = html.replace(/q\s*=\s*q\.view\(B, T, self\.n_head, hs\)\.transpose\(1, 2\)/g, '<span data-action="open:query_view_notes" style="text-decoration: underline; cursor: pointer;">q = q.view(B, T, self.n_head, hs).transpose(1, 2)</span>');
+  html = html.replace(/v\s*=\s*v\.view\(B, T, self\.n_head, hs\)\.transpose\(1, 2\)/g, '<span data-action="open:value_view_notes" style="text-decoration: underline; cursor: pointer;">v = v.view(B, T, self.n_head, hs).transpose(1, 2)</span>');
   html = html.replace(/\s*\(\s*q\s*@\s*k\.transpose\(\s*-2\s*,\s*-1\s*\)\s*\)\s*\*\s*\(\s*1\.0\s*\/\s*hs\*\*0\.5\s*\)/g, '<span data-action="open:q_k_product_notes" style="text-decoration: underline; cursor: pointer;"> (q @ k.transpose(-2, -1)) * (1.0 / hs**0.5)</span>');
   html = html.replace(/\s*att\.masked_fill\(\s*self\.mask\s*\[\s*:\s*,\s*:\s*,\s*:\s*T\s*,\s*:\s*T\s*\]\s*==\s*0\s*,\s*float\(\s*'-inf'\s*\)\s*\)/g, '<span data-action="open:causal_mask_notes" style="text-decoration: underline; cursor: pointer;"> att.masked_fill(self.mask[:, :, :T, :T] == 0, float(\'-inf\'))</span>');
   html = html.replace(/self\.attn_drop\s*=\s*nn\.Dropout\(dropout\)/g, '<span data-action="open:attn_dropout_notes" style="text-decoration: underline; cursor: pointer;">self.attn_drop = nn.Dropout(dropout)</span>');

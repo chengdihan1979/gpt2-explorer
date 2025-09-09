@@ -13,6 +13,7 @@ An interactive visual explainer of the GPT‑2 decoder, built with React + Vite 
 - Clickable sub-parts that deep-link into code and open compact notes with math.
 - Clean PyTorch reference snippets for model, attention, MLP, and a simple training loop.
 - Tailwind typography and KaTeX rendering for readable math.
+- Added “Input Data (Text)” and “Tokenizer” components before embeddings, with links to their code and notes.
 
 ---
 
@@ -78,7 +79,7 @@ Notes:
 ### How it works
 - Diagram (left): SVG components emit `onClick(id)` to set `selectedId`.
 - Content selection (right): `content` (from `src/content/snippets.js`) provides code + anchors; `buildCodeHtml` injects clickable spans and highlights.
-- Info notes: `InfoPanel` renders markdown+math from `INFO` (from `src/content/info.js`).
+- Info notes: `InfoPanel` renders markdown+math from `INFO` (from `src/content/info.js`). By default the InfoPanel is shown under the left diagram; the code panel stays on the right.
 - Links & highlights are powered by predictable strings/regex in `src/utils/highlight.js`.
 
 ---
@@ -113,6 +114,7 @@ Notes:
 
 ### Dependencies
 - Runtime: `react`, `react-dom`, `react-markdown`, `remark-math`, `rehype-katex`, `katex`
+  - Also: `rehype-slug` (adds stable heading ids in notes)
 - Dev/build: `vite`, `@vitejs/plugin-react`, `tailwindcss`, `@tailwindcss/postcss`, `@tailwindcss/typography`, `postcss`, `autoprefixer`, `eslint`
 
 ---

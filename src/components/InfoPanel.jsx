@@ -27,6 +27,15 @@ export default function InfoPanel() {
           {active === "contiguous_notes" && (
             <button className="text-xs underline" onClick={() => open("reorder_merge_heads_notes")}>← Back</button>
           )}
+          {(active === "lossless_round_trip_notes" || active === "gpt2_merge_ranks_notes" || active === "regex_pre_tokenizer_notes" || active === "gpt2_byte_unicode_map_notes") && (
+            <button className="text-xs underline" onClick={() => open("tokenizer_notes")}>← Back</button>
+          )}
+          {(active === "prevents_vanishing_exploding_notes" || active === "gradient_notes") && (
+            <button className="text-xs underline" onClick={() => open("attn_residual_notes")}>← Back</button>
+          )}
+          {active === "mlp_prevents_vanishing_exploding_notes" && (
+            <button className="text-xs underline" onClick={() => open("mlp_residual_notes")}>← Back</button>
+          )}
           <h3 className="font-medium my-0">{INFO[active]?.title ?? "Info"}</h3>
         </div>
         <button className="text-xs underline" onClick={close}>Close</button>

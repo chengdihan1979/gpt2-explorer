@@ -1,20 +1,46 @@
-export const gpt2TrainingCode = `import torch
+export const gpt2TrainingCode = `import tiktoken
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+class DataLoader:
+    def __init__(self, batch_size: int, block_size: int, val_fraction: float):
+        self.batch_size = batch_size
+        self.block_size = block_size
+        
+        # at init load tokens from local file
+        with open("input.txt", "r") as f:
+            text = f.read()
+        tokenizer = tiktoken.get_encoding("gpt2")
+        ids = tokenizer.encode(text)
+        n = int((1.0 - val_fraction) * len(ids))
+        self.train_ids = ids[:n]
+        self.val_ids = ids[n:]
+        
+    def get_batch(self, split: str):
+        data = self.train_ids if split == "train" else self.val_ids
+        if len(data) <= self.block_size + 1:
+            # pad by cycling if dataset is too small
+            data = data.repeat((self.block_size * 2) // max(1, len(data)) + 1)
+        ix = torch.randint(len(data) - self.block_size - 1, (batch_size,))
+        x = torch.stack([data[i:i+self.block_size] for i in ix])
+        y = torch.stack([data[i+1:i+1+self.block_size] for i in ix])
+        return x, y;
+        
 
 class GPT2(nn.Module):
     def __init__(self, vocab_size, n_layer, n_embd, n_head, max_toks, dropout=0.1):
         super().__init__()
         self.tok_emb = nn.Embedding(vocab_size, n_embd)
         self.pos_emb = nn.Embedding(max_toks, n_embd)
-        self.drop = nn.Dropout(dropout) # embedding dropout
+        self.drop = nn.Dropout(dropout)
         self.blocks = nn.ModuleList([
             TransformerBlock(n_embd=n_embd, n_head=n_head, dropout=dropout)
             for _ in range(n_layer)
         ])
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
-
         # weight tying: LM head shares weights with token embeddings
         self.lm_head.weight = self.tok_emb.weight
 
@@ -37,15 +63,50 @@ class GPT2(nn.Module):
 model = GPT2(vocab_size=50304, n_layer=12, n_embd=768, n_head=12, max_toks=1024, dropout=0.1)
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), weight_decay=0.1)
 
-for step, (x, y) in enumerate(dataloader):
-    model.train()
+batch_size = 4
+block_size = 32
+val_fraction = 0.1
+dataloader = DataLoader(batch_size=batch_size, block_size=block_size, val_fraction=val_fraction)
+max_steps = 1000
+for step in range(max_steps):
+    x, y = dataloader.get_batch("train")
+    x, y = x.to(device), y.to(device)
     optimizer.zero_grad(set_to_none=True)
-    _, loss = model(x, y)              # teacher-forced next-token loss
+    _, loss = model(x, y)
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
     if step % 100 == 0:
         print(f"step {step} loss {loss.item():.4f}")
+`;
+
+export const dataLoaderCode = `
+import tiktoken
+
+
+class DataLoader:
+    def __init__(self, batch_size: int, block_size: int, val_fraction: float):
+        self.batch_size = batch_size
+        self.block_size = block_size
+        
+        # at init load tokens from local file
+        with open("input.txt", "r") as f:
+            text = f.read()
+        tokenizer = tiktoken.get_encoding("gpt2")
+        ids = tokenizer.encode(text)
+        n = int((1.0 - val_fraction) * len(ids))
+        self.train_ids = ids[:n]
+        self.val_ids = ids[n:]
+        
+    def get_batch(self, split: str):
+        data = self.train_ids if split == "train" else self.val_ids
+        if len(data) <= self.block_size + 1:
+            # pad by cycling if dataset is too small
+            data = data.repeat((self.block_size * 2) // max(1, len(data)) + 1)
+        ix = torch.randint(len(data) - self.block_size - 1, (batch_size,))
+        x = torch.stack([data[i:i+self.block_size] for i in ix])
+        y = torch.stack([data[i+1:i+1+self.block_size] for i in ix])
+        return x, y;
 `;
 
 export const attnCode = `import torch
@@ -56,10 +117,8 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, n_embd, n_head, dropout):
         super().__init__()
         self.n_head = n_head
-        self.key   = nn.Linear(n_embd, n_embd)
-        self.query = nn.Linear(n_embd, n_embd)
-        self.value = nn.Linear(n_embd, n_embd)
-        self.proj  = nn.Linear(n_embd, n_embd)
+        self.c_attn = nn.Linear(n_embd, 3 * n_embd, bias=True)
+        self.proj  = nn.Linear(n_embd, n_embd, bias=True)
         self.attn_drop  = nn.Dropout(dropout)
         self.resid_drop = nn.Dropout(dropout)
         self.register_buffer("mask", torch.tril(torch.ones(1024, 1024)).unsqueeze(0).unsqueeze(0))
@@ -67,9 +126,13 @@ class CausalSelfAttention(nn.Module):
     def forward(self, x):
         B, T, C = x.size()
         hs = C // self.n_head
-        k = self.key(x).view(B, T, self.n_head, hs).transpose(1, 2)
-        q = self.query(x).view(B, T, self.n_head, hs).transpose(1, 2)
-        v = self.value(x).view(B, T, self.n_head, hs).transpose(1, 2)
+
+        qkv = self.c_attn(x)  # [B, T, 3C]
+        q, k, v = qkv.split(C, dim=2)
+
+        q = q.view(B, T, self.n_head, hs).transpose(1, 2)
+        k = k.view(B, T, self.n_head, hs).transpose(1, 2)
+        v = v.view(B, T, self.n_head, hs).transpose(1, 2)
         att = (q @ k.transpose(-2, -1)) * (1.0 / hs**0.5)
         att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
@@ -119,10 +182,6 @@ export const content = {
     summary: "Full model definition and a minimal training loop.",
     code: gpt2TrainingCode,
     anchors: [
-      { id: "tok_emb",   label: "tok_emb",   match: "self.tok_emb = nn.Embedding(vocab_size, n_embd)" },
-      { id: "tok_apply", label: "use tok",   match: "self.tok_emb(idx)" },
-      { id: "pos_emb",   label: "pos_emb",   match: "self.pos_emb = nn.Embedding(max_toks, n_embd)" },
-      { id: "pos_apply", label: "use pos",   match: "self.pos_emb(pos)[None, :, :]" },
       { id: "drop_def",  label: "define drop", match: "self.drop = nn.Dropout(dropout)" },
       { id: "drop_apply",label: "apply drop",  match: "x = self.drop(x)" },
       { id: "lnf_def",   label: "final ln def", match: "self.ln_f = nn.LayerNorm(n_embd)" },
@@ -137,8 +196,42 @@ export const content = {
       { id: "blocks_use_apply", label: "apply block",    match: "x = blk(x)" },
     ],
   },
-  token_embed: { title: "Token Embeddings", summary: "Maps token indices to dense vectors.", code: "", anchors: [] },
-  pos_embed:   { title: "Positional Embeddings", summary: "Learned positional embeddings.", code: "", anchors: [] },
+  input_data: {
+    title: "Input Data",
+    summary: "Raw text strings prior to tokenization.",
+    code: gpt2TrainingCode,
+    anchors: [
+      { id: "open_file", label: "open file", match: 'with open("input.txt", "r") as f:' },
+      { id: "read_text", label: "read text", match: "text = f.read()" },
+    ],
+  },
+  tokenizer: {
+    title: "Tokenizer",
+    summary: "Converts text to token IDs (BPE for GPT-2).",
+    code: gpt2TrainingCode,
+    anchors: [
+      { id: "load_tok", label: "load tokenizer", match: "tokenizer = tiktoken.get_encoding(\"gpt2\")" },
+      { id: "encode", label: "encode", match: "ids = tokenizer.encode(text)" },
+    ],
+  },
+  token_embed: { 
+    title: "Token Embeddings", 
+    summary: "Maps token indices to dense vectors.", 
+    code: gpt2TrainingCode, 
+    anchors: [
+      { id: "tok_emb",   label: "tok_emb",   match: "self.tok_emb = nn.Embedding(vocab_size, n_embd)" },
+      { id: "tok_apply", label: "use tok",   match: "self.tok_emb(idx)" },
+    ],
+  },
+  pos_embed:   { 
+    title: "Positional Embeddings", 
+    summary: "Learned positional embeddings.", 
+    code: gpt2TrainingCode, 
+    anchors: [
+      { id: "pos_emb",   label: "pos_emb",   match: "self.pos_emb = nn.Embedding(max_toks, n_embd)" },
+      { id: "pos_apply", label: "use pos",   match: "self.pos_emb(pos)[None, :, :]" },
+    ] 
+  },
   emb_dropout: { title: "Embedding Dropout", summary: "Dropout applied to token+pos embeddings before Transformer blocks.", code: "", anchors: [] },
   stack: {
     title: "Transformer Block",
@@ -146,19 +239,31 @@ export const content = {
     code: transformerBlockCode,
     anchors: [
       { id: "class_def", label: "class", match: "class TransformerBlock(nn.Module):" },
-      { id: "forward",  label: "forward", match: "def forward(self, x):" }
+      { id: "forward",  label: "forward", match: "def forward(self, x):" },
     ]
   },
-  block_ln:  { title: "LayerNorm before Attention", summary: "Normalization before self-attention.", code: transformerBlockCode, anchors: [{ id: "ln1", label: "ln1", match: "self.ln1 = nn.LayerNorm(n_embd)" }] },
-  block_attn:{ title: "Masked Multi-Head Attention", summary: "Performs causal self-attention.", code: transformerBlockCode, anchors: [{ id: "attn_assign", label: "self.attn assignment", match: "self.attn = CausalSelfAttention(n_head=n_head, n_embd=n_embd, dropout=dropout)" }] },
+  block_ln:  { title: "LayerNorm before Attention", summary: "Normalization before self-attention.", code: transformerBlockCode, anchors: [
+    { id: "ln1", label: "ln1", match: "self.ln1 = nn.LayerNorm(n_embd)" },
+    { id: "ln1_use", label: "ln1 use", match: "self.ln1(x)" },
+  ] },
+  block_attn:{ title: "Masked Multi-Head Attention", summary: "Performs causal self-attention.", code: transformerBlockCode, anchors: [
+    { id: "attn_assign", label: "self.attn assignment", match: "self.attn = CausalSelfAttention(n_head=n_head, n_embd=n_embd, dropout=dropout)" },
+    { id: "attn_call", label: "attn call", match: "self.attn(self.ln1(x))" },
+  ] },
   attn_class:{ title: "Causal Self-Attention", summary: "Implementation of masked self-attention.", code: attnCode, anchors: [{ id: "class_def", label: "class", match: "class CausalSelfAttention(nn.Module):" }, { id: "mask", label: "mask", match: 'self.register_buffer("mask", torch.tril(torch.ones(1024, 1024)).unsqueeze(0).unsqueeze(0))' }] },
-  block_ln2: { title: "LayerNorm before MLP", summary: "Normalization before feed-forward MLP.", code: transformerBlockCode, anchors: [{ id: "ln2", label: "ln2", match: "self.ln2 = nn.LayerNorm(n_embd)" }] },
-  block_mlp: { title: "MLP / Feed-Forward", summary: "Two linear layers with GELU in between.", code: transformerBlockCode, anchors: [{ id: "mlp_assign", label: "self.mlp assignment", match: "self.mlp = MLP(n_embd=n_embd, dropout=dropout)" }] },
+  block_ln2: { title: "LayerNorm before MLP", summary: "Normalization before feed-forward MLP.", code: transformerBlockCode, anchors: [
+    { id: "ln2", label: "ln2", match: "self.ln2 = nn.LayerNorm(n_embd)" },
+    { id: "ln2_use", label: "ln2 use", match: "self.ln2(x)" },
+  ] },
+  block_mlp: { title: "MLP / Feed-Forward", summary: "Two linear layers with GELU in between.", code: transformerBlockCode, anchors: [
+    { id: "mlp_assign", label: "self.mlp assignment", match: "self.mlp = MLP(n_embd=n_embd, dropout=dropout)" },
+    { id: "mlp_call", label: "mlp call", match: "self.mlp(self.ln2(x))" },
+  ] },
   final_ln:  { title: "Final LayerNorm", summary: "Normalizes hidden states.", code: "", anchors: [] },
   lm_head:   { title: "LM Head (Linear Layer)", summary: "Linear projection to vocab logits.", code: "", anchors: [] },
   loss_fn: {
-    title: "GPT-2 (model & training)",
-    summary: "Full model definition and a minimal training loop.",
+    title: "Training Loss",
+    summary: "CrossEntropy loss for next-token prediction.",
     code: gpt2TrainingCode,
     anchors: [{ id: "loss_line", label: "loss line", match: "loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))" }],
   },
