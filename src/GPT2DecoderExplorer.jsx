@@ -17,6 +17,66 @@ import "katex/dist/katex.min.css";
  *  Info Registry (Scalable)
  *  ========================= */
 const INFO = {
+  dimension_change_notes: {
+    title: "Dimension changes during forward",
+    md: `
+$$
+\\text{Let } B=\\text{batch size},\\; T=\\text{sequence length},\\; C=n\\_embd,\\; V=\\text{vocab\\_size}. \\\\[6pt]
+$$
+
+$$
+\\boxed{\\begin{array}{l}
+\\textbf{Inputs and helpers}\\\\[6pt]
+\\mathtt{idx} : (B, T) \\text{(Long tensor of token IDs)} \\\\[6pt]
+\\mathtt{pos}=\\mathtt{arange}(0, T) : (T)\\\\[6pt]
+\\textbf{Embeddings and sum}\\\\[6pt]
+\\mathtt{tok\\_emb(idx)} : (B, T, C)\\\\[6pt]
+\\mathtt{pos\\_emb(pos)} : (T, C)\\\\[6pt]
+\\mathtt{pos\\_emb(pos)[None,\\ :,\\ :]} : (1, T, C) → \\text{broadcasts in the sum}\\\\[6pt]
+x=\\mathtt{tok\\_emb(idx)} + \\mathtt{pos\\_emb(pos)[None,\\ :,\\ :]} : (B, T, C)\\\\[6pt]
+\\textbf{Dropout and blocks}\\\\[6pt]
+x=\\mathtt{drop}(x) : (B, T, C) \\text{(same shape; values randomly zeroed in train mode)}\\\\[6pt]
+\\text{for } \\mathtt{blk} \\text{ in } \\mathtt{blocks:}\\; x=\\mathtt{blk}(x) : (B, T, C)\\\\[6pt]
+\\textbf{Final norm and head}\\\\[6pt]
+x=\\mathtt{ln\\_f}(x) : (B, T, C)\\\\[6pt]
+\\mathtt{logits}=\\mathtt{lm\\_head}(x) : (B, T, V)\\\\[6pt]
+\\textbf{Targets and loss (if provided)}\\\\[6pt]
+\\mathtt{targets} : (B, T)\\\\[6pt]
+\\mathtt{logits.view(-1,\\ logits.size(-1))} : (B\\!\\cdot\\!T, V)\\\\[6pt]
+\\mathtt{targets.view(-1)} : (B\\!\\cdot\\!T)\\\\[6pt]
+\\mathtt{loss}=\\mathtt{F.cross\\_entropy}((B\\!\\cdot\\!T, V),\\ (B\\!\\cdot\\!T)) : \\text{scalar () (a single number)}\\\\[6pt]
+\\textbf{Return} :\\ \\mathtt{logits} \\ (B, T, V),\\ \\mathtt{loss}\\ \\text{(scalar or None)}\\\\[6pt]
+\\end{array}}
+$$
+
+    `,
+  },
+
+  lm_head_notes: {
+    title: "lm_head",
+    md: `
+$$
+\\boxed{\\begin{array}{l}
+\\textbf{What it is:}\\ \\text{a linear projection that turns each hidden vector (size } n\\_embd \\text{) into a vector of} \\\\
+\\text{vocabulary logits (size } \\texttt{vocab\\_size}\\text{).} \\\\[8pt]
+\\textbf{Shape-wise:}\\ \\text{if hidden states } x \\in \\mathbb{R}^{B \\times T \\times n\\_embd},\\ \\text{ then} \\\\[4pt]
+\\mathtt{logits = lm\\_head(x)}\\ \\ \\#\\ \\mathbb{R}^{B \\times T \\times \\texttt{vocab\\_size}} \\\\[8pt]
+\\text{Each row of the weight matrix is a learned “prototype” for one token; the logit for token } v \\text{ is the} \\\\
+\\text{dot product between the hidden state and that token’s embedding.} \\\\[12pt]
+\\textbf{Why no bias (}\\mathtt{bias=False}\\textbf{):} \\\\[6pt]
+\\quad 1.\\ \\textbf{Weight tying.}\\ \\text{GPT-2 typically ties the output weights to the input embedding table:} \\\\[4pt]
+\\quad \\ \\ \\ \\mathtt{self.lm\\_head.weight = self.tok\\_emb.weight}\\ \\ \\#\\ \\text{same parameters} \\\\[4pt]
+\\quad \\ \\ \\ \\text{This saves parameters and often improves perplexity. The tied matrix matches in shape,} \\\\
+\\quad \\ \\ \\ \\text{but a separate output bias isn’t needed (and is commonly omitted).} \\\\[6pt]
+\\quad 2.\\ \\textbf{Little benefit, lots of params.}\\ \\text{A bias would add } \\texttt{vocab\\_size} \\text{ more parameters;} \\\\
+\\quad \\ \\ \\ \\text{in practice it yields negligible gains here, so many implementations drop it.}
+\\end{array}}
+$$
+
+    `,
+  },
+
+
   linear: {
     title: "Linear",
     md: `
@@ -92,6 +152,7 @@ $$
 with properties: $\\Phi(0)=0.5$, it is monotonically increasing, and its derivative is the standard normal PDF $\\phi(x)$.
 `,
   },
+
   layernorm: {
     title: "LayerNorm",
     md: `
@@ -116,7 +177,7 @@ Here is sometimes called the “final layer norm”, which applies to each token
 For a token embedding vector
 
 $$
-x = [5.0,\; 4.5,\; 6.2,\; 4.8],
+x = [5.0,\\; 4.5,\\; 6.2,\\; 4.8],
 $$
 
 LayerNorm computes the mean and standard deviation over the 4 dimensions:
@@ -183,6 +244,7 @@ $$
 - Docs: [nn.LayerNorm](https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html).
 `,
   },
+
   embedding_tok: {
     title: "Token Embedding",
     md: `
@@ -214,7 +276,7 @@ $$
 
   - $W$ is learned via backprop.
   - Only rows for tokens in the batch get updated.
-  - GPT-2 often ties $W$ with the output softmax weights. ([What is weight tying?](#info:weight_tying))
+  - GPT-2 often ties $W$ with the output softmax weights. ([What is weight tying?](#info:weight_tying_notes))
 
   &nbsp;
 
@@ -299,25 +361,39 @@ $$
   },
 
 
-  weight_tying: {
+  weight_tying_notes: {
     title: "Weight Tying",
     md: `
   **Weight tying (shared input/output embeddings)**
   
+  &nbsp;
+
   The idea comes from the paper [Using the Output Embedding to Improve Language Models](https://arxiv.org/abs/1608.05859)
     
   Weight tying sets the output softmax weights equal to the input token embedding weights:
   
+  &nbsp;
+
   \`\`\`python
   # tie lm_head weight to tok_emb
   self.lm_head.weight = self.tok_emb.weight
   \`\`\`
   
+  &nbsp;
+  
   **Why do this?**
+  
+  &nbsp;
+  
   - Fewer parameters (≈ halves \`V*d\` + \`d*V\` to just \`V*d\`).
   - Acts as a helpful regularizer and often improves perplexity.
   
-  Notes:
+  &nbsp;
+  
+  **Notes:**
+
+  &nbsp;
+
   - Many GPT-2 implementations use \`bias=False\` on \`lm_head\` when tying.
   - Tying requires identical shapes: \`lm_head.weight.shape == tok_emb.weight.shape == (vocab_size, n_embd)\`.
   `,
@@ -575,7 +651,9 @@ This encourages redundancy and more robust feature representations.
   cross_entropy_notes: {
     title: "Cross Entropy",
     md: `
-Cross-entropy loss is a measure of how well a model predicts the target distribution.
+Cross-entropy loss is a measure of how well a model predicts the target distribution. This computes the negative log-likelihood of the correct next token at every position.
+
+Docs: [CrossEntropy](https://pytorch.org/docs/stable/generated/torch.nn.functional.cross_entropy.html)
 
 &nbsp;
 
@@ -1527,6 +1605,10 @@ class GPT2(nn.Module):
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
 
+        # weight tying: LM head shares weights with token embeddings
+        self.lm_head.weight = self.tok_emb.weight
+
+    // [Dimension changes during forward]
     def forward(self, idx, targets=None):
         B, T = idx.size()
         pos = torch.arange(0, T, device=idx.device)
@@ -2201,6 +2283,12 @@ function GPT2DecoderExplorerInner() {
       );
     }
 
+    // add link on "Dimension changes during forward"
+    html = html.replace(
+      /Dimension\s+changes\s+during\s+forward/g,
+      '<span data-action="open:dimension_change_notes" style="text-decoration: underline; cursor: pointer;">Dimension changes during forward</span>'
+    );
+
     // Make tokens clickable via data-action
     html = html.replace(
       /nn\.GELU\(approximate=\"tanh\"\)/g,
@@ -2210,11 +2298,25 @@ function GPT2DecoderExplorerInner() {
       /nn\.GELU\(\)/g,
       '<span data-action="open:gelu" style="text-decoration: underline; cursor: pointer;">nn.GELU()</span>'
     );
+
+    // link on text "weight tying"
+    html = html.replace(
+      /weight\s+tying/g,
+      '<span data-action="open:weight_tying_notes" style="text-decoration: underline; cursor: pointer;">weight tying</span>'
+    );
+
+    // link on text "nn.Linear(n_embd, vocab_size, bias=False)"
     html = html.replace(
       /nn\.Linear\([^)]*\)/g,
       (m) =>
         `<span data-action="open:linear" style="text-decoration: underline; cursor: pointer;">${m}</span>`
     );
+
+    html = html.replace(
+      /nn\.Linear\(n_embd, vocab_size, bias=False\)/g,
+      '<span data-action="open:lm_head_notes" style="text-decoration: underline; cursor: pointer;">nn.Linear(n_embd, vocab_size, bias=False)</span>'
+    );
+
     html = html.replace(
       /nn\.LayerNorm\([^)]*\)/g,
       (m) =>
@@ -2224,6 +2326,7 @@ function GPT2DecoderExplorerInner() {
       /nn\.Embedding\(vocab_size,\s*n_embd\)/g,
       '<span data-action="open:embedding_tok" style="text-decoration: underline; cursor: pointer;">nn.Embedding(vocab_size, n_embd)</span>'
     );
+    
     html = html.replace(
       /nn\.Embedding\(max_toks,\s*n_embd\)/g,
       '<span data-action="open:embedding_pos" style="text-decoration: underline; cursor: pointer;">nn.Embedding(max_toks, n_embd)</span>'
@@ -2234,7 +2337,6 @@ function GPT2DecoderExplorerInner() {
     );
 
     // multihead attention
-
     html = html.replace(
       /k\s*=\s*self\.key\(x\)\.view\(B, T, self\.n_head, hs\)\.transpose\(1, 2\)/g,
       '<span data-action="open:key_view_notes" style="text-decoration: underline; cursor: pointer;">k = self.key(x).view(B, T, self.n_head, hs).transpose(1, 2)</span>'
