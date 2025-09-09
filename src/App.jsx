@@ -34,8 +34,8 @@
 
 // export default App
 
-import GPT2DecoderExplorer from './GPT2DecoderExplorer';
+import RefExplorer from './RefExplorer';
 
 export default function App() {
-  return <GPT2DecoderExplorer />;
+  return <RefExplorer />;
 }

@@ -1413,6 +1413,9 @@ $$
   },
 };
 
+// Expose original notes for refactored InfoPanel fallback
+export const ORIGINAL_INFO = INFO;
+
 
 /** =========================
  *  Info Context (Single Source of Truth)
