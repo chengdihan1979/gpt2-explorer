@@ -78,7 +78,7 @@ export function buildCodeHtml({ component, selectedId }) {
   if (selectedId === "tokenizer") highlightKeys(["load_tok", "encode"]);
   if (selectedId === "token_embed") highlightKeys(["tok_emb", "tok_apply"]);
   if (selectedId === "pos_embed") highlightKeys(["pos_emb", "pos_apply"]);
-  if (selectedId === "emb_dropout") highlightKeys(["drop_def", "drop_apply"]);
+  if (selectedId === "emb_dropout") highlightKeys(["emb_drop_def", "emb_drop_apply"]);
   if (selectedId === "final_ln") highlightKeys(["lnf_def", "lnf_apply"]);
   if (selectedId === "lm_head") highlightKeys(["lm_head_def", "lm_head_apply"]);
   if (selectedId === "block_attn") highlightKeys(["attn_assign", "attn_call"]);
@@ -126,9 +126,8 @@ export function buildCodeHtml({ component, selectedId }) {
   }
 
   // 4) Contextual replacements for info links
-  if (selectedId === "emb_dropout") {
-    html = html.replace(/nn\.Dropout\(dropout\)/g, '<span data-action="open:emb_dropout_notes" style="text-decoration: underline; cursor: pointer;">nn.Dropout(dropout)</span>');
-  }
+  html = html.replace(/nn\.Dropout\(dropout\) # embedding dropout/g, '<span data-action="open:emb_dropout_notes" style="text-decoration: underline; cursor: pointer;">nn.Dropout(dropout) # embedding dropout</span>');
+  
   if (selectedId === "mlp_dropout") {
     html = html.replace(/nn\.Dropout\(dropout\)/g, '<span data-action="open:mlp_dropout_notes" style="text-decoration: underline; cursor: pointer;">nn.Dropout(dropout)</span>');
   }
@@ -137,6 +136,10 @@ export function buildCodeHtml({ component, selectedId }) {
   html = html.replace(/Dimension\s+changes\s+during\s+forward/g, '<span data-action="open:dimension_change_notes" style="text-decoration: underline; cursor: pointer;">Dimension changes during forward</span>');
   html = html.replace(/weight\s+tying/g, '<span data-action="open:weight_tying_notes" style="text-decoration: underline; cursor: pointer;">weight tying</span>');
   html = html.replace(/LM head shares weights with token embeddings/g, '<span data-action="open:weight_tying_notes" style="text-decoration: underline; cursor: pointer;">LM head shares weights with token embeddings</span>');
+  // Link the class name CausalSelfAttention in its definition to open the causal analogy note
+  html = html.replace(/class\s+(CausalSelfAttention)(?=\s*\()/g, 'class <span data-action="open:causal_analogy_notes" style="text-decoration: underline; cursor: pointer;">$1</span>');
+  // Link the class name GPT2 in its definition to open the GPT-2 notes
+  html = html.replace(/class\s+(GPT2)(?=\s*\()/g, 'class <span data-action="open:gpt2_notes" style="text-decoration: underline; cursor: pointer;">$1</span>');
   
   
   
@@ -151,6 +154,8 @@ export function buildCodeHtml({ component, selectedId }) {
   html = html.replace(/nn\.Linear\(n_embd,\s*vocab_size,\s*bias=False\)/g, '<span data-action="open:lm_head_notes" style="text-decoration: underline; cursor: pointer;">nn.Linear(n_embd, vocab_size, bias=False)</span>');
   // Specific: link nn.Linear(n_embd, n_embd) to Linear notes
   html = html.replace(/nn\.Linear\(n_embd,\s*3\s*\*\s*n_embd,\s*bias=True\)/g, '<span data-action="open:attention_linear_notes" style="text-decoration: underline; cursor: pointer;">nn.Linear(n_embd, 3 * n_embd, bias=True)</span>');
+  html = html.replace(/self\.proj\s*=\s*nn\.Linear\(n_embd,\s*n_embd,\s*bias=True\)/g, '<span data-action="open:attention_output_linear_notes" style="text-decoration: underline; cursor: pointer;">self.proj  = nn.Linear(n_embd, n_embd, bias=True)</span>');
+  html = html.replace(/self\.proj\(\s*y\s*\)/g, '<span data-action="open:attention_output_linear_notes" style="text-decoration: underline; cursor: pointer;">self.proj(y)</span>');
 
   // 8) LayerNorm, Embeddings, loss, attention ops
   html = html.replace(/TransformerBlock/g, '<span data-action="open:highlevel_transformer_introduction_notes" style="text-decoration: underline; cursor: pointer;">TransformerBlock</span>');
@@ -165,6 +170,7 @@ export function buildCodeHtml({ component, selectedId }) {
   html = html.replace(/\s*\(\s*q\s*@\s*k\.transpose\(\s*-2\s*,\s*-1\s*\)\s*\)\s*\*\s*\(\s*1\.0\s*\/\s*hs\*\*0\.5\s*\)/g, '<span data-action="open:q_k_product_notes" style="text-decoration: underline; cursor: pointer;"> (q @ k.transpose(-2, -1)) * (1.0 / hs**0.5)</span>');
   html = html.replace(/\s*att\.masked_fill\(\s*self\.mask\s*\[\s*:\s*,\s*:\s*,\s*:\s*T\s*,\s*:\s*T\s*\]\s*==\s*0\s*,\s*float\(\s*'-inf'\s*\)\s*\)/g, '<span data-action="open:causal_mask_notes" style="text-decoration: underline; cursor: pointer;"> att.masked_fill(self.mask[:, :, :T, :T] == 0, float(\'-inf\'))</span>');
   html = html.replace(/self\.attn_drop\s*=\s*nn\.Dropout\(dropout\)/g, '<span data-action="open:attn_dropout_notes" style="text-decoration: underline; cursor: pointer;">self.attn_drop = nn.Dropout(dropout)</span>');
+  html = html.replace(/self\.attn_drop\(\s*att\s*\)/g, '<span data-action="open:attn_dropout_notes" style="text-decoration: underline; cursor: pointer;">self.attn_drop(att)</span>');
   html = html.replace(/self\.resid_drop\s*=\s*nn\.Dropout\(dropout\)/g, '<span data-action="open:resid_dropout_notes" style="text-decoration: underline; cursor: pointer;">self.resid_drop = nn.Dropout(dropout)</span>');
   html = html.replace(/self\.register_buffer/g, '<span data-action="open:register_buffer_notes" style="text-decoration: underline; cursor: pointer;">self.register_buffer</span>');
   html = html.replace(/torch\.tril/g, '<span data-action="open:torch_tril_notes" style="text-decoration: underline; cursor: pointer;">torch.tril</span>');
@@ -193,6 +199,9 @@ export function buildCodeHtml({ component, selectedId }) {
   if (selectedId === "attn_matmul_v") {
     html = html.replace(/(<span[^>]*data-action=\"open:att_v_product_notes\"[^>]*>)([\s\S]*?)(<\/span>)/, '$1<mark>$2</mark>$3');
   }
+
+  // 9) Optimizer: make torch.optim.AdamW clickable to open notes
+  html = html.replace(/torch\.optim\.AdamW\([^)]*\)/g, (m) => `<span data-action="open:optim_adamw_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
 
   
   return html;

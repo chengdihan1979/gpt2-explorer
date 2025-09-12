@@ -22,7 +22,7 @@ export default function MLPSubDiagram({ x, y, onClick }) {
       <Arrow x1={x + 100} y1={y + 145} x2={x + 100} y2={y + 175} />
       <Node id="mlp_linear2" label="Linear" x={x + 20} y={y + 180} w={160} h={30} onClick={onClick} />
       <Arrow x1={x + 100} y1={y + 210} x2={x + 100} y2={y + 240} />
-      <Node id="mlp_dropout" label="Dropout" x={x + 20} y={y + 245} w={160} h={30} onClick={onClick} />
+      <Node id="mlp_dropout" label="Residual Dropout" x={x + 20} y={y + 245} w={160} h={30} onClick={onClick} />
     </g>
   );
 }

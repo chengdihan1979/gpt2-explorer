@@ -37,27 +37,134 @@ $$
   lm_head_notes: {
     title: "lm_head",
     md: `
+$$\\textbf{What it is conceptually:}\\\\[4pt]$$
+A linear map that converts each final hidden vector of size $n\\_embd$ into the logits vector of the
+vocabulary size ($vocab\\_size$). Each logit is the score for predicting a particular token in the vocabulary.
+
+&nbsp;
+
+$$\\textbf{Shapes:}\\\\[4pt]$$
 $$
-\\boxed{\\begin{array}{l}
-\\textbf{What it is:}\\ \\text{a linear projection that turns each hidden vector (size } n\\_embd \\text{) into a vector of} \\\\
-\\text{vocabulary logits (size } \\texttt{vocab\\_size}\\text{).} \\\\[8pt]
-\\textbf{Shape-wise:}\\ \\text{if hidden states } x \\in \\mathbb{R}^{B \\times T \\times n\\_embd},\\ \\text{ then} \\\\[4pt]
-\\mathtt{logits = lm\\_head(x)}\\ \\ \\#\\ \\mathbb{R}^{B \\times T \\times \\texttt{vocab\\_size}} \\\\[8pt]
-\\text{Each row of the weight matrix is a learned “prototype” for one token; the logit for token } v \\text{ is the} \\\\
-\\text{dot product between the hidden state and that token’s embedding.} \\\\[12pt]
-\\textbf{Why no bias (}\\mathtt{bias=False}\\textbf{):} \\\\[6pt]
-\\quad 1.\\ \\textbf{Weight tying.}\\ \\text{GPT-2 typically ties the output weights to the input embedding table:} \\\\[4pt]
-\\quad \\ \\ \\ \\mathtt{self.lm\\_head.weight = self.tok\\_emb.weight}\\ \\ \\#\\ \\text{same parameters} \\\\[4pt]
-\\quad \\ \\ \\ \\text{This saves parameters and often improves perplexity. The tied matrix matches in shape,} \\\\
-\\quad \\ \\ \\ \\text{but a separate output bias isn’t needed (and is commonly omitted).} \\\\[6pt]
-\\quad 2.\\ \\textbf{Little benefit, lots of params.}\\ \\text{A bias would add } \\texttt{vocab\\_size} \\text{ more parameters;} \\\\
-\\quad \\ \\ \\ \\text{in practice it yields negligible gains here, so many implementations drop it.}
-\\end{array}}
+\\bullet\\ \\text{Hidden states } x \\in \\mathbb{R}^{B \\times T \\times n\\_embd} \\\\[4pt]
+\\bullet\\ \\text{lm\\_head.weight} \\in \\mathbb{R}^{\\texttt{vocab\\_size} \\times n\\_embd} \\text{ (lm\\_head weight matrix tied to tok\\_emb weight matrix)} \\\\[4pt]
+\\textit{lm\\_head weight matrix is just the vocabulary's token embedding matrix because of \\href{#info:weight_tying_notes}{\\text{weight tying}}.} \\\\[4pt]
+\\bullet\\ \\mathtt{logits = lm\\_head(x)} \\in \\mathbb{R}^{B \\times T \\times \\texttt{vocab\\_size}} \\\\[8pt]
 $$
 
+$$\\textbf{What it does intuitively:}\\\\[4pt]$$
+Each row of the weight matrix is a learned embedding vector for one vocabulary token.
+
+The logit for token $v$ at position $t$ is the dot product between the hidden state $x$ at that position and the embedding row for token $v$.
+
+During training, the logit will be used to compare with the ground truth next token to compute the cross entropy loss. And this operation is performed over all tokens at all positions across the whole batch with all vocabulary tokens
+in one single batched matmul.
+
+
+During inference, the logit is turned into probabilities and used to pick the next token.
+
+&nbsp;
+
+$$\\href{#info:lm_head_insights_notes}{\\text{Why does logit predict the next token during inference, deeper insights!}}$$
+
+&nbsp;
+
+$$\\textbf{Why no bias (}\\mathtt{bias=False}\\textbf{):}\\\\[4pt]$$
+$$
+1.\\ \\textbf{Weight tying.}\\ \\text{GPT-2 typically ties the output weights to the input embedding table:} \\\\[4pt]
+\\ \\ \\ \\mathtt{self.lm\\_head.weight = self.tok\\_emb.weight}\\ \\ \\#\\ \\text{same parameters} \\\\[4pt]
+\\ \\ \\ \\text{This saves parameters and often improves perplexity. The tied matrix matches in shape,} \\\\
+\\ \\ \\ \\text{but a separate output bias isn't needed (and is commonly omitted).} \\\\[6pt]
+2.\\ \\textbf{Little benefit, lots of params.}\\ \\text{A bias would add } \\texttt{vocab\\_size} \\text{ more parameters;} \\\\
+\\ \\ \\ \\text{in practice it yields negligible gains here, so many implementations drop it.}
+$$
     `,
   },
 
+  lm_head_insights_notes: {
+    title: "lm_head_insights_notes",
+    md: `
+$$
+\\textbf{Setup}\\\\[6pt]
+\\text{Assume x} \\in \\mathbb{R}^{n\\_embd} \\text{ is the final hidden state of a token at some position.} \\\\[4pt]
+\\text{Assume } e_v \\in \\mathbb{R}^{n\\_embd} \\text{ is the output weight vector of a vocabulary token v. (with weight tying, it's also the input embedding for v)} \\\\[8pt]
+\\text{First of all, we need to understand the following things training achieves:} \\\\[4pt]
+\\textbf{1.}\\text{The hidden state x captures the context of all tokens at previous and current positions, and it also encodes the features}\\\\
+\\text{the next token should have.}\\\\[4pt]
+\\text{For example, the input is "The dogs that barked loudly".} \\\\[4pt]
+\\text{The hidden state at position 5 captures the context "plural subject" learned from tokens from position 1 to 5 after training, } \\\\[4pt]
+\\text{it also encodes the feature that the next token should be most likely a verb.} \\\\[4pt]
+\\textbf{2. } e_v \\text{ is a global classifier weight vector for token v: contexts that should choose v align with this direction.}\\\\
+\\text{It's moment-by-moment context-independent, it's the general meaning of the token v learned from the whole corpus.} \\\\[4pt]
+\\textbf{3.}\\text{The cross-entropy loss sculpts both sides. The cross-entropy loss pushes:} \\\\[4pt]
+\\bullet\\ \\text{Hidden state x to align with the correct token's } e_v \\\\[4pt]
+\\bullet\\ e_v \\text{ toward the direction that best separates contexts where } \\mathtt{v} \\text{ is correct from others. Over time, contexts where}\\\\
+\\mathtt{v} \\text{ is correct land near } e_v \\text{.} \\\\[8pt]
+\\text{With these bear in mind, let's continue.} \\\\[4pt]
+$$
+
+$$
+\\textbf{Dot-product form}\\\\[4pt]
+\\text{The LM head gives a logit } \\ell_v \\text{ for token v by a dot product between x and} e_v \\\\[4pt]
+\\ell_v\\text{ = x} \\cdot e_v \\\\[8pt]
+$$
+
+$$
+\\textbf{Cosine form}\\\\[4pt]
+\\text{Also by definition of cosine in } \\mathbb{R}^{d} \\text{ we get:} \\\\[4pt]
+
+\\ell_v\\text{ = x} \\cdot e_v = \\lVert x \\rVert\\, \\lVert e_v \\rVert\\, \\cos\\theta(x, e_v),\\\\[4pt]
+
+\\textbf{Three-factor view}\\\\[4pt]
+\\text{So each token's logit } \\ell_v \\text{ factors into:} \\\\[4pt]
+\\bullet\\ \\text{factor 1: the magnitude of x} \\\\[4pt]
+\\bullet\\ \\text{factor 2: the magnitude of } e_v \\\\[4pt]
+\\bullet\\ \\text{factor 3: the direction of } e_v \\text{ which determines the context-dependent cosine similarity between x and } e_v \\\\[4pt]
+$$
+
+$$
+\\textbf{Effect of final LayerNorm}\\\\[6pt]
+\\text{With final layer norm, the magnitude of x is a nearly constant within a small range.} \\\\[4pt]
+\\text{This makes the other two factors, the magnitude of } e_v \\text{ and the cosine similarity, the dominant factors in determining the logit.} \\\\[4pt]
+\\textbf{On the high level, you can think of factor 3 - the direction of } e_v \\textbf{ captures the context and factor 2 - the magnitude of } e_v \\\\[4pt]
+\\textbf{captures the frequency of the token.} \\\\[8pt]
+\\textbf{1. Direction of } e_v \\text{: The closer x points in the direction of } e_v \\text{, the higher the third factor will be and it will contribute more to the logit.} \\\\[4pt]
+\\text{Semantically this means token v bears a stronger resemblance to the context the hidden state x holds so it will be predicted with high probability.} \\\\[8pt]
+\\textbf{2. Magnitude of } e_v \\text{: The token embedding matrix in a large language model (LLM) is correlated with token frequency, } \\\\[4pt]
+\\text{with frequent tokens generally developing larger embedding norms and, leading to higher predicted probabilities for those tokens.} \\\\[4pt]
+$$
+
+$$
+\\textbf{Why frequent tokens get larger norms? Here I'll give a intuitive explanation.} \\\\[6pt]
+\\text{During training we minimize a loss } \\mathcal{L} \\text{ and update parameters by } \\Delta\\theta=-\\eta\\,\\nabla\\_\\theta \\mathcal{L}\\text{.}\\\\[4pt]
+\\text{The parameters tied to a specific token }v\\text{ (its vector }e_v\\text{, and bias }b_v\\text{ if present) receive gradient on steps where that token participates in the loss.}\\\\[4pt]
+\\textbf{Gradients for the LM head vector (bias-free head)} \\\\[4pt]
+\\ell = xE^\\top,\\quad p=\\mathrm{softmax}(\\ell),\\quad \\frac{\\partial \\mathcal{L}}{\\partial e_v} \\;=\\; \\big(p_v(x)-\\mathbf{1}\\{y=v\\}\\big)\\,x.\\\\[4pt]
+\\text{Across a dataset: }\\quad \\nabla_{e_v}\\mathcal{L} \\;=\\; \\sum_{t}\\big(p_v(x_t)-\\mathbf{1}\\{y_t=v\\}\\big)\\,x_t.\\\\[4pt]
+\\textbf{Frequent tokens “get more gradient”:} \\\\[4pt]
+\\text{1. If token }v\\text{ appears }C_v\\text{ times as the target, there are }C_v\\text{ strong terms (the }-\\mathbf{1}\\{y_t=v\\}\\text{ part) that pull }e_v\\text{ toward the current hidden} \\\\[4pt]
+\\text{state }x\\text{'s preceding }v\\text{.}\\\\[4pt]
+\\text{2. On other positions, }e_v\\text{ contributes via }p_v(x_t)\\text{, yielding smaller “push-away” terms when }v\\text{ is not the target.}\\\\[4pt]
+\\text{3. Over many examples, the first effect is directional alignment with the current hidden state x}\\\\[4pt]
+\\text{4. Once the direction is reasonably aligned, increasing the magnitude of } e_v \\text{ becomes an efficient way to lift } v \\text{'s logit across many}  \\\\[4pt]
+\\text{occurrences-i.e., it acts like a global gain/prior. Frequent tokens supply more such updates, so they tend to end up with larger norms.}\\\\[4pt]
+\\textbf{Rule of thumb: } \\text{More occurrences } \\Rightarrow \\text{ more (and larger) gradient contributions } \\Rightarrow \\text{ stronger adaptation of that token's parameters.} \\\\[4pt]
+$$
+
+$$
+\\textbf{Final notes:} \\\\[4pt]
+\\bullet\\ \\textbf{Token embedding } e_v \\text{ (from } \\mathtt{wte.weight} \\text{) is context-independent. It captures a token's type-level tendencies—} \\\\
+\\text{rough, averaged semantics/syntax learned from how that token appears across the whole corpus } \\\\
+\\text{(e.g., that "dogs" is plural, noun-ish, often near verbs like "are/were"). Think of it as a baseline prototype.} \\\\[4pt]
+\\bullet\\ \\text{The } \\textbf{specific meaning in a sentence} \\text{---the token-in-context---lives in the hidden state } x_t \\text{ after the token has gone } \\\\
+\\text{through positional encoding + self-attention + MLPs. That’s the } \\textbf{contextualized representation} \\text{ the LM head} \\\\
+\\text{uses to pick the next token.} \\\\[4pt]
+\\text{So: the embedding carries } \\textbf{general meaning} \\text{, not the } \\textbf{moment-by-moment context}. \\text{ The context is injected by} \\\\
+\\text{the transformer and reflected in } x_t \\text{, not in } e_v. \\\\[4pt]
+$$
+
+$$
+  `,
+  },
 
   linear: {
     title: "Linear",
@@ -135,120 +242,26 @@ with properties: $\\Phi(0)=0.5$, it is monotonically increasing, and its derivat
 `,
   },
 
-  layernorm: {
-    title: "LayerNorm",
-    md: `
-**nn.LayerNorm** — applies layer normalization over the last dimension of the input (here, the embedding dimension $n\\_embd$).
-
-Mathematically, given any input vector $h \\in \\mathbb{R}^{d}$, LayerNorm computes
-$$
-\\text{LN}(h) = \\gamma \\odot \\frac{h - \\mu(h)}{\\sigma(h) + \\epsilon} + \\beta
-$$
-where $\\mu,\\sigma$ are the mean and std over the last (feature) dimension, and $\\gamma,\\beta$ are learned scale/shift.
-
-&nbsp;
-
-Here is sometimes called the “final layer norm”, which applies to each token individually, across its embedding dimensions before the final projection layer (lm_head).
-
-&nbsp;
-
-**Example**
-
-&nbsp;
-
-For a token embedding vector
-
-$$
-x = [5.0,\\; 4.5,\\; 6.2,\\; 4.8],
-$$
-
-LayerNorm computes the mean and standard deviation over the 4 dimensions:
-
-$$
-\\mu = 5.125, \\quad \\sigma \\approx 0.64
-$$
-
-and normalizes each element:
-
-$$
-\\hat{x}_i = \\frac{x_i - \\mu}{\\sigma + \\epsilon}.
-$$
-
-So the normalized output becomes approximately
-
-$$
-\\hat{x} = [-0.20,\\; -0.98,\\; 1.68,\\; -0.49].
-$$
-
-&nbsp;
-
----
-
-&nbsp;
-
-**Why It’s Used in GPT-Style Models**
-
-&nbsp;
-
-1. **Stabilizes training**  
-  LayerNorm is the key mechanism that keeps activations and gradients from exploding or vanishing as depth grows. 
-  This mainly stabilizes the forward pass. For each token embedding $x \\in \\mathbb{R}^D$:
-
-   $$
-   \\text{LayerNorm}(x) = \\frac{x - \\mu}{\\sigma + \\epsilon} \\cdot \\gamma + \\beta
-   $$
-
-   where $\\mu$ is the mean of $x$, $\\sigma$ its standard deviation, and $\\gamma, \\beta$ are learnable parameters.
-
-&nbsp;
-
-2. **Smooth gradients**  
-   Since each token embedding is normalized:
-
-   $$
-   \\mathbb{E}[x] \\approx 0, \\quad \\text{Var}(x) \\approx 1
-   $$
-
-   This keeps gradients well-conditioned and avoids scale mismatches across dimensions.
-
-&nbsp;
-
-3. **Consistent scale across layers**  
-   Regardless of depth or input distribution, the hidden states entering the next layer have a stable range:
-
-   $$
-   x_{\\text{normalized}} \\in \\mathbb{R}^D \\quad \\text{with mean} \\; 0 \\; \\text{and std} \\; 1.
-   $$
-
-   This prevents certain dimensions from dominating and helps training convergence.
-
-
-- Docs: [nn.LayerNorm](https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html).
-`,
-  },
-
   embedding_tok: {
     title: "Token Embedding",
     md: `
-  **Maps token IDs to dense vectors.**
+  $$\\textbf{Maps token IDs to dense vectors.}\\\\[8pt]$$
   
-  &nbsp;
-
-  **Weight matrix:**
+  $$\\textbf{Weight matrix:}$$
   $$
   W \\in \\mathbb{R}^{\\text{vocab\\_size} \\times \\text{n\\_embd}}
   $$
-  **Input IDs:**
+  $$\\textbf{Input IDs:}$$
   $$
   \\text{input\\_ids} \\in \\mathbb{Z}^{B \\times T}
   $$
 
-  **Embedding lookup:**
+  $$\\textbf{Embedding lookup:}$$
   $$
   \\text{tok\\_emb}(\\text{input\\_ids}) \\in \\mathbb{R}^{B \\times T \\times n\\_embd}
   $$
 
-  **Parameter count:**
+  $$\\textbf{Parameter count:}$$
   $$
   \\text{params} = \\text{vocab\\_size} \\times n\\_embd
   $$
@@ -260,114 +273,50 @@ $$
 
   &nbsp;
 
-  **Training**
+  $$\\textbf{Training}\\\\[4pt]$$
 
-  &nbsp;
-
-  - $W$ is learned via backprop.
-  - Only rows for tokens in the batch get updated.
-  - GPT-2 often ties $W$ with the output softmax weights. ([What is weight tying?](#info:weight_tying_notes))
-
+  $$\\text{- W is learned via backprop.}\\\\[2pt]$$
+  $$\\text{- Only rows for tokens in the batch get updated.}\\\\[2pt]$$
+  $$\\text{- GPT-2 often ties W with the output softmax weights.}$$ ([What is weight tying?](#info:weight_tying_notes))
+  
   &nbsp;
 
   ---
 
   &nbsp;
 
-  **Why use embedding? Not one hot encoding.**  
-
-  &nbsp;
+  $$\\textbf{Why use embedding? Not one hot encoding.}\\\\[4pt]$$
 
   A one-hot token vector would be length $vocab\\_size$ and extremely sparse. $nn.Embedding$ is equivalent to multiplying a one-hot vector by $W$, but it:
 
-  - avoids creating huge sparse vectors,
+  $$\\bullet\\ \\text{avoids creating huge sparse vectors,}$$
 
-  - learns dense, semantic representations where related tokens end up close in the embedding space.
+  $$\\bullet\\ \\text{learns dense, semantic representations where related tokens end up close in the embedding space.}$$
 
-    `,
+  &nbsp;
+
+  ---
+
+  &nbsp;
+
+  $$\\textbf{References:}\\\\[4pt]$$
+  $$\\textbf{1. PyTorch docs:}$$
+  nn.Embedding doc: Defines an embedding as a lookup table that “stores embeddings of a fixed dictionary and size” and is “retrieved using indices,”
+  $$\\href{https://pytorch.org/docs/stable/generated/torch.nn.Embedding.html}{\\texttt{nn.Embedding}}$$
+  
+  $$\\textbf{2. GPT-2 technical report (Input Representation):}$$
+  Describes GPT-2’s inputs as token embeddings + position embeddings (sum), establishing that token ids are first converted to embeddings before entering the stack.
+  $$\\href{https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf?utm_source=chatgpt.com}{\\texttt{GPT-2 Technical Report}}$$
+  `,
   },
   
-  embedding_pos: {
-    title: "Positional Embedding",
-    md: `
-  Transformers need order information because self-attention has no sense of sequence.
-  Positional embeddings give each token a unique vector based on its position.
-  
-  Weight matrix:
-  $$
-  P \\in \\mathbb{R}^{\\text{max\\_toks} \\times n\\_embd}
-  $$
-  
-  - Here, \`max_toks\` is the maximum sequence length (e.g. 1024 for GPT-2).
-  - Each row $P_j$ corresponds to position $j$ in the sequence.
-  
-  &nbsp;
-  
-  ---
-  
-  &nbsp;
-  
-  **Runtime usage**
-  
-  &nbsp;
-  
-  1. Token IDs → token embeddings:  
-  $$
-  \\text{tok\\_emb}(\\text{input\\_ids}) \\in \\mathbb{R}^{B \\times T \\times n\\_embd}
-  $$
-  
-  2. Positions $0,1,\\dots,T-1$ → positional embeddings:  
-  $$
-  \\text{pos\\_emb}(\\text{positions}) \\in \\mathbb{R}^{T \\times n\\_embd}
-  $$
-  
-  3. Add them together via broadcasting: ([What is broadcasting?](#info:broadcasting)) 
-  $$
-  x = \\text{tok\\_emb}(\\text{input\\_ids}) + \\text{pos\\_emb}(\\text{positions})
-  $$
-  
-  ---
-  
-  &nbsp;
-  
-  **Parameters**
-  
-  $$
-  \\text{params} = \\text{max\\_toks} \\times n\\_embd
-  $$
-  
-  For GPT-2 small:  
-  $$
-  1024 \\times 768 \\approx 7.86 \\times 10^5
-  $$
-  
-  Much smaller than the token embedding table (~38M params).
-  
-  &nbsp;
-  
-  ---
-  
-  &nbsp;
-  
-  **Shapes at a glance**
-  
-  &nbsp;
-
-  - Weight: $[\\text{max\\_toks}, n\\_embd]$  
-  - Positions: $[T]$  
-  - Pos embeddings: $[T, n\\_embd]$  
-  - Final sum: $[B, T, n\\_embd]$  
-    `,
-  },
 
 
   weight_tying_notes: {
     title: "Weight Tying",
     md: `
-  **Weight tying (shared input/output embeddings)**
+  $$\\textbf{Weight tying (shared input/output embeddings)}\\\\[4pt]$$
   
-  &nbsp;
-
   The idea comes from the paper [Using the Output Embedding to Improve Language Models](https://arxiv.org/abs/1608.05859)
     
   Weight tying sets the output softmax weights equal to the input token embedding weights:
@@ -381,18 +330,14 @@ $$
   
   &nbsp;
   
-  **Why do this?**
-  
-  &nbsp;
-  
+  $$\\textbf{Why do this?}\\\\[4pt]$$
+    
   - Fewer parameters (≈ halves \`V*d\` + \`d*V\` to just \`V*d\`).
   - Acts as a helpful regularizer and often improves perplexity.
   
   &nbsp;
   
-  **Notes:**
-
-  &nbsp;
+  $$\\textbf{Notes:}\\\\[4pt]$$
 
   - Many GPT-2 implementations use \`bias=False\` on \`lm_head\` when tying.
   - Tying requires identical shapes: \`lm_head.weight.shape == tok_emb.weight.shape == (vocab_size, n_embd)\`.
@@ -478,23 +423,29 @@ $$
   },
 
   mlp_dropout_notes: {
-    title: "MLP Dropout",
+    title: "Residual Dropout in MLP",
     md: `
-**Remainder: What Happens in the MLP Step**
+$$\\textbf{Remainder: What Happens in the MLP Step}\\\\[4pt]$$
 
-Inside a Transformer block, the feed-forward MLP is:
-
+$$\\text{Inside a Transformer block, the feed-forward MLP is:}$$
 $$
 \\text{MLP}(x) = W_2 \\cdot \\phi(W_1 x + b_1) + b_2
 $$
+$$\\text{where:}$$
+$$
+\\text{- $W_1, W_2$ are weight matrices  }\\\\[2pt]
+\\text{- $b_1, b_2$ are bias vectors  }\\\\[2pt]
+\\text{- $\\phi$ is a non-linear activation function (e.g. GELU in GPT-2)  }\\\\[2pt]
+$$
+$$\\text{This expands the hidden dimension with $W_1$, applies the non-linearity $\\phi$, and then projects back down with $W_2$.}\\\\[8pt]$$
 
-where:
+---
 
-- $W_1, W_2$ are weight matrices  
-- $b_1, b_2$ are bias vectors  
-- $\\phi$ is a non-linear activation function (e.g. GELU in GPT-2)
+&nbsp;
 
-This expands the hidden dimension with $W_1$, applies the non-linearity $\\phi$, and then projects back down with $W_2$.
+$$\\textbf{What it is:}\\\\[4pt]$$
+
+Dropout applied to the output of each sublayer (attention branch and MLP branch) before adding it back via the residual path. 
 
 &nbsp;
 
@@ -502,29 +453,32 @@ This expands the hidden dimension with $W_1$, applies the non-linearity $\\phi$,
 
 &nbsp;
 
-**Why Dropout Is Inserted After MLP**
+$$\\textbf{Why Residual Dropout}\\\\[4pt]$$
 
-1. **Regularization**  
-   The MLP produces high-dimensional features after the nonlinearity.  
-   Dropout prevents overfitting by randomly zeroing activations:
 
-   $$
-   h' = h \\odot m \\cdot \\frac{1}{1-p}
-   $$
+$$1. \\textbf{Regularization}\\\\[4pt]$$
+The MLP produces high-dimensional features after the nonlinearity. Dropout prevents overfitting by randomly zeroing activations:
 
-   where $h$ is the activation, $m$ is a Bernoulli mask, and $p$ is the dropout probability.
+$$
+h' = h \\odot m \\cdot \\frac{1}{1-p}
+$$
 
-&nbsp;
-
-2. **Preventing co-adaptation**  
-   Without dropout, neurons may rely on specific others.  
-   Dropout forces the network to learn redundant, robust representations.
+where $h$ is the activation, $m$ is a Bernoulli mask, and $p$ is the dropout probability. (e.g. $p=0.1$ for GPT-2)
 
 &nbsp;
 
-3. **Stabilizing optimization**  
-   Adding stochastic noise to activations prevents weights from growing too aggressively.  
-   This is important since the feed-forward MLP usually has more parameters than the attention layer.
+$$2. \\textbf{Preventing co-adaptation}\\\\[4pt]$$
+Without dropout, neurons may rely on specific others. 
+Residual dropout prevents the model from over-relying on any one feature/channel, encouraging redundant, distributed cues. The network learns to succeed even when some of its “favorite” features are momentarily missing.
+
+&nbsp;
+
+$$3. \\textbf{Stabilizing optimization}\\\\[4pt]$$
+During training, dropout randomly zeros parts of the activations, making any single neuron or path unreliable; as a result, 
+the model learns backup cues and spreads information across features instead of cranking a few channels way up. In the residual branches specifically, 
+this “residual dropout” doesn’t cap weights directly—it injects stochastic noise into the branch update, which discourages overly aggressive weight growth. 
+To perform well under this noise, the network develops redundant, distributed representations and typically ends up with smaller, more balanced weights. 
+This regularization helps both the attention and MLP residual branches, and is especially valuable for the feed-forward MLP, which usually has many more parameters than the attention layer.
 
 &nbsp;
 
@@ -532,7 +486,7 @@ This expands the hidden dimension with $W_1$, applies the non-linearity $\\phi$,
 
 &nbsp;
 
-**Example**
+$$\\textbf{Example}\\\\[4pt]$$
 
 If the MLP output for one token is
 
@@ -548,7 +502,7 @@ In other words, the model develops a shortcut: “dimension 3 tells me what I ne
 
 &nbsp;
 
-**How Dropout Disrupts This Shortcut**
+$$\\textbf{How Dropout Disrupts This Shortcut}\\\\[4pt]$$
 
 With dropout ($p = 0.5$), a random mask $m$ is applied:
 
@@ -568,8 +522,42 @@ As a result, $W_2$ cannot always depend on $h_3$ being active,
 so it must learn to combine information from multiple dimensions.  
 This encourages redundancy and more robust feature representations.
 
+&nbsp;
 
-    `,
+---
+
+&nbsp;
+
+$$\\textbf{Train vs. Eval}\\\\[4pt]$$
+
+In train mode, dropout is active, so the model sees different activations each batch.
+
+In eval mode, dropout is disabled.
+
+&nbsp;
+
+---
+
+&nbsp;
+
+$$\\textbf{References:}\\\\[4pt]$$
+
+$1.$ $$\\textbf{Original Transformer paper (where residual dropout is defined).}$$
+Vaswani et al., Attention Is All You Need, §5.4 “Regularization”: applies dropout to the output of each sublayer before adding it to the residual (and also to embeddings/attention probs). Good primary citation for what and where dropout is applied. 
+$$\\href{https://arxiv.org/pdf/1706.03762v2}{\\texttt{Attention Is All You Need}}$$
+
+$2.$ $$\\textbf{GPT-2 specifics (configs \\& terminology).}$$
+Hugging Face docs show GPT-2's three dropouts: resid_pdrop (residual branches), attn_pdrop (attention probs), embd_pdrop (embeddings). Useful for mapping concepts to code.
+$$\\href{https://huggingface.co/docs/transformers/main/model_doc/gpt2?utm_source=chatgpt.com}{\\texttt{GPT-2 Configs}}$$
+
+$3.$ $$\\textbf{General dropout theory (why it helps).}$$
+Srivastava et al., Dropout: A Simple Way to Prevent Neural Networks from Overfitting (JMLR 2014): canonical reference for dropout as stochastic regularization/model averaging intuition.
+$$\\href{https://www.jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf}{\\texttt{Dropout: A Simple Way to Prevent Neural Networks from Overfitting}}$$
+
+$4.$ $$\\textbf{Related/contrastive regularizer (dropping whole residual paths).}$$
+Huang et al., Deep Networks with Stochastic Depth (CVPR 2016): dropping entire residual blocks during training (“drop-path”)—useful contrast with residual element-wise dropout.
+$$\\href{https://arxiv.org/abs/1603.09382}{\\texttt{Deep Networks with Stochastic Depth}}$$
+`,
   },
 
   emb_dropout_notes: {
@@ -579,9 +567,7 @@ This encourages redundancy and more robust feature representations.
 
   &nbsp;
 
-  **Why Dropout Here?**
-
-  &nbsp;
+  $$\\textbf{Why Dropout Here?}\\\\[8pt]$$
   
   Prevents overfitting by randomly zeroing out parts of the embedding vectors during training.
 
@@ -595,9 +581,7 @@ This encourages redundancy and more robust feature representations.
 
   &nbsp;
   
-  **Example**
-
-  &nbsp;
+  $$\\textbf{Example}\\\\[8pt]$$
   
   Suppose after summing token embeddings and positional embeddings, one token has this 6-dimensional vector:
 
@@ -635,16 +619,25 @@ This encourages redundancy and more robust feature representations.
 
   &nbsp;
 
-  **Why This Helps**
+  $$\\textbf{Why This Helps}\\\\[8pt]$$
 
-  &nbsp;
   
   **Increase generalization and Prevents overfitting**: Helps model learn more robust patterns by not “wiring” itself too closely to specific dimensions. If the model learned to rely too heavily on, say, the 3rd dimension, dropout forces it to also use other dimensions, because the 3rd dimension might vanish in training.
 
   &nbsp;
-  
+
   **Regularizes embeddings**: Token embeddings won't encode fragile, single-dimension “shortcuts” — they need to spread useful signals more evenly.
 
+  &nbsp;
+
+  ---
+
+  &nbsp;
+
+  $$\\textbf{References:}\\\\[4pt]$$
+  $$\\textbf{1. Original Transformer paper (where dropout is defined).}$$
+  Vaswani et al. explicitly: “we apply dropout to the sums of the embeddings and the positional encodings.” GPT-2 follows this practice (with learned absolute positions).
+  $$\\href{https://arxiv.org/pdf/1706.03762v2}{\\texttt{Attention Is All You Need}}$$
 `,
 },
 
@@ -661,22 +654,26 @@ Docs: [CrossEntropy](https://pytorch.org/docs/stable/generated/torch.nn.function
 
 &nbsp;
 
-**Shape of Logits and Targets in Language Models**
+$$\\textbf{Shape of Logits and Targets in Language Models}\\\\[8pt]$$
 
 In GPT-style training:
 
-- **Logits** (raw predictions before softmax):  
+&nbsp;
+
+$$\\textbf{Logits (raw predictions before softmax)}\\\\[4pt]$$  
 
 $$
 (B,T,V)
 $$
 
 where:  
-  - $B$: batch size  
-  - $T$: sequence length  
-  - $V$: vocabulary size
+$$
+\\text{- B: batch size  }\\\\[2pt]
+\\text{- T: sequence length  }\\\\[2pt]
+\\text{- V: vocabulary size  }\\\\[2pt]
+$$
 
-- **Targets** (ground truth token indices):  
+$$\\textbf{Targets (ground truth token indices)}\\\\[4pt]$$  
 
 $$
 (B,T)
@@ -686,26 +683,32 @@ Example:
 For $B=2$, $T=4$, $V=10$:
 
 $$
-Logits → shape = (2, 4, 10)
+\\text{Logits shape} = (2, 4, 10)
 $$
 
 $$
-Targets → shape = (2, 4)
+\\text{Targets shape} = (2, 4)
 $$
 
 ---
 
 &nbsp;
 
-**What CrossEntropy Expects**
+$$\\textbf{What CrossEntropy Expects}\\\\[4pt]$$
 
 \`torch.nn.functional.cross_entropy\` expects:
+
+&nbsp;
 
 **Input**: 2D tensor of shape $(N, C)$
 
 where $N$ = number of samples, $C$ = number of classes.
 
+&nbsp;
+
 **Target**: 1D tensor of shape $(N,)$ with integer class indices.
+
+&nbsp;
 
 So we need to flatten both logits and targets.
 
@@ -715,17 +718,22 @@ So we need to flatten both logits and targets.
 
 &nbsp;
 
-**Why .view(-1, logits.size(-1))?**
+$$\\textbf{Why .view(-1, logits.size(-1))?}\\\\[4pt]$$
 
-\`logits.view(-1, V)\` reshapes $(B, T, V) \\to (B \\cdot T, V)$.
+\`logits.view(-1, V)\` reshapes $(B, T, V) \\to (B \\times T, V)$.
 
-→ Each row is one token prediction across the vocabulary.
+→ Each row corresponds to one token position (b, t) in the batch, i.e., the model’s distribution over the vocabulary for that position.
 
-\`targets.view(-1)\` reshapes $(B, T) \\to (B \\cdot T,)$.
+&nbsp;
 
-→ Each entry is the correct class index for one token.
+\`targets.view(-1)\` reshapes $(B, T) \\to (B \\times T,)$.
+
+→ Each entry is the correct class index for the next token in the sequence.
+
+&nbsp;
 
 Thus, every token in the batch is treated as an independent classification example.
+The cross-entropy loss is computed for all sequences in the current batch at once.
 
 &nbsp;
 
@@ -733,18 +741,40 @@ Thus, every token in the batch is treated as an independent classification examp
 
 &nbsp;
 
-**Putting It Together**
+$\\textbf{A tiny numerical example}\\\\[4pt]$
 
-\`\`\`python
-loss = F.cross_entropy(
-    logits.view(-1, logits.size(-1)),  # shape (B*T, V)
-    targets.view(-1)                    # shape (B*T,)
-)
-\`\`\`
+&nbsp;
+
+Suppose a 4-class model outputs prediction probabilities for one sequence is:
+$$
+\\bullet \\ p = [0.1, 0.2, 0.6, 0.1]
+$$
+The true class is class 3 (0-indexed: index 2), i.e. one-hot $y = [0, 0, 1, 0]$.
+(In practice (e.g., GPT-2), the target is not one-hot but the class index, i.e., 2. It's equivalent to multiplying by a one-hot, but far more memory/compute efficient)
+
+&nbsp;
+
+Cross-entropy for this example:
+$$
+CE = -\\sum_{i=1}^4 y_i \\log p_i = -\\log p_3 = -\\log 0.6 \\approx 0.5108
+$$
+
+&nbsp;
+
+---
+
+&nbsp;
+
+$\\textbf{References:}\\\\[4pt]$
+$$\\textbf{1. PyTorch docs:}$$
+CrossEntropyLoss (multiclass softmax CE; targets are class indices, not one-hot).
+$$\\href{https://docs.pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html?utm_source=chatgpt.com}{\\texttt{PyTorch Docs}}$$
   
+$$\\textbf{2. CS231n Softmax Classifier:}$$
+notes (derivation of softmax + cross-entropy and gradients).
+$$\\href{https://cs231n.github.io/linear-classify/?utm_source=chatgpt.com}{\\texttt{CS231n Softmax Classifier}}$$
 
-This computes the **average negative log-likelihood** across all tokens in the batch.
-
+&nbsp;
 
     `,
   },
@@ -752,7 +782,7 @@ This computes the **average negative log-likelihood** across all tokens in the b
   key_view_notes: {
     title: "Key View",
     md: `
-**Key projection**
+$$\\textbf{Key projection}\\\\[4pt]$$
 
 $k(x)$ — applies a linear layer to every token:
 
@@ -760,7 +790,7 @@ $$
 (B, T, C) \\;\\rightarrow\\; (B, T, C).
 $$
 
-**Split channels into heads**
+$$\\textbf{Split channels into heads}\\\\[4pt]$$
 
 $.view(B, T, n\\_head, hs)$ — splits the last dim $C$ into $n\\_head\\times hs$ with
 $hs = \\left\\lfloor \\dfrac{C}{n\\_head} \\right\\rfloor$:
@@ -769,7 +799,7 @@ $$
 (B, T, C) \\;\\rightarrow\\; (B, T, n\\_head, hs).
 $$
 
-**Move heads dimension next to batch**
+$$\\textbf{Move heads dimension next to batch}\\\\[4pt]$$
 
 $.transpose(1, 2)$ — swaps the $T$ and $n\\_head$ axes:
 
@@ -782,7 +812,7 @@ $$
   query_view_notes: {
     title: "Query View",
     md: `
-**Query projection**
+$$\\textbf{Query projection}\\\\[4pt]$$
 
 $q(x)$ — applies a linear layer to every token:
 
@@ -790,7 +820,7 @@ $$
 (B, T, C) \\;\\rightarrow\\; (B, T, C).
 $$
 
-**Split channels into heads**
+$$\\textbf{Split channels into heads}\\\\[4pt]$$
 
 $.view(B, T, n\\_head, hs)$ — splits the last dim $C$ into $n\\_head\\times hs$ with
 $hs = \\left\\lfloor \\dfrac{C}{n\\_head} \\right\\rfloor$:
@@ -799,7 +829,7 @@ $$
 (B, T, C) \\;\\rightarrow\\; (B, T, n\\_head, hs).
 $$
 
-**Move heads dimension next to batch**
+$$\\textbf{Move heads dimension next to batch}\\\\[4pt]$$
 
 $.transpose(1, 2)$ — swaps the $T$ and $n\\_head$ axes:
 
@@ -812,7 +842,7 @@ $$
   value_view_notes: {
     title: "Value View",
     md: `
-**Value projection**
+$$\\textbf{Value projection}\\\\[4pt]$$
 
 $v(x)$ — applies a linear layer to every token:
 
@@ -820,7 +850,7 @@ $$
 (B, T, C) \\;\\rightarrow\\; (B, T, C).
 $$
 
-**Split channels into heads**
+$$\\textbf{Split channels into heads}\\\\[4pt]$$
 
 $.view(B, T, n\\_head, hs)$ — splits the last dim $C$ into $n\\_head\\times hs$ with
 $hs = \\left\\lfloor \\dfrac{C}{n\\_head} \\right\\rfloor$:
@@ -829,7 +859,7 @@ $$
 (B, T, C) \\;\\rightarrow\\; (B, T, n\\_head, hs).
 $$
 
-**Move heads dimension next to batch**
+$$\\textbf{Move heads dimension next to batch}\\\\[4pt]$$
 
 $.transpose(1, 2)$ — swaps the $T$ and $n\\_head$ axes:
 
@@ -843,36 +873,21 @@ $$
     title: "Q @ K Product",
     md: `
 
-**Explanation of Scale dot-product attention**
+$$\\textbf{Explanation of Scale dot-product attention}\\\\[4pt]$$
 
-&nbsp;
+$q, k$ have shape $(B, n\\_head, T, hs)$ (queries/keys per head).$\\\\[4pt]$
 
-q, k have shape $(B, n\\_head, T, hs)$ (queries/keys per head).
+$k.\\mathrm{transpose}(-2, -1) \\;\\rightarrow\\; (B, n\\_head, hs, T)$ swap the last two axes of keys, so each query can dot with every key at all time steps.$\\\\[4pt]$
 
-&nbsp;
+\\@ is batched matrix multiply:$\\\\[4pt]$
 
-$k.\\mathrm{transpose}(-2, -1) \\;\\rightarrow\\; (B, n\\_head, hs, T)$ swap the last two axes of keys, so each query can dot with every key at all time steps.
+$(B, n\\_head, T, hs)\\ @\\ (B, n\\_head, hs, T) \\;\\rightarrow\\; (B, n\\_head, T, T)\\\\[4pt]$
 
-&nbsp;
+Result: for each head, a $T \\times T$ matrix of raw attention scores (one row per query position, one column per key position).$\\\\[4pt]$
 
-\\@ is batched matrix multiply:
+$\\mathtt{* (1.0 / \\sqrt{hs})}$ (with $hs$ = head size). This is the scale from “Scaled Dot-Product Attention.”$\\\\[4pt]$
 
-$(B, n\\_head, T, hs)\\ @\\ (B, n\\_head, hs, T) \\;\\rightarrow\\; (B, n\\_head, T, T)$
-
-&nbsp;
-
-Result: for each head, a $T \\times T$ matrix of raw attention scores (one row per query position, one column per key position).
-
-&nbsp;
-
-\\* (1.0 / hs**0.5) multiplies by $1/\\sqrt{hs}$ (with $hs$ = head size). This is the scale from “Scaled Dot-Product Attention.”
-
-&nbsp;
-
-
-**Scaled dot-product attention logits in math notation**
-
-&nbsp;
+$$\\textbf{Scaled dot-product attention logits in math notation}\\\\[4pt]$$
 
 Given
 $$
@@ -896,9 +911,7 @@ $$
 \\frac{ q_{b,h,t_q,:}\\cdot k_{b,h,t_k,:} }{\\sqrt{hs}}.
 $$
 
-**Why the $1/\\sqrt{hs}$ scale**
-
-&nbsp;
+$$\\textbf{Why the $1/\\sqrt{hs}$ scale}\\\\[4pt]$$
 
 If the components of $q$ and $k$ are roughly zero-mean, unit-variance, then
 $$
@@ -995,68 +1008,57 @@ $$
 
 &nbsp;
 
-**What's happening step by step**
+$$\\textbf{What's happening step by step}\\\\[8pt]$$
+$$\\textbf{1. What $\\mathtt{self.mask}$ is}\\\\[4pt]$$
+
+Earlier we had:
+$$
+\\mathtt{self.register\\_buffer("mask",\\ torch.tril(torch.ones(1024,\\ 1024)).unsqueeze(0).unsqueeze(0))}
+$$
+[torch.tril](#info:torch_tril_notes)([torch.ones](#info:torch_ones_notes)(1024,1024)) makes a **lower-triangular** matrix of size $1024 \\times 1024$ with $1$s on/under the main diagonal and $0$s above it (future positions).  
+[unsqueeze(0)](#info:unsqueeze_notes).unsqueeze(0) turns it into shape $(1,\\ 1,\\ 1024,\\ 1024)$ so it can **broadcast** across batch and heads.  
+Stored as a **buffer** so it moves with the module to GPU/CPU and is saved, but not trained.
 
 &nbsp;
 
-1\\. **What $\\mathtt{self.mask}$ is**  
-   &nbsp;
-
-   Earlier we had:
-   $$
-   \\mathtt{self.register\\_buffer("mask",\\ torch.tril(torch.ones(1024,\\ 1024)).unsqueeze(0).unsqueeze(0))}
-   $$
-   [torch.tril](#info:torch_tril_notes)([torch.ones](#info:torch_ones_notes)(1024,1024)) makes a **lower-triangular** matrix of size $1024 \\times 1024$ with $1$s on/under the main diagonal and $0$s above it (future positions).  
-   [unsqueeze(0)](#info:unsqueeze_notes).unsqueeze(0) turns it into shape $(1,\\ 1,\\ 1024,\\ 1024)$ so it can **broadcast** across batch and heads.  
-   Stored as a **buffer** so it moves with the module to GPU/CPU and is saved, but not trained.
-
-   &nbsp;
-
-2\\. **Slicing to current length**  
-  &nbsp;
-
-   $$
-   \\mathtt{self.mask[:, :, :T, :T]} \\;\\to\\; (1,\\ 1,\\ T,\\ T)
-   $$
-   matching the current sequence length.
-
-   &nbsp;
-
-3\\. **Build a boolean mask of disallowed links**  
-  &nbsp;
-
-   $$
-   \\mathtt{==\\ 0}
-   $$
-   converts the \\(0/1\\) matrix into a boolean mask: **True** where the entry is $0$ (i.e., future positions), **False** otherwise.
-
-   &nbsp;
-
-4\\. **$\\mathtt{masked\\_fill}$ on the logits**  
-  &nbsp;
-
-   $\\text{att}$ has shape $(B,\\ n\\_head,\\ T,\\ T)$ and holds **raw attention logits** $\\bigl(q\\,k^\\top/\\sqrt{hs}\\bigr)$.  
-   $\\mathtt{.masked\\_fill(bool\\_mask,\\ -\\infty)}$ writes $-\\infty$ into $\\text{att}$ **where the mask is True** (i.e., where attending would look **ahead**).  
-   Broadcasting lets a $(1,\\ 1,\\ T,\\ T)$ mask apply to all batches and heads.
-
-   &nbsp;
-
-5\\. **Why $-inf$?**  
-  &nbsp;
-
-   Next you do $\\mathtt{att = F.softmax(att,\\ dim=-1)}$.  
-   $\\exp(-\\infty) = 0$,
-   so masked positions get **exactly zero probability**, and the softmax **renormalizes only over allowed (past/self) positions**.  
-   If you zeroed *after* softmax, probabilities would still be influenced by future tokens during normalization. **Masking before softmax** fixes that.
-
-   &nbsp;
-
-   ---
+$$\\textbf{2. Slicing to current length}\\\\[4pt]$$
+$$
+\\mathtt{self.mask[:, :, :T, :T]} \\;\\to\\; (1,\\ 1,\\ T,\\ T)
+$$
+matching the current sequence length.
 
 &nbsp;
 
-**Intuition (per token row)**  
+$$\\textbf{3. Build a boolean mask of disallowed links}\\\\[4pt]$$
+$$
+\\mathtt{==\\ 0}
+$$
+converts the \\(0/1\\) matrix into a boolean mask: **True** where the entry is $0$ (i.e., future positions), **False** otherwise.
+
 &nbsp;
+
+$$\\textbf{4. $\\mathtt{masked\\_fill}$ on the logits}\\\\[4pt]$$
+
+$\\text{att}$ has shape $(B,\\ n\\_head,\\ T,\\ T)$ and holds **raw attention logits** $\\bigl(q\\,k^\\top/\\sqrt{hs}\\bigr)$.  
+$\\mathtt{.masked\\_fill(bool\\_mask,\\ -\\infty)}$ writes $-\\infty$ into $\\text{att}$ **where the mask is True** (i.e., where attending would look **ahead**).  
+Broadcasting lets a $(1,\\ 1,\\ T,\\ T)$ mask apply to all batches and heads.
+
+&nbsp;
+
+$$\\textbf{5. Why $-inf$?}\\\\[4pt]$$
+
+Next you do $\\mathtt{att = F.softmax(att,\\ dim=-1)}$.  
+$\\exp(-\\infty) = 0$,
+so masked positions get **exactly zero probability**, and the softmax **renormalizes only over allowed (past/self) positions**.  
+If you zeroed *after* softmax, probabilities would still be influenced by future tokens during normalization. **Masking before softmax** fixes that.
+
+&nbsp;
+
+---
+
+&nbsp;
+
+$$\\textbf{Intuition (per token row)}\\\\[4pt]$$
 
 For query position $t$, this sets
 $$
@@ -1066,9 +1068,10 @@ so after softmax, the row can only distribute probability over keys $j \\le t$ (
 
 &nbsp;
 
-**Notes**
-- This mask enforces **causality**; it does **not** handle padding on its own. If you have padded tokens, you typically *also* add a padding mask (another $\\mathtt{masked\\_fill}$) so padding positions get $-\\infty$ too.
-- Using a big negative constant (e.g. $-10^9$) is common; $-\\infty$ is cleaner and numerically robust in PyTorch softmax.
+$$\\textbf{Notes}\\\\[4pt]$$
+
+$-$ This mask enforces **causality**; it does **not** handle padding on its own. If you have padded tokens, you typically *also* add a padding mask (another $\\mathtt{masked\\_fill}$) so padding positions get $-\\infty$ too.$\\\\[4pt]$
+$-$ Using a big negative constant (e.g. $-10^9$) is common; $-\\infty$ is cleaner and numerically robust in PyTorch softmax.
 
     `,
   },
@@ -1104,29 +1107,18 @@ Docs: [register_buffer](https://docs.pytorch.org/docs/stable/generated/torch.nn.
   softmax_notes: {
     title: "softmax",
     md: `
+$$\\textbf{F.softmax explanation}\\\\[8pt]$$
 
-**F.softmax explanation**
+$1.$ Converts the raw attention scores in $\\mathtt{att}$ into probabilities along the last dimension (keys dimension).$\\\\[4pt]$
 
-&nbsp;
+$2.$ For each query token (and each head), the resulting row tells how much attention that query token should pay to
+$\\text{each allowed previous token — higher value means more attention, zero means ignore. (e.g., masked future/padding)}\\\\[4pt]$
 
-1\\. $\\text{Converts the raw attention scores in }\\;\\mathtt{att}\\;\\text{ into probabilities along the last dimension (keys).}$
+$3.$ Each row sums to 1, so the weights are comparable and interpretable.$\\\\[4pt]$
 
-&nbsp;
+$4.$ The output has the same shape as the input; only the values are rescaled to valid probabilities.$\\\\[4pt]$
 
-2\\. $\\text{For each query token (and each head), the resulting row tells how much attention that query token should pay to}$
-$\\text{each allowed previous token — higher value means more attention, zero means ignore. (e.g., masked future/padding)}$
-
-&nbsp;
-
-3\\. $\\text{Each row sums to 1, so the weights are comparable and interpretable.}$
-
-&nbsp;
-
-4\\. $\\text{The output has the same shape as the input; only the values are rescaled to valid probabilities.}$
-
-&nbsp;
-
-5\\. $\\text{These probabilities are then used to take a weighted average of the value vectors for that query token.}$
+$5.$ These probabilities are then used to take a weighted average of the value vectors for that query token.$\\\\[4pt]$
 
 &nbsp;
 
@@ -1134,9 +1126,7 @@ $\\text{each allowed previous token — higher value means more attention, zero 
 
 &nbsp;
 
-**Math Intepretation**
-
-&nbsp;
+$$\\textbf{Math Intepretation}\\\\[8pt]$$
 
 $\\text{Applies softmax along the last dimension of }\\;\\mathtt{att}\\;\\text{to turn logits into probabilities.}$
 
@@ -1162,8 +1152,8 @@ $$
 $$
 
 $$
-\\text{Notes: }\\;
-\\mathtt{dim=-1}\\;\\text{means “over the last axis” (the keys dimension).}\\; 
+\\text{Notes: }\\\\[4pt]
+\\mathtt{dim=-1}\\;\\text{means “over the last axis” (the keys dimension).}\\\\[4pt]
 \\mathtt{F.softmax}\\;\\text{is numerically stable (effectively subtracts a row max).}
 $$
 
@@ -1174,15 +1164,13 @@ $$
     title: "att @ v",
     md: `
 
-**Explanation and Intuition**
-
-&nbsp;
+$$\\textbf{Explanation and Intuition}\\\\[8pt]$$
 
 1\\. $\\mathtt{att}\\ \\text{holds, for each token (and each head), how much attention to pay to every allowed token in the sequence.}$
 
 &nbsp;
 
-2\\. $\\mathtt{v}\\ \\text{holds the information content for each token (the pieces worth copying).}$
+2\\. $\\mathtt{v}\\ \\text{holds the content for each token which are worth copying if you attend to me.}$
 
 &nbsp;
 
@@ -1202,7 +1190,7 @@ $\\text{The result }\\mathtt{y}\\text{ is a context-aware summary for each token
 
 &nbsp;
 
-**Math Intepretation**
+$$\\textbf{Math Intepretation}\\\\[8pt]$$
 
 $$
 \\mathtt{y\\ =\\ att\\ @\\ v}
@@ -1247,8 +1235,8 @@ $$
 \\boxed{\\begin{array}{l}
 \\textbf{Concrete mini-example:}\\\\[6pt]
 \\text{Say the attention row for token } t \\text{ is: } [0.5,\\ 0.3,\\ 0.2].\\\\[6pt]
-\\text{The value vectors at positions } 1,\\ 2,\\ 3 \\text{ are } v_1,\\ v_2,\\ v_3\\; (\\text{each is a length } h\\_s \\text{ vector}).\\\\[6pt]
-\\text{Then the output vector for token } t \\text{ is: } 0.5\\,v_1 + 0.3\\,v_2 + 0.2\\,v_3\\; \\text{— a single vector (length } h\\_s \\text{) that mixes information using that row's weights.}
+\\text{The value vectors at positions } 1,\\ 2,\\ 3 \\text{ are } v_1,\\ v_2,\\ v_3\\; (\\text{each is a length } hs \\text{ vector}).\\\\[6pt]
+\\text{Then the output vector for token } t \\text{ is: } 0.5\\,v_1 + 0.3\\,v_2 + 0.2\\,v_3\\; \\text{— a single vector (length } hs \\text{) that mixes information using that row's weights.}
 \\end{array}}
 $$
 
@@ -1281,11 +1269,11 @@ $$
 
 $$
 \\boxed{\\begin{array}{l}
-\\textbf{transpose(1,\\ 2)}: \\text{you currently have per-head outputs arranged as } (B,\\ n\\_head,\\ T,\\ h\\_s).\\\\[6pt]
+\\textbf{transpose(1,\\ 2)}: \\text{you currently have per-head outputs arranged as } (B,\\ n\\_head,\\ T,\\ hs).\\\\[6pt]
 \\text{ This swap moves }\\textbf{time}\\text{ next to }\\textbf{batch}\\text{ → } (B,\\ T,\\ n\\_head,\\ h\\_s),\\ \\text{ so for each token you can gather all heads together.}\\\\[12pt]
 \\textbf{contiguous()}: \\text{after a transpose, the tensor's memory is strided (non-contiguous). } \\mathtt{view}\\ \\text{ needs a contiguous layout,}\\\\[6pt]
 \\text{ so this makes a compact copy if necessary.}\\\\[12pt]
-\\textbf{view(B,\\ T,\\ C)}: \\text{finally, }\\textbf{stitch all heads back together}\\text{ by flattening } (n\\_head,\\ h\\_s) \\text{ into the model dimension } \\mathtt{C = n\\_head * hs,}\\\\[6pt]
+\\textbf{view(B,\\ T,\\ C)}: \\text{finally, }\\textbf{stitch all heads back together}\\text{ by flattening } (n\\_head,\\ hs) \\text{ into the model dimension } \\mathtt{C = n\\_head * hs,}\\\\[6pt]
 \\text{giving one vector per token → shape } (B,\\ T,\\ C).\\\\[12pt]
 \\text{In plain terms: reorder to time-major per token → ensure memory layout is safe → merge the heads so each token has a single C-dim embedding again,}\\\\[6pt]
 \\text{ready for the output projection.}
