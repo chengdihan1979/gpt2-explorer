@@ -82,6 +82,10 @@ export function buildCodeHtml({ component, selectedId }) {
   if (selectedId === "final_ln") highlightKeys(["lnf_def", "lnf_apply"]);
   if (selectedId === "lm_head") highlightKeys(["lm_head_def", "lm_head_apply"]);
   if (selectedId === "block_attn") highlightKeys(["attn_assign", "attn_call"]);
+  if (selectedId === "attn_linear_qkv") highlightKeys(["c_attn_def", "c_attn_call", "qkv_split"]);
+  if (selectedId === "attn_dropout") highlightKeys(["attn_drop_def", "attn_drop_call"]);
+  if (selectedId === "attn_linear_out") highlightKeys(["proj_def", "proj_call"]);
+  if (selectedId === "attn_resid_dropout") highlightKeys(["resid_drop_def", "resid_drop_call"]);
   if (selectedId === "block_ln") highlightKeys(["ln1", "ln1_use"]);
   if (selectedId === "block_ln2") highlightKeys(["ln2", "ln2_use"]);
   if (selectedId === "loss_fn") {
@@ -170,6 +174,25 @@ export function buildCodeHtml({ component, selectedId }) {
   html = html.replace(/y = att @ v/g, '<span data-action="open:att_v_product_notes" style="text-decoration: underline; cursor: pointer;">y = att @ v</span>');
   html = html.replace(/y\.transpose\(1, 2\)\.contiguous\(\)\.view\(B, T, C\)/g, '<span data-action="open:reorder_merge_heads_notes" style="text-decoration: underline; cursor: pointer;"> y.transpose(1, 2).contiguous().view(B, T, C)</span>');
   html = html.replace(/nn\.Dropout\(dropout\)\s*#\s*embedding\s*dropout/g, '<span data-action="open:emb_dropout_notes" style="text-decoration: underline; cursor: pointer;">nn.Dropout(dropout) # embedding dropout</span>');
+
+  // Emphasize the QK matmul line when Matmul (Q×Kᵀ) node is selected
+  if (selectedId === "attn_matmul_qk") {
+    html = html.replace(/(<span[^>]*data-action=\"open:q_k_product_notes\"[^>]*>)([\s\S]*?)(<\/span>)/, '$1<mark>$2</mark>$3');
+  }
+
+  // Emphasize the masked_fill line when Masked Attention node is selected
+  if (selectedId === "attn_masked") {
+    html = html.replace(/(<span[^>]*data-action=\"open:causal_mask_notes\"[^>]*>)([\s\S]*?)(<\/span>)/, '$1<mark>$2</mark>$3');
+  }
+
+  // Emphasize the softmax line when Softmax node is selected
+  if (selectedId === "attn_softmax") {
+    html = html.replace(/(<span[^>]*data-action=\"open:softmax_notes\"[^>]*>)([\s\S]*?)(<\/span>)/, '$1<mark>$2</mark>$3');
+  }
+  // Emphasize the att @ v line when Matmul (attn × V) node is selected
+  if (selectedId === "attn_matmul_v") {
+    html = html.replace(/(<span[^>]*data-action=\"open:att_v_product_notes\"[^>]*>)([\s\S]*?)(<\/span>)/, '$1<mark>$2</mark>$3');
+  }
 
   
   return html;

@@ -4,6 +4,7 @@ import Arrow from "./components/diagram/Arrow";
 import GPT2OuterFrame from "./components/diagram/GPT2OuterFrame";
 import TransformerBlockGroup from "./components/diagram/TransformerBlockGroup";
 import MLPSubDiagram from "./components/diagram/MLPSubDiagram";
+import AttnSubDiagram from "./components/diagram/AttnSubDiagram";
 import CodeWithActions from "./components/CodeWithActions";
 import InfoPanel from "./components/InfoPanel";
 import { buildCodeHtml } from "./utils/highlight";
@@ -79,8 +80,12 @@ export default function GPT2DecoderExplorerInner() {
             <Arrow x1={210} y1={740} x2={210} y2={780} />
             <Node id="loss_fn" label="Training Objective (CrossEntropyLoss)" x={20} y={780} w={380} h={40} onClick={handleSelect} />
 
-            {/* MLP sub-diagram kept to the right to avoid overlap */}
-            <MLPSubDiagram x={600} y={300} onClick={handleSelect} />
+            {/* MLP sub-diagram nudged up; keep clear of attention box (ends ~y=520) */}
+            <MLPSubDiagram x={600} y={530} onClick={handleSelect} />
+            {/* Attention sub-diagram inside GPT-2 frame */}
+            <AttnSubDiagram x={600} y={40} onClick={handleSelect} />
+            {/* Arrow from Masked Multi-Head Attention node to the Causal Self-Attention diagram */}
+            <Arrow x1={400} y1={410} x2={600} y2={120} />
           </svg>
           {/* Move notes under the left SVG */}
           <div className="mt-4">

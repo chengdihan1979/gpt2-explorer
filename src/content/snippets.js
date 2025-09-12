@@ -251,6 +251,67 @@ export const content = {
     { id: "attn_call", label: "attn call", match: "self.attn(self.ln1(x))" },
   ] },
   attn_class:{ title: "Causal Self-Attention", summary: "Implementation of masked self-attention.", code: attnCode, anchors: [{ id: "class_def", label: "class", match: "class CausalSelfAttention(nn.Module):" }, { id: "mask", label: "mask", match: 'self.register_buffer("mask", torch.tril(torch.ones(1024, 1024)).unsqueeze(0).unsqueeze(0))' }] },
+  attn_linear_qkv: {
+    title: "Linear for Q, K, V",
+    summary: "Fused projection to compute qkv",
+    code: attnCode,
+    anchors: [
+      { id: "c_attn_def", label: "define c_attn", match: "self.c_attn = nn.Linear(n_embd, 3 * n_embd, bias=True)" },
+      { id: "c_attn_call", label: "call c_attn", match: "qkv = self.c_attn(x)  # [B, T, 3C]" },
+      { id: "qkv_split", label: "split qkv", match: "q, k, v = qkv.split(C, dim=2)" },
+    ],
+  },
+  attn_matmul_qk: {
+    title: "Matmul (Q × Kᵀ)",
+    summary: "Scaled dot-product before masking",
+    code: attnCode,
+    anchors: [],
+  },
+  attn_masked: {
+    title: "Masked Attention",
+    summary: "Apply causal mask to attention logits",
+    code: attnCode,
+    anchors: [],
+  },
+  attn_softmax: {
+    title: "Softmax",
+    summary: "Normalize logits over keys",
+    code: attnCode,
+    anchors: [],
+  },
+  attn_dropout: {
+    title: "Attention dropout",
+    summary: "Regularization on attention probabilities",
+    code: attnCode,
+    anchors: [
+      { id: "attn_drop_def", label: "define attn_drop", match: "self.attn_drop  = nn.Dropout(dropout)" },
+      { id: "attn_drop_call", label: "apply attn_drop", match: "att = self.attn_drop(att)" },
+    ],
+  },
+  attn_matmul_v: {
+    title: "Matmul (attn × V)",
+    summary: "Weighted sum of values by attention",
+    code: attnCode,
+    anchors: [],
+  },
+  attn_linear_out: {
+    title: "Linear",
+    summary: "Project back to model dimension",
+    code: attnCode,
+    anchors: [
+      { id: "proj_def", label: "define proj", match: "self.proj  = nn.Linear(n_embd, n_embd, bias=True)" },
+      { id: "proj_call", label: "apply proj", match: "self.proj(y)" },
+    ],
+  },
+  attn_resid_dropout: {
+    title: "Residual dropout",
+    summary: "Dropout applied after projection (residual path)",
+    code: attnCode,
+    anchors: [
+      { id: "resid_drop_def", label: "define resid_drop", match: "self.resid_drop = nn.Dropout(dropout)" },
+      { id: "resid_drop_call", label: "apply resid_drop", match: "self.resid_drop(" },
+    ],
+  },
   block_ln2: { title: "LayerNorm before MLP", summary: "Normalization before feed-forward MLP.", code: transformerBlockCode, anchors: [
     { id: "ln2", label: "ln2", match: "self.ln2 = nn.LayerNorm(n_embd)" },
     { id: "ln2_use", label: "ln2 use", match: "self.ln2(x)" },
