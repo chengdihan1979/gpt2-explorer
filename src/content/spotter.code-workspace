@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "../../../spotter"
+		},
+		{
+			"path": "../.."
+		}
+	],
+	"settings": {
+		"java.compile.nullAnalysis.mode": "disabled"
+	}
+}
