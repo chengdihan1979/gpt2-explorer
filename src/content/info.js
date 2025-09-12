@@ -8,7 +8,7 @@ $$
 ---
 
 $$
-\\textbf{Example 1 — “Safe at init” path (identity highway)}\\\\[6pt]
+\\textbf{Example 1 — "Safe at init" path (identity highway)}\\\\[6pt]
 \\text{Setup (early training): attention weights are small, so the sublayer output is near zero: } \\\\[6pt]
 \\mathrm{attn}(\\mathrm{LN}(x)) \\approx 0.\\\\[6pt]
 \\bullet\\space\\text{Pre-LN block: } x_{l+1} = x_l + \\mathrm{attn}(\\mathrm{LN}(x_l)) \\approx x_l.\\\\[6pt]
@@ -77,118 +77,164 @@ export const INFO = {
   tokenizer_notes: {
     title: "Tokenizer (BPE for GPT-2)",
     md: `
+$\\text{This line of code returns the GPT-2's byte-level BPE (BPE) tokenizer (vocab size 50257, includes the special token}$
+$\\texttt{<|endoftext|>}\\text{ with id 50256).}\\\\$
+$$\\text{It contains the byte}\\leftrightarrow\\text{\\href{#info:gpt2_byte_unicode_map_notes}{\\text{unicode map}}, \\href{#info:gpt2_merge_ranks_notes}{\\text{GPT-2 merge ranks}}, \\href{#info:regex_pre_tokenizer_notes}{\\text{regex pre-tokenizer}}, and special tokens.}\\\\[10pt]$$
+
+$$\\textbf{How tokenization works}\\\\[4pt]$$
 $$
-\\textbf{Library \\& call}\\\\[4pt]
-\\mathtt{tokenizer = tiktoken.get\\_encoding("gpt2")}\\;\\to\\;\\text{ returns a built-in }\\mathtt{tiktoken.Encoding}\\\\[10pt]
-\\textbf{What the object is}\\\\[4pt]
-\\text{GPT-2's byte-level BPE (BBPE) tokenizer; vocab size }50{,}257\\text{ (includes }\\texttt{<|endoftext|>}\\text{ with id }50256\\text{).}\\\\
-\\text{Holds the byte}\\leftrightarrow\\text{\\href{#info:gpt2_byte_unicode_map_notes}{\\text{unicode map}}, \\href{#info:gpt2_merge_ranks_notes}{\\text{GPT-2 merge ranks}}, \\href{#info:regex_pre_tokenizer_notes}{\\text{regex pre-tokenizer}}, and special tokens.}\\\\[10pt]
-\\textbf{How tokenization works}\\\\[4pt]
-1)\\ \\text{Convert input text to UTF-8 bytes (case/whitespace preserved).}\\\\
-2)\\ \\text{Split bytes with GPT-2's regex into chunks.}\\\\
-3)\\ \\text{Apply BPE merges to produce token ids.}\\\\[10pt]
-\\textbf{API you can use}\\\\[4pt]
-\\mathtt{enc = tiktoken.get\\_encoding("gpt2")}\\\\
-\\mathtt{ids = enc.encode("Hello\\ world!")}\\;\\to\\;\\text{ list of ints}\\\\
-\\mathtt{text = enc.decode(ids)}\\;\\to\\;\\href{#info:lossless_round_trip_notes}{\\text{lossless round-trip}}\\\\
-\\mathtt{enc.encode("<|endoftext|>")}\\;\\text{ raises by default; allow via }\\mathtt{allowed\\_special=\\{"all"\\}}\\\\[10pt]
-\\textbf{Gotchas}\\\\[4pt]
-\\text{Leading spaces/punctuation matter (byte-level, space-sensitive).} \\\\[6pt]
-\\text{No BOS auto-insert; }\\texttt{<|endoftext|>}\\text{ is special.}\\\\[6pt]
-\\textbf{References:}\\\\[2pt] 
-\\href{https://github.com/openai/tiktoken}{\\texttt{tiktoken}}\\\\[2pt]
-\\href{https://www.youtube.com/watch?v=zduSFxRajkE&t=1430s}{\\texttt{BPE - Let's build the GPT Tokenizer}}\\\\[2pt]
-\\href{https://huggingface.co/learn/llm-course/en/chapter6/5}{\\texttt{Hugging Face - Byte-Pair Encoding tokenization}}
+1)\\ \\textbf{Byte encoding: }\\text{Encode the input text as UTF-8 bytes (case and whitespace are preserved).} \\\\
+\\text{Map each byte to a safe Unicode symbol via the byte↔unicode table so every byte is representable.}\\\\[4pt]
+\\text{Example:}\\\\[4pt]
+\\text{" café"} \\\\[2pt]
+\\rightarrow\\; \\text{Bytes: }[\\mathtt{0x20},\\ \\mathtt{0x63},\\ \\mathtt{0x61},\\ \\mathtt{0x66},\\ \\mathtt{0xC3},\\ \\mathtt{0xA9}] \\ \\text{(space and accents preserved).}\\\\[2pt]
+\\rightarrow\\; \\text{Unicode: }[\\mathtt{U+0120}\\ \\text{'Ġ'},\\ \\mathtt{U+0063}\\ \\text{'c'},\\ \\mathtt{U+0061}\\ \\text{'a'},\\ \\mathtt{U+0066}\\ \\text{'f'},\\ \\mathtt{U+00C3}\\ \\text{'Ã'},\\ \\mathtt{U+00A9}\\ \\text{'©'}\\ ] \\\\[2pt]
+\\rightarrow\\; \\text{the string "ĠcafÃ©".}\\\\[4pt]
+\\href{#info:gpt2_byte_unicode_map_notes}{\\text{Deep dive into byte-unicode map}}
 $$
+
+$$
+2)\\ \\textbf{Pre-tokenize: } \\text{Split the text into pieces with GPT-2's regex (separates runs of letters, digits, punctuation,} \\\\[2pt]
+\\text{leading spaces, etc.).}\\\\[4pt]
+\\text{Example:}\\\\[4pt]
+\\text{"Hello, world!" → pieces: ["Hello", ",", "⎵world", "!"] (⎵ = leading space).}\\\\[4pt]
+\\text{"2025-09-19" → ["2025", "-", "09", "-", "19"].}\\\\[4pt]
+\\href{#info:regex_pre_tokenizer_notes}{\\text{Deep dive into regex pre-tokenizer}}
+$$
+
+$$
+3)\\ \\textbf{BPE merges: } \\text{For each piece, iteratively merge symbol pairs using GPT-2's merge-ranks until no more merges apply,} \\\\
+\\text{yielding subword units.}\\\\[10pt]
+$$
+
+$$
+\\textbf{Notes: } \\text{Because it's byte-level, every input string is tokenizable without “unknown” tokens, and the original}\\\\[2pt]
+\\text{spacing/casing is maintained.}\\\\[4pt]
+$$
+
+$$\\textbf{References:}\\\\[4pt]$$
+$$\\textbf{1. Primary source (architecture + input representation):}$$
+GPT-2 technical report. It spells out byte-level BPE, the motivation for byte-level processing, and the expanded vocab (50,257). See §2.2 “Input Representation” and Table 2.
+$$\\href{https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf?utm_source=chatgpt.com}{\\texttt{GPT-2 Technical Report}}$$
+
+$$\\textbf{2. Tokenizer implementation:}$$
+OpenAI’s tiktoken. Clear, practical reference for GPT-2's byte-level BPE (lossless, reversible), and how bytes ↔ tokens map is implemented.
+$$\\href{https://github.com/openai/tiktoken}{\\texttt{tiktoken}}$$
+
+$$\\textbf{3. Foundational BPE paper (why subword/byte-level):}$$
+Sennrich et al. 2016 “Neural Machine Translation of Rare Words with Subword Units.” Not GPT-2-specific, but it’s the classic reference behind subword/BPE vocabularies GPT-2 builds embeddings over.
+$$\\href{https://aclanthology.org/P16-1162/?utm_source=chatgpt.com}{\\texttt{Neural Machine Translation of Rare Words with Subword Units}}$$
+
+$$\\textbf{4. Let's build the GPT Tokenizer:}$$
+Karpathy’s video on GPT Tokenizer. Practical guides on GPT-2's byte-level BPE (from 1430s).
+$$\\href{https://www.youtube.com/watch?v=zduSFxRajkE&t=1430s}{\\texttt{BPE - Let's build the GPT Tokenizer}}$$
+
+$$\\textbf{5. Hands-on/educational BPE references:}$$
+Karpathy's minBPE (minimal byte-level BPE)
+$$\\href{https://github.com/karpathy/minbpe?utm_source=chatgpt.com}{\\texttt{minbpe}}$$
+
+$$\\textbf{6. Empirical analysis of GPT-2 embeddings:}$$
+Interpretability deep-dive into GPT-2’s embedding weights (distributional properties, relation to positions). Advanced exploration inside wte.
+$$\\href{https://www.alignmentforum.org/posts/BMghmAxYxeSdAteDc/an-exploration-of-gpt-2-s-embedding-weights?utm_source=chatgpt.com}{\\texttt{An exploration of GPT-2's embedding weights}}$$
     `,
   },
 
   gpt2_byte_unicode_map_notes: {
     title: "GPT-2 byte-unicode map",
     md: `
+$$\\textbf{What it is}\\\\[2pt]$$
 $$
-\\boxed{\\begin{array}{l}
-\\textbf{What it is}\\\\[2pt]
-\\text{A fixed, 1-to-1 mapping between the 256 possible bytes (0-255) and 256 printable Unicode code points.}\\\\[8pt]
-\\textbf{byte }\\to\\ \\textbf{unicode (“byte encoder”):}\\ \\text{ turns each raw byte into a single visible Unicode character.}\\\\
-\\textbf{unicode }\\to\\ \\textbf{byte (“byte decoder”):}\\ \\text{ the exact inverse, so it’s perfectly reversible.}\\\\[12pt]
-\\textbf{Why it exists:}\\\\[2pt]
-\\text{Classical BPE operates on “characters.” GPT-2, however, is byte-level: it wants to handle any byte sequence}\\\\
+\\text{A fixed, 1-to-1 mapping between the 256 possible bytes (0-255) and 256 printable Unicode code points.}\\\\[4pt]
+\\textbf{byte }\\to\\ \\textbf{unicode ("byte encoder"):}\\ \\text{ turns each raw byte into a single visible Unicode character.}\\\\
+\\textbf{unicode }\\to\\ \\textbf{byte ("byte decoder"):}\\ \\text{ the exact inverse, so it's perfectly reversible.}\\\\[12pt]
+$$
+$$\\textbf{Why it exists:}\\\\[4pt]$$
+$$
+\\text{Classical BPE operates on "characters." GPT-2, however, is byte-level: it wants to handle any byte sequence}\\\\
 \\text{(emoji, accents, binary-ish bytes, etc.) losslessly. Many bytes are control/whitespace and would confuse regex}\\\\
-\\text{splitting or get normalized away. The map solves this by:}\\\\
-1. \\text{giving every byte a safe, visible stand-in,}\\\\
-2. \\text{avoiding collisions with whitespace/control characters,}\\\\
-3. \\text{making regex pre-tokenization and BPE run on a “printable” string while staying reversible.}\\\\[12pt]
-\\textbf{How it's constructed (conceptually)}\\\\[2pt]
-\\bullet\\space \\text{Bytes that are already “nice printable” (e.g., ASCII and many Latin-1 characters) are mapped to themselves}\\\\
+\\text{splitting or get normalized away. The map solves this by:}\\\\[4pt]
+1. \\text{Giving every byte a safe, visible stand-in,}\\\\[4pt]
+2. \\text{Avoiding collisions with whitespace/control characters,}\\\\[4pt]
+3. \\text{Making regex pre-tokenization and BPE run on a "printable" string while staying reversible.}\\\\[12pt]
+$$
+$$\\textbf{How it's constructed (conceptually)}\\\\[2pt]$$
+$$
+\\bullet\\space \\text{Bytes that are already "nice printable" (e.g., ASCII and many Latin-1 characters) are mapped to themselves}\\\\
 \\text{(same code point).}\\\\
 \\bullet\\space \\text{The remaining bytes (e.g., space, tabs, newlines, etc.) are mapped to } \\textbf{distinct printable code points}\\\\
 \\text{in higher Unicode ranges, ensuring they're visible and not whitespace.}\\\\
-\\space\\space\\space\\text{Example:}\\\\[2pt]
-\\space\\space\\space\\bullet\\space\\text{Byte 0x41 ('A')}\\rightarrow\\text{is mapped to standard-in 'A' (same character)}\\\\[2pt]
-\\space\\space\\space\\bullet\\space\\text{Byte 0x20 (space)}\\rightarrow\\text{stand-in “Ġ” (U+0120) — that's why " world" encoded as Ġworld with a leading space.}\\\\[2pt]
+\\space\\space\\space\\text{Example:}\\\\[4pt]
+\\space\\space\\space\\bullet\\space\\text{Byte 0x41 ('A')}\\rightarrow\\text{is mapped to standard-'A' (same character)}\\\\[2pt]
+\\space\\space\\space\\bullet\\space\\text{Byte 0x20 (space)}\\rightarrow\\text{stand-in "Ġ" (U+0120) — that's why " world" encoded as Ġworld with a leading space.}\\\\[2pt]
 \\space\\space\\space\\bullet\\space\\text{Bytes 0xC3 0xA9 (é)}\\rightarrow\\text{stand-ins something like Ã © (two Unicode chars, one per byte)}\\\\[2pt]
 \\space\\space\\space\\bullet\\space\\text{Bytes 0xE2 0x80 0x94 (-)(em dash)}\\rightarrow\\text{three stand-ins (one per byte)}\\\\[6pt]
-\\text{This yields two tables:}\\\\
+\\text{This yields two tables:}\\\\[4pt]
 \\mathtt{byte\\_encoder: \\{0..255 \\to one-char\\ unicode\\ strings\\}}\\\\
 \\mathtt{byte\\_decoder: \\{that\\ unicode\\ char \\to original\\ byte\\}}\\\\[12pt]
-\\textbf{Which bytes map to themselves?}\\\\[2pt]
-\\text{In GPT-2's map, these do: }\\\\
+\\text{In GPT-2's map, the following bytes map to themselves: }\\\\[4pt]
 \\text{33\\text{-}126 } \\; (\\text{printable ASCII excluding space}) \\; \\text{and } 161\\text{-}172,\\; 174\\text{-}255\\; (\\text{printable Latin-1}).\\\\[6pt]
 \\text{Bytes outside those ranges (e.g., control chars }0\\text{-}31,\\; \\text{space }32,\\; 127\\text{-}160,\\; \\text{and }173) \\text{ get special stand-ins (e.g., }\\\\
 \\mathrm{U+0100},\\ \\mathrm{U+0102}, \\ldots\\text{).}\\text{ That's why space (0x20) becomes } \\texttt{Ġ}\\text{.}\\\\[10pt]
-\\space\\space\\space\\textbf{Emoji example (UTF-8: F0 9F 98 8A)}\\\\[4pt]
-\\space\\space\\space\\bullet\\space\\texttt{0xF0} \\; (=240) \\; \\text{is in } 174\\text{-}255 \\Rightarrow \\text{ maps to itself (prints as } \\texttt{ð} \\text{ in Latin-1).}\\\\[4pt]
+\\textbf{Emoji example (UTF-8: F0 9F 98 8A)}\\\\[4pt]
+\\space\\space\\space\\bullet\\space\\texttt{0xF0} \\; (=240) \\; \\text{is in the range 174 - 255} \\Rightarrow \\text{ maps to itself (prints as } \\texttt{ð} \\text{ in Latin-1).}\\\\[4pt]
 \\space\\space\\space\\bullet\\space\\texttt{0x9F}\\; (159),\\; \\texttt{0x98}\\; (152),\\; \\texttt{0x8A}\\; (138) \\; \\text{are not in the printable sets } \\Rightarrow \\text{ each maps to a printable stand-in}\\\\
-\\space\\space\\space\\space\\space\\space\\text{Latin-Extended characters).}\\\\[6pt]
-\\space\\space\\space\\text{So you get a mix: one “self” character plus three stand-ins—still one visible char per byte, fully reversible.}\\\\[10pt]
-\\textbf{How it's used (encode path)}\\\\[2pt]
+\\space\\space\\space\\text{Latin-Extended characters).}\\\\[6pt]
+\\space\\space\\space\\text{So you get a mix: one "self" character plus three stand-ins — still one visible char per byte, fully reversible.}\\\\[10pt]
+$$
+$$\\textbf{How it's used (encode path)}\\\\[2pt]$$
+$$
 1.\\space\\text{Text }\\to\\ \\text{ UTF-8 bytes.}\\\\
 2.\\space\\text{Map each byte } b \\text{ to its stand-in Unicode char } u = \\mathtt{byte\\_encoder}[b].\\\\
 \\space\\space\\space\\space\\bullet\\space\\text{Example: " Hello" (leading space) }\\to\\ \\text{ bytes [0x20, 0x48, 0x65, 0x6C, 0x6C, 0x6F]}\\\\
-\\quad \\to\\ \\text{ mapped string "ĠHello" (space became “Ġ”; ASCII letters map to themselves).}\\\\
+\\quad \\to\\ \\text{ mapped string "ĠHello" (space became "Ġ"; ASCII letters map to themselves).}\\\\
 \\space\\space\\space\\space\\bullet\\space\\text{Non-ASCII (e.g., é }\\to\\ \\text{ bytes C3 A9) becomes two mapped chars, one for each byte; both are visible stand-ins.}\\\\
 3.\\space\\text{Run regex pre-tokenizer and BPE merges on this printable string.}\\\\[12pt]
-\\textbf{Decoding (exact inverse)}\\\\[2pt]
-1.\\space\\text{Take the merged “printable” token pieces }\\to\\ \\text{ concatenate to a string of mapped chars.}\\\\
-2.\\space\\text{Map each char back to a byte via } \\mathtt{byte\\_decoder}.\\\\
-3.\\space\\text{UTF-8 decode the bytes }\\to\\ \\text{ original text.}\\\\
-\\space\\space\\space\\space\\text{This guarantees lossless round-trip: } \\mathtt{decode(encode(s)) == s}
-\\end{array}}
 $$
-
+$$\\textbf{Decoding (exact inverse)}\\\\[2pt]$$
+$$
+1.\\space\\text{Take the merged "printable" token pieces }\\to\\ \\text{ concatenate to a string of mapped chars.}\\\\[4pt]
+2.\\space\\text{Map each char back to a byte via } \\mathtt{byte\\_decoder}.\\\\[4pt]
+3.\\space\\text{UTF-8 decode the bytes}\\to\\text{original text.}\\\\[4pt]
+\\text{This guarantees lossless round-trip: } \\mathtt{decode(encode(s)) == s}
+$$
     `,
   },
 
   regex_pre_tokenizer_notes: {
     title: "Regex pre-tokenizer",
     md: `
+$$\\textbf{What it is:}$$
 $$
-\\textbf{What it is:}\\;\\text{a regular-expression–based splitter that chops the input text into chunks before BPE merging happens.}\\\\
+\\text{A regular expression based splitter that chops the input text into chunks before BPE merging happens.}\\\\[4pt]
 \\text{BPE merges are then applied within each chunk only, never across chunk boundaries.}\\\\[10pt]
-
-\\textbf{Why it exists:}\\\\
-\\text{Speed \\& determinism — fewer candidate merges, stable behavior.}\\\\
-\\text{Semantics — keeps leading spaces with the following token (so you get tokens like “}\\texttt{Ġworld}\\text{”),}\\\\
-\\text{groups letters together, groups numbers together, and groups punctuation/symbols together.}\\\\
+$$
+$$\\textbf{Why it exists:}$$
+$$
+\\text{Speed \\& determinism — fewer candidate merges, stable behavior.}\\\\[4pt]
+\\text{Semantics — keeps leading spaces with the following token (so you get tokens like "}\\texttt{Ġworld}\\text{"),}\\\\
+\\text{groups letters together, groups numbers together, and groups punctuation/symbols together.}\\\\[4pt]
 \\text{Reversibility — pairs neatly with byte-level encoding for lossless round-trip.}\\\\[10pt]
-
-\\textbf{Rough pattern GPT-2 uses (conceptually):}\\\\
-\\text{contractions: }\\texttt{’s, ’t, ’re, ’ve, ’m, ’ll, ’d}\\\\
+$$
+$$\\textbf{Rough pattern GPT-2 uses (conceptually):}$$
+$$
+\\text{contractions: }\\texttt{'s, 't, 're, 've, 'm, 'll, 'd}\\\\
 \\text{optional leading space + letters: }\\texttt{?\\p\\{L\\}+}\\\\
 \\text{optional leading space + digits: }\\texttt{?\\p\\{N\\}+}\\\\
 \\text{optional leading space + other symbols: }\\texttt{?[\\s\\p\\{L\\}\\p\\{N\\}]+}\\\\
 \\text{whitespace runs (including end-of-string cases).}\\\\[10pt]
-
-\\textbf{How it affects BPE:}\\\\
+$$
+$$\\textbf{How it affects BPE:}$$
+$$
 \\text{Start from bytes (byte-level BPE) }\\to\\ \\text{ apply the regex pre-tokenizer }\\to\\ \\text{ for each chunk, repeatedly}\\\\
 \\text{merge the lowest-rank adjacent pair until no more merges apply.}\\\\
-\\text{Merges do not cross chunk boundaries. That’s why " world" (with its leading space) is a single chunk where merges}\\\\
-\\text{can happen internally, but it won’t merge with the preceding token.}\\\\[10pt]
+\\text{Merges do not cross chunk boundaries. That's why " world" (with its leading space) is a single chunk where merges}\\\\
+\\text{can happen internally, but it won't merge with the preceding token.}\\\\[10pt]
 
 \\textbf{Special tokens:}\\;\\text{handled separately (e.g., }\\texttt{<|endoftext|>}\\text{). They bypass normal splitting when allowed.}\\\\[10pt]
+$$
 
-\\textbf{Examples:}\\\\[6pt]
+$$\\textbf{Examples:}$$
+$$
 \\textbf{Letters grouped}\\\\[4pt]
 \\text{"Hello world"}\\ \\to\\ \\text{ chunks: ["Hello", " world"]}\\\\
 \\text{(letters stay together; the leading space sticks to the next chunk).}\\\\
@@ -209,12 +255,15 @@ $$
 \\textbf{Non-ASCII symbols / emoji}\\\\[4pt]
 \\text{"Hi — ok 😊"}\\ \\to\\ \\text{ chunks: ["Hi", " —", " ok", " 😊"]}\\\\
 \\text{(em dash and emoji are symbols; each becomes its own symbol chunk with any leading space).}\\\\[10pt]
-\\textbf{Key idea}\\\\[4pt]
+$$
+$$\\textbf{Key idea}$$
+$$
 \\text{It first splits the UTF-8 bytes into chunks using a regex: letters together, digits together, and symbols together,}\\\\
 \\text{keeping any leading space with the next chunk. Then BPE merges run inside each chunk only—they don't cross}\\\\
 \\text{chunk boundaries.} \\\\[10pt]
-
-\\textbf{References:}\\\\[2pt] 
+$$
+$$\\textbf{References:}$$
+$$
 \\href{https://www.youtube.com/watch?v=zduSFxRajkE&t=3457s}{\\texttt{Pre Tokenizer - Let's build the GPT Tokenizer}}\\\\[2pt]
 $$
 
@@ -225,16 +274,14 @@ $$
     title: "Lossless round-trip",
     md: `
 $$
-\\boxed{\\begin{array}{l}
 \\textbf{Lossless round-trip:}\\\\[4pt]
-\\text{Lossless round-trip” means if you encode text into token IDs and then decode those IDs back to text,}\\\\[1pt]
+\\text{Lossless round-trip" means if you encode text into token IDs and then decode those IDs back to text,}\\\\[1pt]
 \\text{you get exactly the same bytes you started with—nothing is altered or lost.}\\\\[6pt]
 \\text{Formally: }\\; \\mathtt{decode(encode(s)) = s}.\\\\[10pt]
 \\textbf{Why true for GPT-2 (byte-level BPE):}\\\\[4pt]
 1)\\ \\text{It operates on raw bytes (no lowercasing/normalization/space stripping).}\\\\
 2)\\ \\text{Every byte sequence is representable.}\\\\
 3)\\ \\text{Decode exactly inverts encode.}\\\\[10pt]
-\\end{array}}
 $$
 
     `,
@@ -341,9 +388,9 @@ $$
 \\text{the same shape as } x\\ \\text{ (}B, T, C\\text{). You can think of it as a learned correction }\\Delta x\\ \\text{telling each token what to borrow from its context.}\\\\[8pt]
 \\textbf{3. Residual (skip) connection.}\\\\[6pt]
 \\mathtt{x = x + (...)}\\ \\text{adds that update onto the original stream. The residual path:}\\\\[6pt]
-\\quad\\bullet\\;\\text{gives a gradient highway (there's an identity path, so gradients flow even if the attention sublayer is poorly scaled early in training)}\\\\[6pt]
-\\quad\\bullet\\;\\text{lets the block learn a small perturbation around identity (if the attention output is near zero, the block behaves like a no-op),}\\\\
-\\;\\;\\;\\;\\text{which makes deep stacks much easier to optimize.}\\\\[10pt]
+\\text{(i) gives a gradient highway (there's an identity path, so gradients flow even if the attention sublayer is poorly scaled early in training)}\\\\[6pt]
+\\text{(ii) lets the block learn a small perturbation around identity (if the attention output is near zero, the block behaves like a no-op),}\\\\
+\\text{which makes deep stacks much easier to optimize.}\\\\[10pt]
 $$
 
 ---
@@ -419,90 +466,269 @@ $$
   gpt2_merge_ranks_notes: {
     title: "GPT-2 merge ranks",
     md: `
+$$\\textbf{Byte-Pair Encoding (BPE) refresher:}$$
 $$
-\\boxed{\\begin{array}{l}
-\\textbf{Byte-Pair Encoding (BPE) refresher:}\\\\[4pt]
 \\text{Start from a sequence of basic symbols (for GPT-2, bytes). A BPE model has a list of symbol-pair merges}\\\\
-\\text{learned from a large corpus. The most frequent pair gets merge \\#0, the next gets \\#1, etc. This order is the}\\\\
+\\text{learned from a large corpus. The most frequent pair gets merge rank 0, the next gets rank 1, etc. This order is the}\\\\
 \\text{merge ranks.}\\\\[10pt]
-\\textbf{Why ranks matter:}\\\\[4pt]
+$$
+$$\\textbf{Why ranks matter:}$$
+$$
 \\text{During encoding, the tokenizer repeatedly looks at adjacent pairs and merges the pair with the lowest rank}\\\\
 \\text{number (highest priority) that appears in the list. It updates the sequence and repeats until no mergeable pairs}\\\\
 \\text{remain. The final merged chunks are your tokens.}\\\\[10pt]
-
-\\textbf{What }\\mathtt{tiktoken}\\textbf{ stores:}\\\\[4pt]
-\\text{GPT-2's tokenizer ships with a mapping that effectively represents these ranks. In practice:}\\\\
-\\quad \\text{Lower rank } \\Rightarrow \\text{ earlier (more frequent) merge rule } \\Rightarrow \\text{ applied before higher-rank rules.}\\\\
-\\quad \\text{This makes tokenization deterministic and matches GPT-2's training.}\\\\[10pt]
-
-\\textbf{Relation to token IDs:}\\\\[4pt]
-\\text{In GPT-2/}\\mathtt{tiktoken}\\text{, the learned merged strings correspond to entries in the vocabulary. The internal}\\\\
-\\text{"rank" concept aligns with how tokens are prioritized/created; in }\\mathtt{tiktoken}\\text{ many of these ranks are used}\\\\
-\\text{directly as token ids (special tokens handled separately).}\\\\[10pt]
-\\textbf{Tiny toy example (made up):}\\\\[4pt]
+$$
+$$\\textbf{What }\\mathtt{tiktoken}\\textbf{ stores:}$$
+$$
+\\text{GPT-2's tokenizer ships with a mapping that effectively represents these ranks. In practice:}\\\\[4pt]
+\\bullet\\ \\text{Lower rank } \\Rightarrow \\text{ earlier (more frequent) merge rule } \\Rightarrow \\text{ applied before higher-rank rules.}\\\\[4pt]
+\\bullet\\ \\text{This makes tokenization deterministic and matches GPT-2's training.}\\\\[10pt]
+$$
+$$\\textbf{Relation to token IDs:}$$
+$$
+\\text{In GPT-2/}\\mathtt{tiktoken}\\text{, every final merged result that BPE learns becomes an entry in the GPT-2 vocabulary with}\\\\[2pt] 
+\\text{an integer token id. For normal tokens, tiktoken reuses the BPE rank as the token id. But special tokens,} \\\\[2pt]
+\\text{e.g. <|endoftext|>, are assigned separate ids like 50256 and don't follow the rank rule.} \\\\[2pt]
+\\text{So, in practice: If a merged string got rank 12345, then in GPT-2/tiktoken its token id is 12345 (unless it's a special token).} \\\\[4pt]
+$$
+$$\\textbf{Tiny toy example (made up):}$$
+$$
 \\text{Text: } \\mathtt{banana} \\;\\to\\; \\text{bytes} \\;\\to\\; \\text{initial symbols: } b\\ a\\ n\\ a\\ n\\ a\\\\[4pt]
-\\text{Suppose merges (with ranks):}\\\\
-\\text{rank 0: } (a,n) \\to an\\\\
-\\text{rank 1: } (an,a) \\to ana\\\\
+\\text{Suppose merges (with ranks):}\\\\[2pt]
+\\text{rank 0: } (a,n) \\to an\\\\[2pt]
+\\text{rank 1: } (an,a) \\to ana\\\\[2pt]
 \\text{rank 2: } (b,an) \\to ban\\\\[4pt]
-\\text{Encoding proceeds:}\\\\
-\\text{Merge lowest-rank pairs present } \\to\\ b\\ an\\ a\\ n\\ a\\\\
-\\text{Now } (an,a) \\text{ exists } \\to\\ b\\ ana\\ n\\ a\\\\
-\\text{No more lower-rank merges available (or continue if others exist) } \\to\\ \\text{final tokens.}\\\\[10pt]
-\\textbf{Space handling:}\\\\[4pt]
-\\text{GPT-2 is byte-level. Space is part of the bytes and many tokens encode "space+word" as a single token}\\\\
-\\text{(often shown with a leading \\texttt{Ġ} in visualizations). Those arise from specific merges and their ranks.}\\\\[10pt]
-\\textbf{Bottom line:}\\\\[4pt]
-\\text{Merge ranks are the ordered list of learned pair-merge rules that dictate exactly how GPT-2's byte-level BPE}\\\\
-\\text{groups characters/bytes into tokens.}
-\\end{array}}
+\\text{Encoding proceeds:}\\\\[2pt]
+\\text{Merge lowest-rank pairs present } \\to\\ b\\ an\\ a\\ n\\ a\\\\[2pt]
+\\text{Now } (an,a) \\text{ exists } \\to\\ b\\ ana\\ n\\ a\\\\[2pt]
+\\text{No more lower-rank merges available (or continue if others exist) } \\to\\ \\text{final tokens.}\\\\[8pt]
+$$
+$$\\textbf{Space handling:}$$
+$$
+\\text{GPT-2 is byte-level. Space is part of the bytes and many tokens encode "space+word" as a single token}\\\\[2pt]
+\\text{(often shown with a leading \\texttt{Ġ} in visualizations). Those arise from specific merges and their ranks.}\\\\[8pt]
 $$
     `,
   },
 
   attention_linear_notes: {
-    title: "Attention linear: nn.Linear(n_embd, 3 * n_embd, bias=True)",
+    title: "Attention linear",
     md: `
+$\\textbf{What it is:}\\\\[4pt]$
+$$\\mathtt{self.c\\_attn = nn.Linear(n\\_embd,\\ 3 * n\\_embd,\\ bias=True)}$$ is a single fused projection that computes $\\textbf{Q, K, V}$ in one matmul.
+Equivalent to stacking three $\\mathtt{Linear(n\\_embd, n\\_embd)}$ layers:
+
 $$
-\\boxed{\\begin{array}{l}
-\\textbf{What it is}\\\\[4pt]
-\\mathtt{self.c\\_attn = nn.Linear(n\\_embd,\\ 3 * n\\_embd,\\ bias=True)}\\ \\text{ is a single fused projection that computes }\\textbf{Q, K, V}\\ \\text{ in one matmul.}\\\\
-\\text{Equivalent to stacking three }\\mathtt{Linear(n\\_embd, n\\_embd)}\\text{ layers:}\\\\[4pt]
 W_{qkv} = \\begin{bmatrix} W_Q \\\\ W_K \\\\ W_V \\end{bmatrix},\\quad
 b_{qkv} = \\begin{bmatrix} b_Q \\\\ b_K \\\\ b_V \\end{bmatrix}.\\\\[20pt]
-\\textbf{Parameter shapes}\\\\[4pt]
-\\text{Weight: } (3\\,n\\_{\\text{embd}},\\ n\\_{\\text{embd}}),\\quad
-\\text{Bias: } (3\\,n\\_{\\text{embd}}).\\\\[12pt]
-\\textbf{What it does to the tensor}\\\\[4pt]
-\\text{Input } x \\in \\mathbb{R}^{B\\times T\\times n\\_{\\text{embd}}}.\\\\
-\\mathtt{qkv = c\\_attn(x)}\\ \\Rightarrow\\ qkv \\in \\mathbb{R}^{B\\times T\\times 3n\\_{\\text{embd}}}.\\\\
-\\mathtt{q,\\ k,\\ v = qkv.split(n\\_embd,\\ -1)}\\ \\Rightarrow\\ q,k,v \\in \\mathbb{R}^{B\\times T\\times n\\_{\\text{embd}}}.\\\\
-\\text{Split into heads with } hs = n\\_{\\text{embd}}/n\\_{\\text{head}}:\\quad
+$$
+
+$\\textbf{Parameter shapes:}\\\\[4pt]$
+$$
+\\text{Weight: } (3\\times n\\_{\\text{embd}},\\ n\\_{\\text{embd}}),\\quad
+\\text{Bias: } (3\\times n\\_{\\text{embd}}).\\\\[12pt]
+$$
+
+$\\textbf{What it does to the tensor:}\\\\[4pt]$
+$$
+\\text{Input } x \\in \\mathbb{R}^{B\\times T\\times n\\_{\\text{embd}}}.\\\\[4pt]
+\\mathtt{qkv = c\\_attn(x)}\\ \\Rightarrow\\ qkv \\in \\mathbb{R}^{B\\times T\\times 3\\times n\\_{\\text{embd}}}.\\\\[4pt]
+\\mathtt{q,\\ k,\\ v = qkv.split(n\\_embd,\\ 2)}\\ \\Rightarrow\\ q,k,v \\in \\mathbb{R}^{B\\times T\\times n\\_{\\text{embd}}}.\\\\[4pt]
+\\text{Split q, k, and v into heads with } hs = n\\_{\\text{embd}}/n\\_{\\text{head}}\\\\[4pt]
 \\mathtt{view(B, T, n\\_head, hs).transpose(1, 2)}\\ \\Rightarrow\\ (B,\\ n\\_{\\text{head}},\\ T,\\ hs).\\\\[12pt]
-\\textbf{Why fuse Q/K/V?}\\\\[4pt]
+$$
+
+$\\textbf{Why fuse Q/K/V?}\\\\[4pt]$
+$$
 \\text{Fewer kernel launches / better cache use (one big GEMM vs. three). Results are identical to three separate linears.}\\\\[12pt]
-\\textbf{Parameter count}\\\\[4pt]
+$$
+
+$\\textbf{Parameter count:}\\\\[4pt]$
+$$
 \\text{Weights: } 3\\times n\\_{\\text{embd}}^2,\\quad \\text{Bias: } 3\\times n\\_{\\text{embd}}.\\\\
 \\text{Example } (n\\_{\\text{embd}}=768):\\ \\text{weights } 3\\cdot 768^2=1{,}769{,}472,\\ \\text{bias } 3\\cdot 768=2{,}304.\\\\[12pt]
-\\textbf{PyTorch default initialization}\\\\[4pt]
-\\text{For }\\mathtt{nn.Linear}\\text{ with }\\mathtt{bias=True}:\\\\
-\\text{Default initialization: } W_{ij} \\sim \\mathcal{U}\\!\\left(-\\tfrac{1}{\\sqrt{\\text{fan\\_in}}},\\ \\tfrac{1}{\\sqrt{\\text{fan\\_in}}}\\right),\\quad
-b_i \\sim \\mathcal{U}\\!\\left(-\\tfrac{1}{\\sqrt{\\text{fan\\_in}}},\\ \\tfrac{1}{\\sqrt{\\text{fan\\_in}}}\\right),\\\\
-\\text{with } \\text{fan\\_in}=n\\_{\\text{embd}}.\\ \\text{(For } n\\_{\\text{embd}}=768:\\ \\approx\\pm 0.0361\\text{.)}\\\\[12pt]
-\\textbf{Historical GPT-2 initialization}\\\\[4pt]
-W \\sim \\mathcal{N}(0,\\ 0.02^2),\\quad b=0.\\ \\text{(Re-init if you want to match GPT-2 exactly.)}\\\\[12pt]
-\\textbf{Bias = True — what it means}\\\\[4pt]
-\\text{Learns three separate bias vectors (for Q, K, V), concatenated into a single } (3\\times n\\_{\\text{embd}}) \\text{ parameter.}\\\\[12pt]
-\\textbf{Naming note}\\\\[4pt]
-\\text{The name }\\mathtt{c\\_attn}\\ \\text{comes from original OpenAI GPT-2 implementation where a small 1 Conv1D wrapper (1×1 conv = linear) was used. In PyTorch it's }\\mathtt{nn.Linear}.\\\\
-\\text{but the name stay the same} \\\\[4pt]
-\\end{array}}
 $$
+
+$\\textbf{PyTorch default initialization:}\\\\[8pt]$
+$$\\text{By default in PyTorch, nn.Linear initializes weights with }\\textbf{Kaiming uniform}\\text{ and biases with a plain uniform with the same bound.}\\\\[6pt]$$
+$\\bullet\\ \\textbf{Weights: }\\text{PyTorch initializes Linear.weight with Kaiming (He) uniform:}\\\\[4pt]$
+
+&nbsp;
+
+\`\`\`python
+init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+\`\`\`
+
+&nbsp;
+
+Passing $\\text{a=math.sqrt(5)}$ is a PyTorch trick so that the resulting uniform range becomes $\\mathcal{U}(-\\tfrac{1}{\\sqrt{\\text{fan\\_in}}}, \\tfrac{1}{\\sqrt{\\text{fan\\_in}}})$,
+numerically the same range you'd get from a plain uniform with that bound. This was done for backward-compatibility when they refactored to use $\\mathtt{kaiming\\_uniform\\_}. \\href{https://discuss.pytorch.org/t/nn-linear-default-weight-initialisation-assumes-leaky-relu-activation/46712/2?utm_source=chatgpt.com}{\\texttt{Forum post}}$.
+
+$$
+W_{ij} \\sim \\mathcal{U}\\!\\left(-\\tfrac{1}{\\sqrt{\\text{fan\\_in}}},\\ \\tfrac{1}{\\sqrt{\\text{fan\\_in}}}\\right),\\quad
+\\text{with } \\text{fan\\_in}=n\\_{\\text{embd}}.\\ \\text{(For } n\\_{\\text{embd}}=768:\\ \\approx\\pm 0.0361\\text{.)}\\\\[12pt]
+$$
+
+$\\bullet\\ \\textbf{Biases: }\\text{Bias is not Kaiming; it’s sampled explicitly from a plain uniform with the same bound:}\\\\[4pt]$
+
+&nbsp;
+
+\`\`\`python
+fan_in, _ = _calculate_fan_in_and_fan_out(self.weight)
+bound = 1 / sqrt(fan_in)
+init.uniform_(self.bias, -bound, bound)
+\`\`\`
+
+&nbsp;
+
+$$
+\\Rightarrow b_i \\sim \\mathcal{U}\\!\\left(-\\tfrac{1}{\\sqrt{\\text{fan\\_in}}},\\ \\tfrac{1}{\\sqrt{\\text{fan\\_in}}}\\right),\\\\
+$$
+
+So: weights use Kaiming-uniform configured to yield the same range as a simple uniform, while biases use that simple uniform directly.
+
+&nbsp;
+
+**Note**: Many Transformer/GPT-2 implementations override this and use a normal init $\\mathcal{N}(0,0.02^{2})$
+for linear layers/embeddings. 
+
+&nbsp;
+
+$\\textbf{References:}\\\\[4pt]$
+$\\textbf{1. Kaiming initialization: }$
+introduces the initialization for rectifiers (ReLU/LeakyReLU) and derives the variance-preserving scheme.
+$\\href{https://arxiv.org/pdf/1502.01852.pdf}{\\texttt{He et al., 2015}} \\\\[4pt]$
+
+$\\textbf{2. PyTorch defaults: }$
+See the PyTorch init code that points to the exact behavior.
+$\\href{https://github.com/pytorch/pytorch/blob/v2.8.0/torch/nn/modules/linear.py#L50}{\\texttt{PyTorch init docs}} \\\\[4pt]$
+
+$\\textbf{3. GPT-2 / HF Transformers practice (overriding PyTorch defaults): }\\\\[4pt]$
+GPT-2 (HF Transformers): weight matrices initialized from a (truncated) Normal(0, 0.02) controlled by initializer_range=0.02 in the config. This is the widely used default when you instantiate GPT-2 from Transformers.
+$\\href{https://huggingface.co/docs/transformers/main/model_doc/gpt2?utm_source=chatgpt.com}{\\texttt{GPT-2 Configs}} \\\\[4pt]$
+
+You can also see this policy described in general Transformer init notes (HF/others): “weights ~ Normal(0, initializer_range) (often 0.02), biases 0; LayerNorm γ=1, β=0.”
+$\\href{https://huggingface.co/transformers/v3.1.0/internal/modeling_utils.html?utm_source=chatgpt.com}{\\texttt{HF Transformers Modeling Utils}} \\\\[4pt]$
+
+`,
+  },
+
+  attention_output_linear_notes: {
+    title: "Attention output projection",
+    md: `
+Intuitively, the projection layer increases expressivity, this layer learns a linear combination so information from
+different heads can interact before entering the residual. Without it, heads would stay in disjoint slices and couldn't
+“talk” before the next block.
+
+&nbsp;
+
+$\\text{On the high level, think of it as following}\\\\[2pt]$
+$$
+\\bullet\\ \\text{Q/K do routing (which heads to attend to which other heads)}\\\\[2pt]
+\\bullet\\ \\text{V carries content}\\\\[2pt]
+\\bullet\\ \\text{Projection chooses where/how to write that content into the residual space (a learned basis change)}\\\\[2pt]
+\\text{It lets the model reweight heads, rotate features, and gate what survives to the next layer.}\\\\[10pt]
+$$
+
+$\\textbf{Parameter shapes}\\\\[4pt]$
+$$
+\\text{Weight: } (n\\_embd, n\\_embd),\\quad \\text{Bias: } (n\\_embd).\\\\[2pt]
+\\text{More strictly, the weight dimension is } (n\\_head * hs, n\\_embd). \\text{ But for GPT-2, they are often the same.}\\\\[4pt]
+$$
+
+$\\textbf{PyTorch default initialization:}\\\\[4pt]$
+Refer to the "PyTorch default initialization" section in the $\\href{#info:attention_linear_notes}{\\text{Attention linear notes}}$ for the details.
+
+&nbsp;
+
+The weight of this layer is also called the "residual-writing weights" because it is final projection matrix that writes the residual update to the original stream.
+
+&nbsp;
+
+Why I call this out: at initialization some implementations scale these residual-writing weights by $\\frac{1}{\\sqrt{N}}$ where N is the number of residual layers.
+so that the sum of $\\frac{1}{\\sqrt{N}}$ residual additions doesn't blow up in variance with depth. But this scaling technique is not universal anymore because:
+
+&nbsp;
+
+$\\textbf{1. Pre-norm (often RMSNorm) stabilizes depth by design}\\\\[4pt]$
+In post-norm Transformers, the residual stream's variance can grow with depth, so 
+$\\frac{1}{\\sqrt{N}}$ helps keep it in range. Modern stacks use pre-norm/RMSNorm: each block first normalizes the stream, then applies the sublayer, then adds it back. That normalization pins the scale right before the residual add, so extra 
+$\\frac{1}{\\sqrt{N}}$ at init is largely redundant.
+
+`,
+  },
+
+  attn_dropout_notes: {
+    title: "Attention dropout",
+    md: `
+$$\\text{Attention dropout applies dropout to the attention matrix after softmax and masking, before the value mix:}\\\\[2pt]$$
+$$A=\\mathrm{softmax}(S+\\text{mask}),\\quad \\tilde A=\\mathrm{Dropout}_p(A),\\quad Y=\\tilde A\\,V.\\\\[2pt]$$
+$$\\text{In code: }\\mathtt{att = self.attn\\_drop(att)}\\ \\text{ where }\\mathtt{att}\\text{ is already softmaxed.}\\\\[8pt]$$
+
+$$\\textbf{Why it helps (intuition)}\\\\[2pt]$$
+$$\\text{- Think of attention as a graph from each query token to earlier tokens; dropout randomly removes some edges.}\\\\[2pt]$$
+$$\\text{- Prevents over-reliance on a single edge, nudging heads to find backup paths and generalize better.}\\\\[2pt]$$
+$$\\text{- Acts like gentle exploration: sometimes forcing the model to look elsewhere.}\\\\[8pt]$$
+
+$$\\textbf{When it is active}\\\\[2pt]$$
+$$\\text{Training only: enabled in }\\mathtt{model.train()};\\\\[2pt]$$
+$$\\text{Disabled at inference: }\\mathtt{model.eval()}. \\\\[8pt]$$
+
+$$\\textbf{Shape}\\\\[2pt]$$
+$$\\mathtt{att}\\in\\mathbb{R}^{B\\times n\\_head\\times T\\times T}\\ \\longrightarrow\\ \\text{same shape after dropout.}\\\\[8pt]$$
+
+$$\\textbf{Mechanics (inverted dropout)}\\\\[2pt]$$
+$$\\tilde A \\;=\\; \\frac{A\\odot M}{1-p},\\qquad M_{ij}\\sim\\mathrm{Bernoulli}(1-p).\\\\[2pt]$$
+$$\\text{This keeps the expected value unchanged:: }\\mathbb{E}[\\tilde A]=A\\\\[2pt]$$
+$$\\text{(row sums are not exactly 1 per sample, but the expectation matches).}\\\\[8pt]$$
+
+$$\\textbf{Practical notes}\\\\[2pt]$$
+$$\\text{- Apply after masking and softmax (never drop masked zeros).}\\\\[2pt]$$
+$$\\text{- Typical }p\\approx 0.1\\ \\text{(e.g., GPT-2 uses ~0.1) }\\\\[2pt]$$
+$$\\text{Smaller datasets may benefit from a larger p; huge models sometimes set it to 0 if other regularizers suffice..}\\\\[8pt]$$
+
+$$\\textbf{One intuition example}\\\\[2pt]$$
+
+$$\\bullet\\ \\text{Suppose a head usually puts most attention on "dogs" to decide the verb should be "were".}\\\\[2pt]$$
+$$\\bullet\\ \\text{With attention dropout, that strongest edge is sometimes zeroed during training.}\\\\[2pt]$$
+$$\\bullet\\ \\text{When that happens, the model must use other cues (plurality elsewhere, other heads) to solve the task correctly.}\\\\[2pt]$$
+$$\\bullet\\ \\text{Over time, this builds redundancy and avoids brittle shortcuts, making predictions more robust.}\\\\[4pt]$$
+
     `,
   },
 
+  resid_dropout_notes: {
+    title: "Residual dropout in Causal Self-Attention",
+    md: `
+  $$\\textbf{Causal residual dropout (a.k.a. dropout on the attention branch's residual update)}\\\\[4pt]$$
+  Refer to the $$\\href{#info:mlp_dropout_notes}{\\text{MLP residual-dropout notes}}$$ for: what dropout is, why residual dropout is useful, train vs. eval behavior and example. 
+  Everything below focuses on what's specific to causal self-attention.
+
+  &nbsp;
+
+  $$\\textbf{What it does}\\\\[4pt]$$
+  The Causal residual dropout is applied on the mixed feature vector after heads are concatenated and projected by $$\\mathtt{W_O}$$, right before the residual add.
+  At this point, all attention heads have been combined into a single update vector for each position.
+  
+  &nbsp;
+
+  $$\\textbf{Why it is useful}\\\\[4pt]$$
+  Heads can become spiky (e.g., lock onto one token path). Even if the attention pattern is spiky, the written features still pass through $$\\mathtt{W_O}$$
+  before being added to the original stream. Randomly muting parts of that write:
+  
+  $$
+  \\bullet \\; \\text{discourages dependence on a single head/channel's features}\\\\[2pt]
+  \\bullet \\; \\text{encourages redundant cues across heads,}
+  $$
+
+  Think of $$\\mathtt{Q/K/V}$$ as the "read side" of the attention mechanism. Then $$\\mathtt{W_O}$$ is the "write side".
+  Attention dropout perturbs the "read side" pattern, while residual dropout regularizes and encourages more robust, distributedthe learned write directions
+  and reducing reliance on any single head/channel even if the read pattern is spiky.
+  `,
+  },
+
   mlp_residual_notes: {
-    title: "MLP residual: x = x + self.mlp(self.ln2(x))",
+    title: "MLP residual",
     md: `
 $$
 \\textbf{Code:}\\ \\mathtt{x = x + self.mlp(self.ln2(x))}\\\\[8pt]
@@ -519,8 +745,8 @@ $$
 $$
 \\textbf{3. Residual (skip) connection.}\\\\[6pt]
 \\mathtt{x + (\\ldots)}\\ \\text{adds the MLP's output back to the original stream. Benefits:}\\\\[6pt]
-\\quad\\text{(i) Gradient highway: there is an identity path, helping \\href{#info:mlp_prevents_vanishing_exploding_notes}{\\text{prevent vanishing/exploding}} early in training.}\\\\[6pt]
-\\quad\\text{(ii) Small refinements: if the MLP output is near zero, the block behaves like a near-identity map.}\\\\[10pt]
+\\text{(i) Gradient highway: there is an identity path, helping \\href{#info:mlp_prevents_vanishing_exploding_notes}{\\text{prevent vanishing/exploding}} early in training.}\\\\[6pt]
+\\text{(ii) Small refinements: if the MLP output is near zero, the block behaves like a near-identity map.}\\\\[10pt]
 $$
 $$
 \\textbf{Shapes (so the add is valid):}\\\\[6pt]
@@ -540,33 +766,1208 @@ $$
   highlevel_transformer_introduction_notes: {
     title: "High-level Transformer Analogy",
     md: `
-$$
-\\textbf{A high-level analogy of a GPT-2 transformer block.}\\\\[8pt]
-\\textbf{Tokens = people in a meeting.}\\\\
-\\text{Each token is like a person holding their own notes (its current representation).}\\\\[8pt]
-\\textbf{Attention = the conversation.}\\\\
-\\text{Everyone briefly scans what others are saying and decides whose points matter for them. Each person builds a short}\\\\
-\\text{"summary I need" by selectively listening.}\\\\
-\\textit{Why it matters:}~\\text{this is how long-range connections form—facts from far away can instantly influence you.}\\\\[8pt]
-\\textbf{MLP (feed-forward) = private thinking.}\\\\
-\\text{After listening, each person goes off for a moment of inner reasoning: "Given what I heard, how should I update my notes?"}\\\\
-\\textit{Why it matters:}~\\text{it lets each token transform and rephrase ideas, adding nonlinearity and capacity.}\\\\[8pt]
-\\textbf{Two LayerNorms = the organizer's ground rules (applied twice).}\\\\
-\\text{Before the conversation and before the private thinking, the organizer reminds everyone to keep comments calm and on-topic—}\\\\
-\\text{no one's voice too loud, none too quiet.}\\\\
-\\textit{Why it matters:}~\\text{it keeps both phases stable and comparable so the block behaves predictably.}\\\\[8pt]
-\\textbf{Residual connections = a running draft.}\\\\
-\\text{After each phase (conversation, then private thinking), you add your new insights to your previous notes rather than replacing them.}\\\\
-\\textit{Why it matters:}~\\text{you never lose what you already knew; updates are incremental and safe.}\\\\[8pt]
-\\textbf{Dropout = occasional silence to build resilience.}\\\\
-\\text{Sometimes random remarks are withheld during practice meetings.}\\\\
-\\textit{Why it matters:}~\\text{the group learns to make good decisions even if a few voices are missing, preventing overreliance on any single cue.}\\\\[10pt]
-\\textbf{Putting it together:}\\\\
-\\text{Each block is a two-step cycle—communicate (attention) then compute (MLP)—with the organizer (LayerNorm) keeping order,}\\\\
-\\text{a running draft (residual) preserving history, and practice with partial attendance (dropout) to ensure robustness.}\\\\
-\\text{Stacking many such blocks lets tokens repeatedly share, rethink, and refine.}
-$$
-    
+$$\\textbf{A high-level analogy of a GPT-2 transformer block.}\\\\[8pt]$$
+
+$$\\textbf{Tokens = people in a meeting.}\\\\[2pt]$$
+Each token is like a person holding their own notes (its current representation).
+
+&nbsp;
+
+$$\\textbf{Attention = the conversation.}\\\\[2pt]$$
+Everyone briefly scans what others are saying and decides whose points matter for them. Each person builds a short
+"summary I need" by selectively listening.
+
+Why it matters: this is how long-range connections form—facts from far away can instantly influence you.
+
+&nbsp;
+
+$$\\textbf{MLP (feed-forward) = private thinking.}\\\\[2pt]$$
+After listening, each person goes off for a moment of inner reasoning: "Given what I heard, how should I update my notes?"
+
+Why it matters: it lets each token transform and rephrase ideas, adding nonlinearity and capacity.
+
+&nbsp;
+
+$$\\textbf{Two LayerNorms = the organizer's ground rules (applied twice).}\\\\[2pt]$$
+Before the conversation and before the private thinking, the organizer reminds everyone to keep comments calm and on-topic—
+no one's voice too loud, none too quiet.
+
+Why it matters: it keeps both phases stable and comparable so the block behaves predictably.
+
+&nbsp;
+
+$$\\textbf{Residual connections = a running draft.}\\\\[2pt]$$
+
+After each phase (conversation, then private thinking), you add your new insights to your previous notes rather than replacing them.
+
+Why it matters: you never lose what you already knew; updates are incremental and safe.
+
+&nbsp;
+
+$$\\textbf{Dropout = occasional silence to build resilience.}\\\\[2pt]$$
+Sometimes random remarks are withheld during practice meetings.
+
+Why it matters: the group learns to make good decisions even if a few voices are missing, preventing overreliance on any single cue.
+
+&nbsp;
+
+
+$$\\textbf{Putting it together:}\\\\[2pt]$$
+
+Each block is a two-step cycle—communicate (attention) then compute (MLP)—with the organizer (LayerNorm) keeping order,
+a running draft (residual) preserving history, and practice with partial attendance (dropout) to ensure robustness.
+Stacking many such blocks lets tokens repeatedly share, rethink, and refine.
+
 `,
+},
+
+  causal_analogy_notes: {
+    title: "Causal Analogy",
+    md: `
+$$
+
+\\href{#info:causal_analogy_notes}{\\text{Causal Analogy}}\\quad\\href{#info:attn_inference_example_notes}{\\text{Attention Inference Example}}\\\\[8pt]
+
+\\textbf{Below is an analogy to show how the GPT-2 Multi-Head Self Attention block works in order to give you an intuitive understanding.}\\\\[8pt]
+\\textbf{Setting:}\\
+\\text{A row of people, one per position } t \\text{ in the sequence. Each person holds notes } x_t \\text{ (corresponding to the embedding of the token at position t)}\\text{.}\\\\[10pt]
+
+\\textbf{1) Make three cards from your notes — } \\mathtt{c\\_attn(x) \\to q, k, v}\\\\[4pt]
+\\quad \\textbf{Query (}q\\textbf{): } \\text{what I'm looking for now (built by } W_q\\text{).}\\\\[4pt]
+\\quad \\textbf{Key (}k\\textbf{): } \\text{what I can offer (be matched on by key) (built by } W_k\\text{); an index used for matching only.}\\\\[4pt]
+\\quad \\textbf{Value (}v\\textbf{): } \\text{what I will share if you listen (built by } W_v\\text{); the actual content that gets copied/mixed into someone else's representation..}\\\\[4pt]
+\\quad \\textbf{Why separate Key vs Value?}~\\\\[4pt]
+\\text{Keys are for addressing (similarity search), Values are for content.}\\\\
+\\text{You choose \\emph{who} to listen to via } q\\!\\cdot\\!k \\text{ and copy what matters from those people via } v\\text{.}\\\\[10pt]
+
+\\textbf{2) Split into committees (heads) — reshape to } (B, n\\_{\\text{head}}, T, hs)\\\\[4pt]
+\\text{Each committee (head) is a parallel committee with its own } W_q, W_k, W_v \\text{ and looks at a different perspective (syntax, long-range cues, etc.).}\\\\[10pt]
+
+\\textbf{3) Score who to listen to — } \\mathtt{att\\_logits = q @ k^\\top / \\sqrt{hs}}\\\\[4pt]
+\\text{Each person compares each query with everyone's keys to get compatibility scores; divide by } \\sqrt{hs} \\text{ to keep them numerically calm so softmax doesn't explode.}\\\\[10pt]
+
+\\textbf{4) Causal rule (no looking ahead) — mask future positions to } -\\infty\\\\[4pt]
+\\text{This enforces the LM factorization } p(x_{1:T}) = \\prod_{t=1}^{T} p(x_t \\mid x_{\\le t-1}).\\\\[4pt]
+\\textbf{Why it exists:}\\\\[4pt]
+\\quad \\bullet~\\textbf{No leakage during training: } \\text{even though we compute all positions in parallel for speed, the mask guarantees position t never uses t + 1 ...}.\\\\[4pt]
+\\quad \\bullet~\\textbf{Matches generation: } \\text{at inference we generate left-to-right; causality during training makes the learned behavior consistent with how we use the model.}\\\\[4pt]
+\\quad \\bullet~\\textbf{Prevents cheating: } \\text{without masking, the model could peek at the answer (future tokens) and cheat.}\\\\[10pt]
+
+\\textbf{5) Turn scores into listening weights — } \\mathtt{att = softmax(att\\_logits,\\ dim=-1)}\\\\[4pt]
+\\text{Now each person has a probability distribution over allowed earlier positions: }\\textit{how much attention do I give to each source? Rows sum to 1 → interpretable mixing weights.}\\\\[10pt]
+
+\\textbf{6) Build your personalized summary from Values — } \\mathtt{y = att @ v}\\\\[4pt]
+\\text{Mix others' Value vectors using your attention weights (e.g., } 0.6\\,v_3 + 0.3\\,v_7 + \\cdots \\text{).}\\\\[4pt]
+\\text{Remember: Keys help you choose; Values are what you take.}\\\\[10pt]
+
+\\textbf{7) Practice with partial connections — } \\mathtt{attn\\_drop(att)}\\\\[4pt]
+\\text{Randomly drop some links during training to build robustness and avoid overreliance on one path.}\\\\[10pt]
+
+\\textbf{8) Reassemble committees \\& standardize — merge heads, then } \\mathtt{proj(y)}\\\\[4pt]
+\\text{Stitch head outputs back to one vector per position, project to model width, and feed the residual stream cleanly.}\\\\[10pt]
+
+\\textbf{Big picture.}\\
+\\text{At each position } t\\text{: select earlier positions via Query-Key (addressing), copy useful content via Values,}\\\\[4pt]
+\\text{combine multiple perspectives (heads), and do it under a causal rule that matches left-to-right generation.} \\\\[4pt]
+
+$$
+
+    `,
+  },
+
+  attn_inference_example_notes: {
+    title: "Attention Inference Example",
+    md: `
+  
+  $$
+  \\href{#info:causal_analogy_notes}{\\text{Causal Analogy}}\\quad\\href{#info:attn_inference_example_notes}{\\text{Attention Inference Example}}\\\\[8pt]
+  \\textbf{In the below example, we will show how a single attention head can infer the correct verb form (were vs was) from the context of the sentence.} \\\\[8pt]
+  \\textbf{Input Sentence: The\\ dogs\\ that\\ barked\\ loudly\\ were\\ tired.} \\\\[8pt]
+  \\text{We focus on predicting the token }\\mathtt{were}\\text{ (position 6) from the prefix }\\mathtt{The\\ dogs\\ that\\ barked\\ loudly}\\text{.} \\\\[4pt]
+  $$
+  
+  ---
+  
+  $$
+  \\textbf{What happens (one head, simplified)} \\\\[4pt]
+  
+  \\text{Goal: decide between }\\mathtt{were}\\text{ vs }\\mathtt{was}\\text{.} \\\\[4pt]
+  \\text{In order to do this, we need to know the true subject of the clause so we can infer the correct verb form.} \\\\[4pt]
+  \\text{In this example, the true subject is }\\mathtt{dogs}\\text{ (plural), even though there's an intervening clause "that barked loudly."} \\\\[4pt]
+  
+  \\textbf{Notes:}\\\\[4pt]
+  \\text{1. In real models, the model doesn't actually know it's a verb position. There are no POS tags or grammar rules baked in.}\\\\
+  \\text{Instead, the model learns from training to recognize contexts where a verb is likely next.}\\\\
+  \\text{The model has a hidden state } x_t \\text{ that's a function of}\\\\
+  \\bullet\\ \\text{buildt from all previous tokens and itself }\\\\
+  \\bullet\\ \\text{the positional embedding } p_t\\\\
+  \\bullet\\ \\text{many layers of self-attention and feed-forward networks}\\\\[4pt]
+  \\textit{The hidden state } x_t \\text{ encodes contextual features like "we're in a place where a verb typically follows a plural subject..."}\\\\
+  \\textit{but it could also encode other things such as "likely punctuation next". In this case, the model might predict a comma instead: "The dogs that barked loudly, …".}\\\\
+  \\textit{the hidden state could also encode things "Alternate continuations". In this case, the model might predict a different verb such as 'seemed' or 'are': "The dogs that barked loudly are tired."}\\\\[4pt]
+  \\textbf{but in this toy example, we focus on why the model predicts "were" instead of "was"}.
+  
+  \\\\[4pt]
+
+  \\text{2. Assumption: This is an inference example, so we assume all model parameters are already trained: the projections }\\mathbf{W}_q,\\ \\mathbf{W}_k,\\ \\mathbf{W}_v\\ \\text{(and the output projection }\\mathbf{W}_o\\text{), the }\\mathtt{MLP}\\text{s, }\\mathtt{LayerNorm}\\text{s, embeddings, and the }\\mathtt{LM\\ head.}\\\\
+  \\text{At inference time these weights are fixed. The example's numbers are illustrative, but they reflect what trained parameters typically make happen at inference.}\\\\[4pt]
+
+  $$
+  
+  ---
+  
+  $$
+  \\textbf{Step A --- Values carry useful features} \\\\[4pt]
+  
+  \\text{Suppose this head's Value vectors include:} \\\\[4pt]
+  
+  \\bullet\\ \\text{pluralness (singular }-1\\,\\dots\\,+1\\text{ plural)}\\\\[4pt]
+  \\bullet\\ \\text{subjectness (is this token a good subject head?)} \\\\[4pt]
+
+  \\textbf{Notes: }\\text{This is a }\\textbf{simplification} \\text{. In real models, the Value vectors are }\\textbf{a high-dimensional learned representation - the head size. } \\text{(e.g. GPT-2 small has 768 dimensions and 12 heads, so head size is 64).}\\\\
+  \\text{So in real models it isn't literally a 2-number feature; we just projected the idea into two dimensions to illustrate what the head might encode.}\\\\[4pt]
+  
+  \\text{Toy values:} \\\\[4pt]
+  \\mathtt{The}:\\ \\mathbf{V}\\approx\\begin{bmatrix}0.0\\\\[2pt]0.0\\end{bmatrix} \\\\[4pt]
+  \\mathtt{dogs}:\\ \\mathbf{V}\\approx\\begin{bmatrix}+1.0\\\\[2pt]+0.9\\end{bmatrix}\\ \\leftarrow\\ \\text{plural noun, likely subject} \\\\[4pt]
+  \\mathtt{that}:\\ \\mathbf{V}\\approx\\begin{bmatrix}0.0\\\\[2pt]0.1\\end{bmatrix} \\\\[4pt]
+  \\mathtt{barked}:\\ \\mathbf{V}\\approx\\begin{bmatrix}0.0\\\\[2pt]0.0\\end{bmatrix} \\\\[4pt]
+  \\mathtt{loudly}:\\ \\mathbf{V}\\approx\\begin{bmatrix}0.0\\\\[2pt]0.0\\end{bmatrix} \\\\[4pt]
+  $$
+
+  ---
+
+  $$
+  \\textbf{Step B --- Queries/Keys score who to listen to} \\\\[4pt]
+  \\text{The head computes the Query }\\mathbf{q}_5\\text{ to each Key }\\mathbf{k}_j\\ (j=1\\ldots5)\\text{.} \\\\[4pt]
+  \\text{Made-up attention logits (after the }1/\\sqrt{hs}\\text{ scale):} \\\\[4pt]
+  
+  \\bullet\\ \\text{to }\\mathtt{The}:\\ -0.5\\\\
+  \\bullet\\ \\text{to }\\mathtt{dogs}:\\ +2.2\\ \\leftarrow\\ \\text{strong match}\\\\
+  \\bullet\\ \\text{to }\\mathtt{that}:\\ +0.3\\\\
+  \\bullet\\ \\text{to }\\mathtt{barked}:\\ -0.2\\\\
+  \\bullet\\ \\text{to }\\mathtt{loudly}:\\ -0.1
+  
+  \\\\[4pt]
+  \\textbf{Notes: }\\text{The numerical values we listed are made up to show the pattern (e.g., subject getting the highest score). In the real model they come from those dot products with the trained }\\mathbf{W}_q,\\ \\mathbf{W}_k,\\ \\text{ plus masking.}\\\\[4pt]
+  
+  \\text{Then we apply softmax to get the attention weights (sum to 1):} \\\\[4pt]
+  
+  \\bullet\\ w(\\mathtt{The})=0.04,\\\\
+  \\bullet\\ w(\\mathtt{dogs})=0.78,\\\\
+  \\bullet\\ w(\\mathtt{that})=0.10,\\\\
+  \\bullet\\ w(\\mathtt{barked})=0.04,\\\\
+  \\bullet\\ w(\\mathtt{loudly})=0.04
+  
+  $$
+
+  ---
+  
+  $$
+  \\textbf{Step C --- Mix Values with those weights (att @ v)} \\\\[4pt]
+  
+  \\text{Weighted average produces the head's output at position }5\\text{:} \\\\[4pt]
+  
+  \\mathbf{y}_6
+  =0.04\\cdot\\begin{bmatrix}0,0\\end{bmatrix}
+  +0.78\\cdot\\begin{bmatrix}+1.0,+0.9\\end{bmatrix}
+  +0.10\\cdot\\begin{bmatrix}0,0.1\\end{bmatrix}
+  +0.04\\cdot\\begin{bmatrix}0,0\\end{bmatrix}
+  +0.04\\cdot\\begin{bmatrix}0,0\\end{bmatrix}
+  \\\\[4pt]
+
+  \\mathbf{y}_6\\ \\approx\\ \\begin{bmatrix}+0.78,+0.71\\end{bmatrix}\\\\[4pt]
+  
+  \\textbf{Interpretation:} \\text{ position 5 now carries a strong plural + subject cue.} \\\\[4pt]
+  $$
+
+  ---
+  
+  $$
+  \\textbf{Step D --- Why this flips the logits the right way} \\\\[4pt]
+  
+  \\text{Think of the LM head as rows (one per vocab item) that dot with the final hidden vector.} \\\\[4pt]
+  
+  \\text{The rows for just the two verbs:} \\\\[4pt]
+  
+  \\bullet\\ \\operatorname{row}(\\mathtt{were})\\ \\approx\\ \\begin{bmatrix}+1.4,+0.5\\end{bmatrix}
+  \\quad
+  \\text{(likes plural \\& subject)}
+  
+  \\\\
+
+  \\bullet\\ \\operatorname{row}(\\mathtt{was})\\ \\approx\\ \\begin{bmatrix}-1.1,+0.2\\end{bmatrix}
+  \\quad
+  \\text{(penalizes plural)}
+
+  \\\\[4pt]
+  
+  \\text{Dot products from this head's contribution:} \\\\[4pt]
+  
+  \\bullet\\ \\operatorname{logit}(\\mathtt{were})\\approx 1.4\\cdot 0.78 + 0.5\\cdot 0.71 \\approx +1.45\\\\
+  \\bullet\\ \\operatorname{logit}(\\mathtt{was})\\approx (-1.1)\\cdot 0.78 + 0.2\\cdot 0.71 \\approx -0.66\\\\[4pt]
+  
+  \\text{After combining with other heads/layers and softmax over the vocab, }\\mathtt{were}\\text{ gets much higher probability than }\\mathtt{was}\\text{.}
+  $$
+
+  ---
+  
+  $$
+  \\textbf{Why }\\mathtt{dogs}\\text{ has high influence here} \\\\[4pt]
+  \\bullet\\ \\text{Syntactic role: It's the true subject of the clause containing the verb, even across "that barked loudly."}\\\\[4pt]
+  \\bullet\\ \\text{Training pressure: Across millions of examples, gradients push the parameters so that a verb's Query aligns strongly with the Key of its governing subject. That makes the attention weight on the subject high.}\\\\[4pt]
+  \\bullet\\ \\text{Value payload: The subject's Value carries exactly the features (plurality, subjectness) that help pick the correct verb form. If the model predicts the wrong form, gradients increase the }q\\cdot k\\text{ for the right subject and shape its }\\mathbf{V}\\text{ to be more informative.}\\\\[4pt]
+  $$
+
+  ---
+
+  $$
+  \\textbf{What if we flip to singular "dog" in the example: }\\\\[4pt]
+  \\text{With "}\\mathtt{dog}\\text{" (singular) instead of "}\\mathtt{dogs}\\text{" (plural), the same attention head that tracks subject--verb agreement will now pass singular evidence forward, so the LM head will score "}\\mathtt{was}\\text{" higher than "}\\mathtt{were}\\text{."}\\\\[4pt]
+  $$
+
+  $$
+  \\textbf{Here's the same toy walk-through you saw, just flipped to singular:}
+
+  \\textbf{Prefix: }\\text{"}\\mathtt{The\\ dog\\ that\\ barked\\ loudly}\\text{"}
+  $$
+
+  $$
+  \\textbf{A) Values carry features (toy features: }[\\text{pluralness},\\ \\text{subjectness}]\\text{):}\\\\[4pt]
+  \\bullet\\ \\mathtt{The}:\\ \\ \\mathbf{V}\\ \\approx\\ \\begin{bmatrix}0.0 & 0.0\\end{bmatrix}\\\\
+  \\bullet\\ \\mathtt{dog}:\\ \\ \\mathbf{V}\\ \\approx\\ \\begin{bmatrix}-1.0 & +0.9\\end{bmatrix}\\ \\leftarrow\\ \\text{singular noun, likely subject}\\\\
+  \\bullet\\ \\mathtt{that}:\\ \\ \\mathbf{V}\\ \\approx\\ \\begin{bmatrix}0.0 & 0.1\\end{bmatrix}\\\\
+  \\bullet\\ \\mathtt{barked}:\\ \\ \\mathbf{V}\\ \\approx\\ \\begin{bmatrix}0.0 & 0.0\\end{bmatrix}\\\\
+  \\bullet\\ \\mathtt{loudly}:\\ \\ \\mathbf{V}\\ \\approx\\ \\begin{bmatrix}0.0 & 0.0\\end{bmatrix}
+  $$
+
+  $$
+  \\textbf{B) Queries/Keys decide who to listen to (for the next-token slot):}\\\\[4pt]
+  \\text{Potion 5's query compares against keys of position 1 to 5. As before, it strongly matches the subject:}\\\\[4pt]
+  \\bullet\\ \\text{to }\\mathtt{The}: -0.5\\\\
+  \\bullet\\ \\text{to }\\mathtt{dog}: +2.2\\ \\leftarrow\\ \\text{"Strong match"}\\\\
+  \\bullet\\ \\text{to }\\mathtt{that}: +0.3\\\\
+  \\bullet\\ \\text{to }\\mathtt{barked}: -0.2\\\\
+  \\bullet\\ \\text{to }\\mathtt{loudly}: -0.1\\\\[4pt]
+  \\text{Softmax }\\to\\ \\text{attention weights: }\\quad
+  w(\\mathtt{The})=0.04,\\ \\ w(\\mathtt{dog})=0.78,\\ \\ w(\\mathtt{that})=0.10,\\ \\ w(\\mathtt{barked})=0.04,\\ \\ w(\\mathtt{loudly})=0.04
+  $$
+
+  $$
+  \\textbf{C) Mix values with those weights (att @ v):}\\\\[4pt]
+  \\mathbf{y}\\ \\approx\\ 0.78\\,\\cdot\\,\\begin{bmatrix}-1.0, +0.9\\end{bmatrix}\\ +\\ 0.10\\,\\cdot\\,\\begin{bmatrix}0.0, 0.1\\end{bmatrix}\\ \\approx\\ \\boxed{\\begin{bmatrix}-0.78, +0.71\\end{bmatrix}}\\\\[4pt]
+  \\text{Interpretation: strong singular signal plus subject cue at position 5.}
+  $$
+
+  $$
+  \\textbf{D) LM head rows (toy) and resulting logits:}\\\\[4pt]
+  \\text{Think of each vocab token as a row that dots with the hidden vector.}\\\\[4pt]
+  \\bullet\\ \\operatorname{row}(\\mathtt{were})\\ \\approx\\ \\begin{bmatrix}+1.4 & +0.5\\end{bmatrix}\\quad(\\text{likes plural \\& subject})\\\\
+  \\operatorname{logit}(\\mathtt{were})\\approx 1.4\\cdot(-0.78) + 0.5\\cdot 0.71 \\approx -0.73\\\\
+  \\bullet\\ \\operatorname{row}(\\mathtt{was})\\ \\approx\\ \\begin{bmatrix}-1.1 & +0.2\\end{bmatrix}\\quad(\\text{penalizes plural, okay with subject})\\\\
+  \\operatorname{logit}(\\mathtt{was})\\approx (-1.1)\\cdot(-0.78) + 0.2\\cdot 0.71 \\approx +1.00
+  $$
+
+  $$
+  \\text{So }\\operatorname{logit}(\\mathtt{was}) > \\operatorname{logit}(\\mathtt{were})\\text{. After combining all heads/layers and softmax over the full vocab, the model strongly prefers "}\\mathtt{was}\\text{" in the singular-subject context.}
+
+  $$
+  `,
+  },
+
+  gpt2_notes: {
+    title: "GPT-2",
+    md: `
+  $$
+  \\href{#info:gpt2_inference_notes}{\\text{GPT2 Inference Example}}
+  $$
+  `,
+  },
+
+  gpt2_inference_notes: {
+    title: "GPT-2 inference",
+    md: `
+  $$
+  \\href{#info:gpt2_inference_notes}{\\text{GPT2 Inference Example}}
+  $$
+  
+    `,
+  },
+
+  embedding_pos: {
+    title: "Positional Embedding",
+    md: `
+  $$\\textbf{What it is:}\\\\[4pt]$$
+  Transformers need order information because self-attention has no sense of sequence.
+  Positional embeddings give each token a unique vector based on its position.
+  
+  &nbsp;
+
+  Note that GPT-2's positional embeddings are learnable parameters in a lookup table that get trained by backpropagation exactly like any other weight.
+  It's not the fixed sinusoids like in the original Transformer paper.
+  
+  &nbsp;
+
+  The shape of the positional embedding weight matrix is:
+  $$
+  P \\in \\mathbb{R}^{\\text{max\\_toks} \\times n\\_embd}
+  $$
+  
+  $$\\text{- Here, max\\_toks is the maximum sequence length (e.g. 1024 for GPT-2).}$$
+  $$\\text{- Each row }P_j\\text{ corresponds to position }j\\text{ in the sequence.}$$
+  
+  &nbsp;
+  
+  ---
+  
+  &nbsp;
+
+  $$\\textbf{Why do we need positional embeddings?}\\\\[4pt]$$
+  Intuitively, we need positional embeddings to give the model a sense of order and position in the sequence. But how does it exactly work?
+
+  Suppose we don't add the positional embeddings, only the token embeddings $$\\mathtt{X} \\in \\mathbb{R}^{T \\times n\\_embd}$$ (We ignore the batch dimension for simplicity).
+
+  Self attention computes the following:
+  $$
+  \\mathtt{Q} = \\mathtt{X} \\cdot \\mathtt{W}_q, \\quad \\mathtt{K} = \\mathtt{X} \\cdot \\mathtt{W}_k, \\quad scores = \\mathtt{Q} \\cdot \\mathtt{K}^\\top
+  $$
+
+  Now permute (shuffle) the sequence with a permutation matrix $$\\mathtt{P}$$.
+  The new inputs are $$\\mathtt{X'} = \\mathtt{P} \\cdot \\mathtt{X}$$. Then
+
+  $$
+  \\mathtt{Q'} = \\mathtt{X'} \\cdot \\mathtt{W}_q = \\mathtt{P} \\cdot \\mathtt{X} \\cdot \\mathtt{W}_q = \\mathtt{P} \\cdot \\mathtt{Q} \\\\[2pt]
+  \\mathtt{K'} = \\mathtt{X'} \\cdot \\mathtt{W}_k = \\mathtt{P} \\cdot \\mathtt{X} \\cdot \\mathtt{W}_k = \\mathtt{P} \\cdot \\mathtt{K}
+  $$
+  
+  So the scores become:
+  $$
+  \\mathtt{scores'} = \\mathtt{Q'} \\cdot \\mathtt{K'}^\\top = (\\mathtt{P} \\cdot \\mathtt{Q}) \\cdot (\\mathtt{P} \\cdot \\mathtt{K})^\\top = \\mathtt{P} \\cdot (\\mathtt{Q} \\cdot \\mathtt{K}^\\top) \\cdot \\mathtt{P}^\\top
+  $$
+
+  That's the same numbers as before, just with rows/columns permuted. In other words, self-attention is permutation-equivariant when there's no position info: 
+  shuffling inputs just shuffles the attention matrix in the same way. The model can “see” which tokens are present but not their order.
+
+  &nbsp;
+
+  Adding positional embeddings $$\\mathtt{P_t}$$ breaks that symmetry: it changes $$\\mathtt{Q}$$ and $$\\mathtt{K}$$ so that swapping tokens also swaps which
+  $$\\mathtt{P_t}$$ they get. Now the dot products include position-dependent terms, so $$\\mathtt{QK}^\\top$$ changes in value, not just by a row/column reordering.
+  That's how the model becomes sensitive to order.
+
+  &nbsp;
+
+  If you are still confused, look at the tiny example $$\\href{#info:positional_embeddings_example_notes}{\\text{here}}$$
+
+  &nbsp;
+
+  ---
+
+  &nbsp;
+  
+  $$\\textbf{Runtime usage}\\\\[8pt]$$
+  
+  1. Token IDs → token embeddings:  
+  $$
+  \\text{tok\\_emb}(\\text{input\\_ids}) \\in \\mathbb{R}^{B \\times T \\times n\\_embd}
+  $$
+  
+  2. Positions $0,1,\\dots,T-1$ → positional embeddings:  
+  $$
+  \\text{pos\\_emb}(\\text{positions}) \\in \\mathbb{R}^{T \\times n\\_embd}
+  $$
+  
+  3. Add them together via broadcasting: ([What is broadcasting?](#info:broadcasting)) 
+  $$
+  x = \\text{tok\\_emb}(\\text{input\\_ids}) + \\text{pos\\_emb}(\\text{positions})
+  $$
+  
+  ---
+  
+  &nbsp;
+  
+  $$\\textbf{Parameters}\\\\[4pt]$$
+  
+  $$
+  \\text{params} = \\text{max\\_toks} \\times n\\_embd
+  $$
+  
+  For GPT-2 small:  
+  $$
+  1024 \\times 768 \\approx 7.86 \\times 10^5
+  $$
+  
+  Much smaller than the token embedding table (~38M params).
+  
+  &nbsp;
+  
+  ---
+  
+  &nbsp;
+  
+  $$\\textbf{Shapes at a glance}\\\\[8pt]$$
+  $$\\bullet$$ Weight: $[\\text{max\\_toks}, n\\_embd]$  
+  $$\\bullet$$ Positions: $[T]$  
+  $$\\bullet$$ Pos embeddings: $[T, n\\_embd]$  
+  $$\\bullet$$ Final sum: $[B, T, n\\_embd]$  
+
+  &nbsp;
+
+  ---
+
+  &nbsp;
+
+  $$\\textbf{Extra Notes:}\\\\[4pt]$$
+  Learned absolute positional embeddings used in GPT-2 are not widely used in the newest state-of-the-art LLMs, 
+  which have largely transitioned to relative positional embeddings and other novel methods like $$\\href{https://arxiv.org/pdf/2104.09864}{\\texttt{RoPE (Rotary Position Embeddings)}}$$ 
+  or $$\\href{https://arxiv.org/pdf/2108.12409}{\\texttt{ALiBi (Attention with Linear Biases)}}$$ .
+
+  &nbsp;
+
+  ---
+
+  &nbsp;
+
+  $$\\textbf{References:}\\\\[4pt]$$
+  $$\\textbf{1. Transformer positional encodings:}$$
+  Vaswani et al., “Attention Is All You Need,” §3.5. Introduces adding position information to token embeddings via fixed sinusoids.
+  $$\\href{https://arxiv.org/pdf/1706.03762v2}{\\texttt{Attention Is All You Need}}$$
+
+  $$\\textbf{2. GPT-2 uses learned absolute positional embeddings::}$$
+  Hugging Face GPT-2 docs (model card/config) explicitly note GPT-2’s absolute position embeddings (not sinusoidal), hence right-padding guidance.
+  $$\\href{https://huggingface.co/docs/transformers/v4.34.0/model_doc/gpt2?utm_source=chatgpt.com}{\\texttt{GPT-2 Configs}}$$
+  
+  $$\\textbf{3. GPT-2 technical report (input representation):}$$
+  Radford et al., Language Models are Unsupervised Multitask Learners—describes inputs as token + position embeddings summed before the stack.
+  $$\\href{https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf?utm_source=chatgpt.com}{\\texttt{GPT-2 Technical Report}}$$
+  
+  $$\\textbf{4. Relative position encodings:}$$
+  Shaw et al., Self-Attention with Relative Position Representations. Introduces relative positional embeddings as an alternative to absolute positional embeddings.
+  $$\\href{https://arxiv.org/pdf/1803.02155}{\\texttt{Self-Attention with Relative Position Representations}}$$
+
+  $$\\textbf{5. RoPE (Rotary Position Embeddings):}$$
+  Su et al., RoPE: Rotary Position Embedding. Introduces a novel method for encoding relative positions in self-attention.
+  $$\\href{https://arxiv.org/pdf/2104.09864}{\\texttt{RoPE: Rotary Position Embedding}}$$
+
+  $$\\textbf{6. ALiBi (Attention with Linear Biases):}$$
+  Press et al., uses distance-proportional biases in attention scores; enables length extrapolation.
+  $$\\href{https://arxiv.org/pdf/2108.12409}{\\texttt{ALiBi: Attention with Linear Biases}}$$
+
+  `,
+  },
+
+  positional_embeddings_example_notes: {
+    title: "Positional Embeddings Example",
+    md: `
+  $$\\textbf{Setup (no positions):}\\\\[4pt]$$
+
+  Let token embeddings be 2-D vectors: $$e(A) = \\begin{bmatrix}1,0\\end{bmatrix}, e(B) = \\begin{bmatrix}0,1\\end{bmatrix}.$$
+
+  &nbsp;
+
+  Use identity projections so $$Q=X,\\ K=X,\\ \\text{scores } S = QK^\\top = XX^\\top.$$
+
+  $$
+  \\text{Sequence } [A, B]\\Rightarrow X=\\begin{bmatrix}1&0\\\\0&1\\end{bmatrix}\\\\[4pt]
+  \\text{Score S } = XX^\\top = \\begin{bmatrix}1&0\\\\0&1\\end{bmatrix}.\\\\[4pt]
+  \\text{Sequence }[B, A] \\text{ just permutes rows of } X.\\\\[4pt]
+  \\text{According to what we said in "\\href{#info:embedding_pos}{\\text{Positional Embedding notes}}". Scores S' = }PSP^{\\top}.\\\\[4pt]
+  \\text{So, it's same numbers as S, just rows/cols swapped. Self-attention can’t tell AB vs BA—only a permutation.}
+  $$
+
+  $$\\textbf{Add positional embeddings:}$$
+
+  &nbsp;
+
+  Let position vectors be $$p_0 = \\begin{bmatrix}1,1\\end{bmatrix}, p_1 = \\begin{bmatrix}-1,1\\end{bmatrix}.\\\\[4pt]$$
+  We feed $$\\mathtt{h}_t = e(token_t) + p_t.$$
+
+  $$
+  \\bullet\\ \\text{Sequence [A, B] (A at pos 0, B at pos 1):}\\\\[4pt]
+  \\mathtt{h}_0 == \\begin{bmatrix}1,0\\end{bmatrix} + \\begin{bmatrix}1,1\\end{bmatrix} = \\begin{bmatrix}2,1\\end{bmatrix}\\\\[4pt]
+  \\mathtt{h}_1 == \\begin{bmatrix}0,1\\end{bmatrix} + \\begin{bmatrix}-1,1\\end{bmatrix} = \\begin{bmatrix}-1,2\\end{bmatrix}\\\\[4pt]
+  \\mathtt{h} == \\begin{bmatrix}2&1\\\\-1&2\\end{bmatrix}\\\\[4pt]
+  \\text{Score S = }\\mathtt{h}\\mathtt{h}^\\top = \\begin{bmatrix}2&1\\\\-1&2\\end{bmatrix}\\begin{bmatrix}2&-1\\\\1&2\\end{bmatrix} = \\begin{bmatrix}5&0\\\\0&5\\end{bmatrix}.
+  $$
+
+  $$
+  \\bullet\\ \\text{Sequence [B, A] (B at pos 0, A at pos 1):}\\\\[4pt]
+  \\mathtt{h}_0 == \\begin{bmatrix}0,1\\end{bmatrix} + \\begin{bmatrix}1,1\\end{bmatrix} = \\begin{bmatrix}1,2\\end{bmatrix}\\\\[4pt]
+  \\mathtt{h}_1 == \\begin{bmatrix}1,0\\end{bmatrix} + \\begin{bmatrix}-1,1\\end{bmatrix} = \\begin{bmatrix}0,1\\end{bmatrix}\\\\[4pt]
+  \\mathtt{h} == \\begin{bmatrix}1&2\\\\0&1\\end{bmatrix}\\\\[4pt]
+  \\text{Score S = }\\mathtt{h}\\mathtt{h}^\\top = \\begin{bmatrix}1&2\\\\0&1\\end{bmatrix}\\begin{bmatrix}1&0\\\\2&1\\end{bmatrix} = \\begin{bmatrix}5&2\\\\2&1\\end{bmatrix}.
+  $$
+
+  Now $$S'$$ is not just a row/column permutation of $$S$$; the dot products changed in value.
+  Without positions, shuffling only permutes the attention matrix; with positions, the numbers themselves change, so the model becomes order-sensitive.
+
+  `,
+  },
+
+  layernorm: {
+    title: "LayerNorm",
+    md: `
+$\\textbf{nn.LayerNorm}$ — applies layer normalization over the last dimension of the input (the embedding dimension $n\\_embd$).
+
+Mathematically, given any input vector $h \\in \\mathbb{R}^{d}$, LayerNorm computes
+$$
+\\text{LN}(h) = \\gamma \\odot \\frac{h - \\mu(h)}{\\sigma(h) + \\epsilon} + \\beta
+$$
+where $\\mu,\\sigma$ are the mean and std over the last (feature) dimension, and $\\gamma \\in \\mathbb{R}^{d},\\beta \\in \\mathbb{R}^{d}$ are learned scale/shift.
+
+&nbsp;
+
+Here is sometimes called the “final layer norm”, which applies to each token individually, across its embedding dimensions before the final projection layer (lm_head).
+
+&nbsp;
+
+$\\textbf{Example}$ ($\\gamma$ and $\\beta$ are ignored for simplicity).
+
+&nbsp;
+
+For a token embedding vector
+
+$$
+x = [5.0,\\; 4.5,\\; 6.2,\\; 4.8],
+$$
+
+LayerNorm computes the mean and standard deviation over the 4 dimensions:
+
+$$
+\\mu = 5.125, \\quad \\sigma \\approx 0.64
+$$
+
+and normalizes each element:
+
+$$
+\\hat{x}_i = \\frac{x_i - \\mu}{\\sigma + \\epsilon}.
+$$
+
+So the normalized output becomes approximately
+
+$$
+\\hat{x} = [-0.20,\\; -0.98,\\; 1.68,\\; -0.49].
+$$
+
+&nbsp;
+
+---
+
+&nbsp;
+
+$$\\textbf{Why It's Used in GPT-Style Models}\\\\[4pt]$$
+
+&nbsp;
+
+$$\\textbf{1. Stabilizes training by controlling magnitude}\\\\[2pt]$$  
+After $x \\rightarrow \\hat{x} = \\frac{x - \\mu}{\\sigma}$, the softmax in attention sees $\\frac{QK^\\top}{\\sqrt{d}}$ on a stable scale,
+reducing exploding logits and saturated softmax; MLP nonlinearity also operate in a stable range.
+
+&nbsp;
+
+$\\href{#info:stabilize_training_notes}{\\text{Why is it? A tiny numeric example}}$
+
+&nbsp;
+
+$$\\textbf{2. Improves gradient flow}\\\\[4pt]$$  
+The Jacobian around normalized activations is better conditioned (roughly scaled by 
+$\\frac{1}{\\sigma}$
+), which curbs exploding/vanishing gradients and reduces sensitivity to learning-rate choice.
+
+&nbsp;
+
+$\\href{#info:improves_gradient_flow_notes}{\\text{Why is it? A tiny numeric example}}$
+
+&nbsp;
+
+$$\\textbf{3. Provides scale invariance}\\\\[4pt]$$  
+rescaling upstream weights changes $\\mu$ and $\\sigma$ similarly, so the normalized activations barely change.
+the model learns “directional” features while LayerNorm's $\\gamma$ and $\\beta$ reintroduce any useful scale/shift
+
+&nbsp;
+
+$\\text{Quick numeric example:}$
+
+Let $x = \\begin{bmatrix}2, -1, 1\\end{bmatrix}$ scale it by $c = 10$ to $x' = \\begin{bmatrix}20, -10, 10\\end{bmatrix}$.
+
+$\\bullet\\ $ Without LN: x' is 10x larger -> Q/K dot products and logis become ~10x larger -> likely softmax saturation.
+
+$\\bullet\\ $ With LN: $\\hat{x}' = \\hat{x}$. Forward behavior after LN is the same, backprop through LN also accounts for $\\frac{1}{\\sigma}$, 
+so gradients aren't inflated by the scale.
+
+&nbsp;
+
+$\\textbf{Summary:}$
+
+The above three points are related, but not the same. Think of the three points as tackling stability from three different angles:
+
+&nbsp;
+
+$\\textbf{1. Forward magnitude control (to avoid softmax saturation):}$
+LN standardizes each token's vector so dot products/logits don't blow up $\\Rightarrow$ softmax stays in a small range
+$\\Rightarrow \\triangledown_z = p - y$ doesn't vanish. 
+It targets the numerical size of forward activations after LN.
+
+&nbsp;
+
+$\\textbf{2. Gradient flow conditioning (LN's Jacobian):}$
+In backprop, LN applies a specific linear map:
+$$
+  \\triangledown_{x} L = \\frac{1}{\\sigma} (g - \\mu(g)\\mathbf{1} - \\hat{y}\\mu(g\\odot \\hat{y}))
+$$
+The $\\frac{1}{\\sigma}$ scales and the two projections directly shape gradients, reducing exploding/vanishing.
+It targets the local conditioning of gradients at LN during back prop - independent of upstream rescaling and even out any upstreaming component magnitudes. 
+Intuitively, no matter what gradient arrives at LN, it reshapes it into a well conditioned, scale-controlled signal before sending it further back.
+
+&nbsp;
+
+$\\textbf{3. Scale invariance (decouples direction from scale):}$
+Upstream scaling won't affect LN's output since $\\mu$ and $\\sigma$ scale accordingly.
+It targets the invariance to arbitrary rescaling from earlier layers.
+
+&nbsp;
+
+---
+
+&nbsp;
+
+$\\textbf{4. More notes:}$
+
+&nbsp;
+
+$\\textbf{1.}$ The layer norm used in GPT-2 is also called Pre-norm, which is different from the Post-norm used in the original paper.
+Pre-norm vs post-norm is just about where you put LayerNorm relative to the residual add in the Transformer block.
+
+&nbsp;
+
+$\\textbf{The two layouts:}\\\\[4pt]$
+
+$\\textbf{Post-norm (original paper):}$
+
+$$
+SA: x_1 = LN(x + MHA(x))\\\\[4pt]
+FFN: y = LN(x_1 + FFN(x_1))
+$$
+
+Here LN normalizes after residual addition.
+
+&nbsp;
+
+$\\textbf{Pre-norm (widely used now for deep stacks includingGPT-2):}$
+
+$$
+SA: x_1 = x + MHA(LN(x))\\\\[4pt]
+FFN: y = x_1 + FFN(LN(x_1))
+$$
+
+Here LN is before each sublayer.
+
+&nbsp;
+
+The main reason Pre-norm is widely used now is that there is an identity path for gradients through the residual: 
+$\\frac{\\partial y}{\\partial x} = I + ...$. This makes deep stacks train stably.
+
+&nbsp;
+
+See a tiny numeric $\\href{#info:post_norm_gradient_example_notes}{\\text{example}}$ to illustrate the issue of Post-norm.
+
+&nbsp;
+
+$\\textbf{2.}$ Amone recent open weight LLMs, RMSNorm is the default more often than LayerNorm. Examples that explicitly use RMSNorm include:
+
+&nbsp;
+
+$\\textbf{LLaMA(v2)}:$ 
+The paper explicitly says: “we … apply pre-normalization using RMSNorm …” (Sec. 2.2 Training Details).
+$\\href{https://ar5iv.labs.arxiv.org/html/2307.09288}{\\texttt{LLaMA(v2)}}\\\\[4pt]$
+
+$\\textbf{LLaMA(v3)}:$
+Meta's implementation and community annotated walkthroughs of the official code note RMSNorm in the stack (implementation detail consistent with Llama 2).
+$\\href{https://ttumiel.com/blog/LLaMA3/?utm_source=chatgpt.com}{\\texttt{Tom Tumiel}}$
+
+$\\textbf{Mistral 7B}:$
+Hugging Face’s official Mistral model code defines and uses MistralRMSNorm.
+$\\href{https://github.com/huggingface/transformers/blob/main/src/transformers/models/mistral/modeling_mistral.py?utm_source=chatgpt.com}{\\texttt{GitHub}}$
+
+$\\textbf{Mixtral}:$
+HF’s Mixtral implementation (derived from Mistral codebase) uses RMSNorm; more broadly, normalization surveys/papers state “RMSNorm is used by many LLMs such as Llama and Mistral.”
+$\\href{https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py?utm_source=chatgpt.com}{\\texttt{GitHub}}$
+
+$\\textbf{Qwen}:$
+model cards list the architecture as “Transformers with RoPE, SwiGLU, RMSNorm …” (example: Qwen 2.5-1.5B).
+$\\href{https://huggingface.co/Qwen/Qwen2.5-1.5B?utm_source=chatgpt.com}{\\texttt{Hugging Face}}$
+
+$\\textbf{Gemma/Gemma2}:$
+HF’s official Gemma docs describe the model as using SwiGLU and RMSNorm layer normalization.
+$\\href{https://huggingface.co/docs/transformers/en/model_doc/gemma?utm_source=chatgpt.com}{\\texttt{Hugging Face}}$
+
+&nbsp;
+
+See a tiny numeric $\\href{#info:rmsnorm_gradient_example_notes}{\\text{example}}$ to illustrate how RMSNorm works.
+
+&nbsp;
+
+---
+
+&nbsp;
+
+$$\\textbf{References:}\\\\[4pt]$$
+$$\\textbf{1. Original paper — Layer Normalization (2016).}$$
+Ba, Kiros, Hinton. Defines LN, contrasts with BatchNorm, and motivates per-example normalization.
+$$\\href{https://arxiv.org/pdf/1607.06450}{\\texttt{Layer Normalization}}$$
+
+$$\\textbf{2. GPT-2 technical report — where LN sits in GPT-2 (Pre-LN).}$$
+Radford et al. note LN is moved to the input of each sub-block (pre-activation) and add a final LN.
+$$\\href{https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf?utm_source=chatgpt.com}{\\texttt{GPT-2 Technical Report}}$$
+
+$$\\textbf{3. PyTorch API — exact math \\& args used in practice.}$$
+$\\mathtt{torch.nn.LayerNorm(normalized\\_shape, \\epsilon, elementwise\\_affine, …)}$—helpful for implementation details and the 
+$\\epsilon$ stabilization you'll see in configs.
+$$\\href{https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html}{\\texttt{torch.nn.LayerNorm}}$$
+
+$$\\textbf{4. Pre-LN vs Post-LN analysis (why GPT-2 uses Pre-LN).}$$
+Xiong et al., On Layer Normalization in the Transformer Architecture—theoretical & empirical comparison; shows Pre-LN stabilizes training (often no warm-up).
+$$\\href{https://arxiv.org/pdf/2002.04745}{\\texttt{On Layer Normalization in the Transformer Architecture}}$$
+
+$$\\textbf{5. RMSNorm}$$
+Zhang & Sennrich introduce RMSNorm, a lighter alternative (no centering) with similar quality and speed gains—useful contrast to LN.
+$$\\href{https://arxiv.org/pdf/1910.07467}{\\texttt{RMSNorm}}$$
+`,
+  },
+
+  stabilize_training_notes: {
+    title: "Stabilize Training Example",
+    md: `
+  Here's a tiny numeric example to show why LayerNorm stabilizes training by controlling magnitude (so attention logits don't blow up and softmax doesn't saturate).
+
+  &nbsp;
+
+  $\\textbf{Setup (2 tokens, d=3, use identity projections so Q = X, K = X, scale by 1/sqrt(d))}$
+
+  Raw embeddings:
+
+  $$
+  e_1 = \\begin{bmatrix}10 & -5 & 7\\end{bmatrix}, e_2 = \\begin{bmatrix}-8 & 12 & -4\\end{bmatrix}
+  $$
+
+  $\\textbf{1) Without LayerNorm:}$
+
+  Scores for token 1 attending to {1,2}:
+
+  $$
+  \\bullet\\ s_{11} = \\frac{e_1 \\cdot e_1}{\\sqrt{3}} = \\frac{10 \\cdot 10 + (-5) \\cdot (-5) + 7 \\cdot 7}{\\sqrt{3}} = \\frac{100 + 25 + 49}{\\sqrt{3}} = \\frac{174}{\\sqrt{3}} \\approx 100.46\\\\[4pt]
+  \\bullet\\ s_{12} = \\frac{e_1 \\cdot e_2}{\\sqrt{3}} = \\frac{10 \\cdot (-8) + (-5) \\cdot 12 + 7 \\cdot (-4)}{\\sqrt{3}} = \\frac{-80 - 60 - 28}{\\sqrt{3}} = \\frac{-168}{\\sqrt{3}} \\approx -96.99
+  $$
+
+  Softmax over [100.46, -96.99] $\\Rightarrow \\approx$ [1.00, 0.00], totally saturated which will lead to vanishing gradients.
+  (Why? Step by Step explanation [here](#info:stabilize_training_no_layernorm_backprop_notes))
+
+  &nbsp;
+
+  $\\textbf{2) With LayerNorm:}$
+
+  Normalize each token (numbers rounded):
+
+  $$
+  \\bullet\\ \\text{For } e_1: mean = 4, std \\approx 6.4807 \\\\[4pt]
+  \\hat{e}_1 = \\begin{bmatrix}0.9258, -1.3887, 0.4630\\end{bmatrix}\\\\[4pt]
+  \\bullet\\ \\text{For } e_2: mean = 0, std \\approx 8.6403 \\\\[4pt]
+  \\hat{e}_2 = \\begin{bmatrix}-0.9258, 1.3887, -0.4630\\end{bmatrix}
+  $$
+
+  Scores for token 1 attending to {1,2}:
+
+  $$
+  \\bullet\\ s_{11} = \\frac{\\hat{e}_1 \\cdot \\hat{e}_1}{\\sqrt{3}} = \\frac{0.9258 \\cdot 0.9258 + (-1.3887) \\cdot (-1.3887) + 0.4630 \\cdot 0.4630}{\\sqrt{3}} \\approx 1.732\\\\[4pt]
+  \\bullet\\ s_{12} = \\frac{\\hat{e}_1 \\cdot \\hat{e}_2}{\\sqrt{3}} = \\frac{0.9258 \\cdot (-0.9258) + (-1.3887) \\cdot 1.3887 + 0.4630 \\cdot (-0.4630)}{\\sqrt{3}} \\approx -1.732
+  $$
+  
+  Softmax over [1.732, -1.732] $\\Rightarrow \\approx$ [0.9696, 0.0304], not saturated which will not lead to vanishing gradients.
+  
+  &nbsp;
+
+  $\\textbf{Bottom line:}\\\\[4pt]$
+  LN standardizes activations so during forward pass, downstream dot-products/logits are in a reasonable numeric range → softmax avoids saturation → probabilities remain sensitive to changes.
+  `,
+  },
+
+  stabilize_training_no_layernorm_backprop_notes: {
+    title: "Why satuated softmax leads to vanishing gradients",
+    md: `
+  
+  $\\textbf{1. Softmax from logits to probabilities:}\\\\[4pt]$
+
+  The logits from the example: $z=[100.46,-96.99]\\\\[4pt]$
+
+  We also have after softmax: $p \\approx [1.00, 0.00]$ up to an $\\epsilon$ of about $10^{-86}$.
+  
+  &nbsp;
+
+  $\\textbf{2. Cross-entropy loss and its gradient w.r.t logits:}\\\\[4pt]$
+
+  For a one-hot target $y$ (say the true class is 1: $y=[1,0]$), the cross-entropy loss is:
+  $$
+  L = -\\sum_i y_i \\log p_i = -log(p_1)
+  $$
+  
+  The gradient of the loss w.r.t logits is:
+  $$
+  \\frac{\\partial L}{\\partial z_i} = p_i - y_i
+  $$
+  
+  Read the mathematical proof $\\href{#info:gradient_loss_to_logits_proof_notes}{\\text{here}}$.
+
+  &nbsp;
+
+  Plugging in the values:
+  $$
+  \\bullet\\ P_1 \\approx 1 - 10^{-86}, y_1 = 1 \\Rightarrow \\frac{\\partial L}{\\partial z_1} \\approx (1 - 10^{-86}) - 1 = -10^{-86} \\\\[4pt]
+  \\bullet\\ P_2 \\approx 10^{-86}, y_2 = 0 \\Rightarrow \\frac{\\partial L}{\\partial z_2} \\approx 10^{-86} - 0 = 10^{-86}\\\\[4pt]
+  \\Rightarrow \\triangledown_z L = [-10^{-86}, 10^{-86}] \\; \\textbf{essentially zero in magnitude.}\\\\[4pt]
+  \\text{Intuition: when softmax is saturated and confidently correct, the loss surface is almost flat, so the gradient is near 0.}
+  $$
+
+  $\\textbf{3. Backprop to earlier layers becomes tiny:}\\\\[4pt]$
+  Suppose logits came from a linear layer: $z = Wh + b$ (where $h$ is the previous layer's activations). Then
+  $$
+  \\frac{\\partial L}{\\partial W} = (\\triangledown_z L)h^\\top \\\\[4pt]
+  \\frac{\\partial L}{\\partial h} = W^\\top (\\triangledown_z L) \\\\[4pt]
+  \\frac{\\partial L}{\\partial b} = \\triangledown_z L \\\\[4pt]
+  $$
+  Because $\\triangledown_z L$ has entries on the order of $10^{-86}$, all the weight gradients and the gradient flowing back into $h$ become $10^{-86}$ in magnitude.
+  That means earlier layers receive essentially no learning signal.
+  
+  &nbsp;
+  
+  $\\textbf{4. Some thoughts:}\\\\[4pt]$
+  $\\bullet\\ $ Early in training, we don't want logits so huge that softmax saturates, because we stop getting useful gradients to shape the representations.
+  
+  $\\bullet\\ $ If the model is $\\textbf{confident but wrong}$ (e.g, p $\\approx$ [0,1] while y = [1,0]), then $\\triangledown_z L \\approx$ [-1,1] - the network does 
+  get a strong corrective signal. Vanishing happens in the "confidently correct" case.
+  
+  $\\bullet\\ $ $\\href{#info:label_smoothing_notes}{\\text{Label smoothing}}$ keeps gradients from collapsing completely even when predictions are confident.
+  
+  &nbsp;
+
+  $\\textbf{5. References:}\\\\[4pt]$
+  `,
+  },
+
+  label_smoothing_notes: {
+    title: "Label Smoothing",
+    md: `
+Label smoothing replaces the one-hot target with a soft target so the gradient 
+$\\triangledown_z L = p - y$
+never becomes exactly zero—even when the model is extremely confident.
+
+&nbsp;
+
+$\\bullet\\ $ Standard (one-hot) CE: if the model is right and saturated, 
+$$
+p \\approx [1,0, \\ldots] \\text{ and } y = [1,0, \\ldots] \\Rightarrow p - y \\approx [0,0, \\ldots] \\Rightarrow \\text{near-zero gradient (collapse).}
+$$
+
+$\\bullet\\ $ With label smoothing $\\epsilon$: set the target to
+$$
+y_c^{LS} = 1 - \\epsilon,\\; \\;\\; y_{j\\neq c}^{LS} = \\frac{\\epsilon}{C-1} \\\\[4pt]
+$$
+Then, even if $p \\approx [1,0, \\ldots]$, we get
+$$
+\\triangledown_z L = p - y^{LS} \\approx [\\epsilon, \\frac{\\epsilon}{C-1}, \\ldots]
+$$
+which is non-zero. So logits still receive a useful updates. Intuitively, label smoothing reduces overconfidence by nudging the top logit 
+down a bit and pushing up the others slightly.
+This prevesnts complete gradient shutdown when the model is already confident, keeping training dynamics active and reducing brittle overfitting.
+
+$$\\textbf{Tiny example (C=3, $\\epsilon=0.1$):}\\\\[4pt]$$
+$\\bullet\\ $ Smoothed targeet: $y^{LS} = [0.9, 0.05, 0.05]\\\\[4pt]$
+$\\bullet\\ $ If $p = [0.999,0.0005,0.0005] (overconfident),\\\\[4pt]$.
+$\\triangledown_z L = [0.999 - 0.9, 0.0005 - 0.05, 0.0005 - 0.05] = [0.099, -0.0495, -0.0495] \\; \\text{non-zero, weights still get updated.}$
+
+&nbsp;
+
+$$\\textbf{References:}\\\\[4pt]$$
+$$\\textbf{1. Original paper:}$$
+Rethinking the Inception Architecture for Computer Vision (Inception-v3); introduces and motivates label smoothing as a regularizer
+$$\\href{https://arxiv.org/pdf/1512.00567}{\\texttt{Rethinking the Inception Architecture for Computer Vision}}$$
+
+$$\\textbf{2. Transformer training detail:}$$
+Attention Is All You Need—explicitly states they use label smoothing with 
+$\\epsilon=0.1$ and notes its effects.
+$$\\href{https://arxiv.org/pdf/1706.03762v2}{\\texttt{Attention Is All You Need}}$$
+
+$$\\textbf{3. Theory \\& empirical study:}$$
+When Does Label Smoothing Help? (Müller, Kornblith, Hinton, NeurIPS 2019) — effects on generalization, calibration, and why it can hurt distillation.
+$$\\href{https://arxiv.org/pdf/1906.02629}{\\texttt{When Does Label Smoothing Help?}}$$
+
+$$\\textbf{4. Related regularizer (confidence penalty) and connection to LS:}$$
+Pereyra et al., ICLR 2017 workshop—penalizing low-entropy outputs; shows relation to label smoothing via direction of KL divergence.
+$$\\href{https://arxiv.org/pdf/1701.06548}{\\texttt{Regularizing Neural Networks by Penalizing Confident Output Distributions}}$$
+
+$$\\textbf{5. Calibration context:}$$
+Guo et al., On Calibration of Modern Neural Networks (ICML 2017)—why model confidence is not calibrated and how label smoothing helps.
+$$\\href{https://arxiv.org/pdf/1706.04599}{\\texttt{On Calibration of Modern Neural Networks}}$$
+
+`,
+  },
+  
+  gradient_loss_to_logits_proof_notes: {
+    title: "Gradient of loss to logits",
+    md: `
+  $\\textbf{Setup:}\\\\[4pt]$
+  $$
+  \\bullet\\ \\text{Logits: } z \\in \\mathbb{R}^C\\\\[4pt]
+  \\bullet\\ \\text{Softmax: } p_i = \\frac{e^{z_i}}{\\sum_{k=1}^C e^{z_k}}\\\\[4pt]
+  \\bullet\\ \\text{Target: } y \\text{(usually one-hot, but can be any distribution for label smoothing)}\\\\[4pt]
+  \\bullet\\ \\text{Cross-entropy loss: } L = -\\sum_{i=1}^C y_i \\log p_i
+  $$
+
+  $\\textbf{Proof:}\\\\[4pt]$
+
+  Use the identity
+  
+  $$
+  \\log p_i = z_i - \\log \\sum_{k=1}^C e^{z_k}
+  $$
+
+  Plug it into the loss:
+
+  $$
+  L = -\\sum_{i=1}^C y_i \\log p_i = -\\sum_{i=1}^C y_i (z_i - \\log \\sum_{k=1}^C e^{z_k}) = -\\sum_{i=1}^C y_i z_i + \\sum_{i=1}^C y_i \\log \\sum_{k=1}^C e^{z_k}
+  $$
+
+  Because $y$ is a probability distribution, $\\sum_{i=1}^C y_i = 1$, so
+
+  $$
+  L = -\\sum_{i=1}^C y_i z_i + \\log \\sum_{k=1}^C e^{z_k}
+  $$
+
+  Differentiate w.r.t $z_j$:
+  
+  $$
+  \\frac{\\partial L}{\\partial z_j} = -y_j + \\frac{e^{z_j}}{\\sum_{k=1}^C e^{z_k}} = p_j - y_j
+  $$
+  `,
+  },
+
+  improves_gradient_flow_notes: {
+    title: "Improves gradient flow",
+    md: `
+  Here is a tiny numeric example to compare the gradient w.r.t. the pre-LN activations with and without LN.
+
+  &nbsp;
+
+  $\\textbf{Setup:}\\\\[4pt]$ a single token vector of size n = 3
+  $$
+  x = \\begin{bmatrix}10, -5, 7\\end{bmatrix}
+  $$
+
+  Mean and standard deviation:
+  $$
+  \\mu = \\frac{10 + (-5) + 7}{3} = 4, \\quad \\sigma = \\sqrt{\\frac{(10-4)^2 + (-5-4)^2 + (7-4)^2}{3}} = 6.4807
+  $$
+
+  To make the example simple, let a simple linear head follow with zero target:
+  
+  $W = diag(3, 1, 0.5)$ and $b = 0$. Use a squared loss to the zero target:
+  
+  $$
+  L = \\frac{1}{2} ||Wy + b - 0||^2
+  $$
+
+  where $y$ is eitehr the identity output without LN or the LN output.
+
+  &nbsp;
+  
+  ---
+  
+  &nbsp;
+
+  $\\textbf{1) Without LN:}\\\\[4pt]$
+  Because there is no LN, so it's identity pass: $y = x$.
+  
+  $\\bullet\\ $ $\\text{Forward: } Wy = diag(3, 1, 0.5)x = \\begin{bmatrix}30, -5, 3.5\\end{bmatrix}\\\\[4pt]$
+  $\\bullet\\ $ $\\text{Gradient w.r.t. y: } \\triangledown_y L = W^\\top (Wy) = W^2{y}\\\\[4pt]$
+  $\\bullet\\ $ $\\text{Since W is diagonal, } W^2 = diag(9, 1, 0.25)\\\\[4pt]$
+  $\\bullet\\ $ $\\text{Gradient w.r.t. input x (here y = x): } \\triangledown_x L = W^2{x} = \\begin{bmatrix}9*10, 1*(-5), 0.25*7\\end{bmatrix} = \\begin{bmatrix}90, -5, 1.75\\end{bmatrix}\\\\[4pt]$
+
+  This gradient is large and very uneven—dominated by the first coordinate. If upstream layers rescale 
+  $x$ by some factor $c$, the gradient scales by $c$ as well (learning rate becomes sensitive to scale).
+
+  &nbsp;
+
+  ---
+
+  &nbsp;
+
+  $\\textbf{2. With LN (pre-LN, GPT-2 style):}\\\\[4pt]$
+  First compute the normalized vector:
+  $$
+  \\hat{y} = LN(x) = \\frac{x - \\mu}{\\sigma} \\approx \\begin{bmatrix}0.9258, -1.3887, 0.4630\\end{bmatrix}
+  $$
+
+  Forward:
+  $$
+  W\\hat{y} = diag(3, 1, 0.5)\\hat{y}. 
+  $$
+
+  Gradient w.r.t. $\\hat{y}$:
+  $$
+  g = \\triangledown_{\\hat{y}} L = W^\\top (W\\hat{y}) = W^2\\hat{y} = diag(9, 1, 0.25)\\hat{y} = \\begin{bmatrix}8.3322, -1.3887, 0.1158\\end{bmatrix}
+  $$
+
+  Now backprop through the LN. For LN over a vector (affine removed for simplicity), the closed form is:
+  $$
+  \\triangledown_{x} L = \\frac{1}{\\sigma} (g - \\mu(g)\\mathbf{1} - \\hat{y}\\mu(g\\odot \\hat{y}))
+  $$
+
+  where $\\mathbf{1}$ is a vector of all ones, $\\mu(g)$ is the mean of $g$ and $\\odot$ is the elementwise product.
+
+  Compute the two mean terms:
+  $$
+  \\mu(g) = \\frac{8.3322 + (-1.3887) + 0.1158}{3} \\approx 2.3532\\\\[4pt]
+  \\mu(g\\odot \\hat{y}) = \\frac{8.3322 \\cdot 0.9258 + (-1.3887) \\cdot (-1.3887) + 0.1158 \\cdot 0.4630}{3} = 3.2325
+  $$
+
+  Assemble together:
+  $$
+  g - \\mu(g)\\mathbf{1} \\approx \\begin{bmatrix}5.979, -3.7417, -2.2372\\end{bmatrix}\\\\[4pt]
+  \\hat{y}\\mu(g\\odot \\hat{y}) \\approx \\begin{bmatrix}2.990, -4.487, 1.497\\end{bmatrix}
+  $$
+
+  Subtract and scale by $\\frac{1}{\\sigma}$:
+  $$
+  \\triangledown_{x} L = \\frac{1}{6.4807} (\\begin{bmatrix}2.989, 0.7453, -3.7342\\end{bmatrix}) \\approx \\begin{bmatrix}0.461, 0.115, -0.576\\end{bmatrix}
+  $$
+
+  Now the gradient is much more even—no single dimension dominates.
+  
+  `,
+  },
+
+  post_norm_gradient_example_notes: {
+    title: "Post-norm gradient example",
+    md: `
+
+  We'll use a single residual block in $\\textbf{Post-norm}$ form to illustrate the issue.
+
+  $$
+  \\text{(post-norm) } \\mathtt{z = x + f(x), \\quad y = LN(z)} \\\\[4pt]
+  $$
+
+  For simplicity, we assume the following settings:
+  $$
+  \\bullet\\ \\text{hidden size m = 2, so LN normalizes across 2 features}\\\\[4pt]
+  \\bullet\\ \\text{input x = [1, -1] (mean = 0, variance = 1)}\\\\[4pt]
+  \\bullet\\ \\text{a simple residual f(x) = ax with a = 2 (amplifying the residual path by factor of 2)}
+  $$
+
+  $\\textbf{Forward pass:}\\\\[4pt]$
+  $$
+  \\bullet\\ \\text{Residual add: } z = x + f(x) = x + 2x = 3x = [3, -3]\\\\[4pt]
+  \\bullet\\ \\text{LayerNorm over features:}\\\\[4pt]
+  \\ \\ \\ \\ \\bullet\\ mean \\ \\mu = (3 + (-3)) / 2 = 0\\\\[4pt]
+  \\ \\ \\ \\ \\bullet\\ variance \\ v = ((3 - 0)^2 + (-3 - 0)^2) / 2 = 9, std \\sigma = 3\\\\[4pt]
+  \\ \\ \\ \\ \\bullet\\ y = LN(z) =(z - \\mu) / \\sigma = [3, -3]/3 = [1, -1].
+  $$
+
+  The forward pass is fine.
+
+  &nbsp;
+
+  $\\textbf{Backward pass (the problem!):}\\\\[4pt]$
+  For LayerNorm (per-feature LN with m features), the Jacobian at the point is has the following closed form:
+
+  $$
+  J = \\frac{\\partial y}{\\partial z} = \\frac{1}{\\sigma} (\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top),
+  $$
+
+  Where $\\mathbf{I}$ is the identity matrix of size m $\\times$ m. $\\mathbf{1}$ is the vector of all ones in $\\mathbb{R}^m$.
+
+  &nbsp;
+
+  Plug in the values:
+
+  Here $m = 2, \\sigma = 3, y = [1, -1]$.
+  $$
+  \\bullet\\ \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top = \\frac{1}{2} \\mathbf{1}\\mathbf{1}^\\top = \\begin{bmatrix}0.5 & 0.5\\\\0.5 & 0.5\\end{bmatrix}\\\\[4pt]
+  \\bullet\\ \\frac{1}{m} yy^\\top = \\frac{1}{2} \\frac{1}{2} yy^\\top = \\frac{1}{2} \\begin{bmatrix}1 & -1\\\\-1 & 1\\end{bmatrix} = \\begin{bmatrix}0.5 & -0.5\\\\-0.5 & 0.5\\end{bmatrix}\\\\[4pt]
+  \\bullet\\ \\mathbf{I} - \\frac{1}{2} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{2} \\frac{1}{2} yy^\\top = \\mathbf{I} - \\begin{bmatrix}0.5 & 0.5\\\\0.5 & 0.5\\end{bmatrix} - \\begin{bmatrix}0.5 & -0.5\\\\-0.5 & 0.5\\end{bmatrix} = \\begin{bmatrix}0 & 0\\\\0 & 0\\end{bmatrix}
+  $$
+
+  Thus $J = \\frac{1}{\\sigma} \\times 0 = 0$.
+
+  &nbsp;
+
+  $\\textbf{Interpretation: }$ at this configuration, LayerNor's Jacobian is exactly zero. That means for any upstream gradient $\\triangledown_y L$,
+  the gradient propagated back to $z$ is
+  $$
+  \\triangledown_z L = J^\\top \\triangledown_y L = 0.
+  $$ 
+  So the gradient dies completely before it even reaches the residual add.
+  Also note the $\\frac{1}{\\sigma}$ in the Jacobian, with more layers, many such Jacobians chain up, so even when not exactly zero,
+  the repeated products of $\\frac{1}{\\sigma}$ can still shrink the gradient to near zero.
+
+  &nbsp;
+
+  In pre-norm, you'd compute $y = x + f(LN(x))$. The sublayer always sees unit-scale inputs, and the LN Jacobian is applied before the residual add.
+  So there's always a "gradient highway". Even if the residual branch's Jacobian goes to zero, the "gradient highway" still carries gradient through.
+  
+  `,
+  },
+
+  rmsnorm_gradient_example_notes: {
+    title: "RMSNorm gradient example",
+    md: `
+  A tiny numeric example to illustrate how RMSNorm works.
+
+  &nbsp;
+
+  The formula of RMSNorm is:
+  
+  $$
+  RMSNorm(x) = \\gamma \\cdot \\frac{x}{\\sqrt{\\frac{1}{d} \\sum_{i}x_i^2 + \\epsilon}}
+  $$
+
+  where $\\gamma$ is a learnable scaling factor we'll talk about what it's used for later.
+  $\\epsilon$ is a small constant to avoid division by zero.
+
+  &nbsp;
+
+  $\\textbf{Setup:}\\\\[4pt]$
+  $$
+  \\text{Given } x = \\begin{bmatrix}2, -1, 3, 0\\end{bmatrix}, \\gamma = [1.0, 0.5, 2.0, 1.5]
+  $$
+  So in this example, $d = 4$, we'll also ignore the $\\epsilon$ term for simplicity.
+
+  &nbsp;
+
+  $\\textbf{Step 1 - compute the RMS):}\\\\[4pt]$
+  $$
+  RMS(x) = \\sqrt{\\frac{1}{d} \\sum_{i=1}^d x_i^2} = \\sqrt{\\frac{1}{4} (2^2 + (-1)^2 + 3^2 + 0^2)} = \\sqrt{\\frac{1}{4} (4 + 1 + 9 + 0)} = \\sqrt{\\frac{14}{4}} = \\sqrt{3.5} \\approx 1.8708
+  $$
+
+  $\\textbf{Step 2 - normalize by the RMS:}\\\\[4pt]$
+  $$
+  x = \\frac{x}{RMS(x)} = \\begin{bmatrix}2/1.8708, -1/1.8708, 3/1.8708, 0/1.8708\\end{bmatrix} = \\begin{bmatrix}1.0690, -0.5345, 1.6035, 0.0000\\end{bmatrix}
+  $$
+
+  $\\textbf{Step 3 - apply per-feature scaling:}\\\\[4pt]$
+  $$
+  y = \\begin{bmatrix}1.0690 \\cdot 1.0, -0.5345 \\cdot 0.5, 1.6035 \\cdot 2.0, 0.0000 \\cdot 1.5\\end{bmatrix} = \\begin{bmatrix}1.0690, -0.2673, 3.2070, 0.0000\\end{bmatrix}
+  $$
+
+  This is the RMSNorm output.
+
+  &nbsp;
+
+  ---
+  
+  &nbsp;
+
+  $\\textbf{Why do we need scale factor } \\gamma: \\\\[4pt]$
+  Pure normalization fixes the output of RMS to $\\approx 1$, which is too restrictive and not ideal.
+  $\\gamma$ let the model learn and reshape that constraint per feature. Different features can be scaled
+  up/down as training discovers which directions are useful.
+  `,
   },
 };

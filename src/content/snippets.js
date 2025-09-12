@@ -13,7 +13,7 @@ class DataLoader:
         with open("input.txt", "r") as f:
             text = f.read()
         tokenizer = tiktoken.get_encoding("gpt2")
-        ids = tokenizer.encode(text)
+        ids = tokenizer.encode(text) # return the token ids
         n = int((1.0 - val_fraction) * len(ids))
         self.train_ids = ids[:n]
         self.val_ids = ids[n:]
@@ -34,7 +34,7 @@ class GPT2(nn.Module):
         super().__init__()
         self.tok_emb = nn.Embedding(vocab_size, n_embd)
         self.pos_emb = nn.Embedding(max_toks, n_embd)
-        self.drop = nn.Dropout(dropout)
+        self.emb_drop = nn.Dropout(dropout) # embedding dropout
         self.blocks = nn.ModuleList([
             TransformerBlock(n_embd=n_embd, n_head=n_head, dropout=dropout)
             for _ in range(n_layer)
@@ -49,7 +49,7 @@ class GPT2(nn.Module):
         B, T = idx.size()
         pos = torch.arange(0, T, device=idx.device)
         x = self.tok_emb(idx) + self.pos_emb(pos)[None, :, :]
-        x = self.drop(x)
+        x = self.emb_drop(x)
         for blk in self.blocks:
             x = blk(x)
         x = self.ln_f(x)
@@ -182,8 +182,8 @@ export const content = {
     summary: "Full model definition and a minimal training loop.",
     code: gpt2TrainingCode,
     anchors: [
-      { id: "drop_def",  label: "define drop", match: "self.drop = nn.Dropout(dropout)" },
-      { id: "drop_apply",label: "apply drop",  match: "x = self.drop(x)" },
+      { id: "emb_drop_def",  label: "define drop", match: "self.emb_drop = nn.Dropout(dropout) # embedding dropout" },
+      { id: "emb_drop_apply",label: "apply drop",  match: "x = self.emb_drop(x)" },
       { id: "lnf_def",   label: "final ln def", match: "self.ln_f = nn.LayerNorm(n_embd)" },
       { id: "lnf_apply", label: "apply ln_f",   match: "x = self.ln_f(x)" },
       { id: "lm_head_def",   label: "lm_head def",   match: "self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)" },
