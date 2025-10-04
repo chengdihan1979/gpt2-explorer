@@ -200,6 +200,9 @@ export function buildCodeHtml({ component, selectedId }) {
     html = html.replace(/(<span[^>]*data-action=\"open:att_v_product_notes\"[^>]*>)([\s\S]*?)(<\/span>)/, '$1<mark>$2</mark>$3');
   }
 
+  // 9) Optimizer: make torch.optim.AdamW clickable to open notes
+  html = html.replace(/torch\.optim\.AdamW\([^)]*\)/g, (m) => `<span data-action="open:optim_adamw_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
+
   
   return html;
 }

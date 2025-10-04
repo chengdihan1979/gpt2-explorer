@@ -614,7 +614,7 @@ for linear layers/embeddings.
 
 &nbsp;
 
-$\\textbf{References:}\\\\[4pt]$
+$\\textbf{References:}\\\\[4pt]$$
 $\\textbf{1. Kaiming initialization: }$
 introduces the initialization for rectifiers (ReLU/LeakyReLU) and derives the variance-preserving scheme.
 $\\href{https://arxiv.org/pdf/1502.01852.pdf}{\\texttt{He et al., 2015}} \\\\[4pt]$
@@ -2470,5 +2470,42 @@ $$
   Therefore, $ker(P) \\perp S$, i.e., $P$ is the orthogonal projector onto $S$.
 
     `,
+  },
+
+  optim_adamw_notes: {
+    title: "torch.optim.AdamW",
+    md: `
+**What it is**
+
+- Adam with decoupled weight decay (AdamW). Improves generalization vs L2 on gradients.
+
+**Update rule (per-parameter)**
+
+$$
+\\begin{aligned}
+& m_t = \\beta_1 m_{t-1} + (1-\\beta_1) g_t \\\\
+& v_t = \\beta_2 v_{t-1} + (1-\\beta_2) g_t^2 \\\\
+& \\hat m_t = m_t / (1-\\beta_1^t),\\quad \\hat v_t = v_t / (1-\\beta_2^t) \\\\
+& \\theta \\leftarrow \\theta - \\eta \\cdot \\frac{\\hat m_t}{\\sqrt{\\hat v_t}+\\epsilon} - \\eta\\,\\lambda\\,\\theta \\quad (\\text{decoupled decay})
+\\end{aligned}
+$$
+
+- The second term is true weight decay (not L2 on loss gradient).
+
+**Typical hyperparameters**
+
+- lr: 3e-4 (small GPT-2 toy setups)
+- betas: (0.9, 0.95) or (0.9, 0.999)
+- weight_decay: 0.1 for small demos; 0.01–0.1 commonly used.
+
+**Tips**
+
+- Exclude bias and LayerNorm weights from decay via param groups.
+- Use gradient clipping with small models (e.g., 1.0) to stabilize early steps.
+
+**Reference**
+
+- Loshchilov & Hutter, "Decoupled Weight Decay Regularization" (AdamW).
+  `,
   },
 };

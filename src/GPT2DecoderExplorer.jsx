@@ -667,11 +667,11 @@ $$
 $$
 
 where:  
-  $$
-  \\text{- B: batch size  }\\\\[2pt]
-  \\text{- T: sequence length  }\\\\[2pt]
-  \\text{- V: vocabulary size  }\\\\[2pt]
-  $$
+$$
+\\text{- B: batch size  }\\\\[2pt]
+\\text{- T: sequence length  }\\\\[2pt]
+\\text{- V: vocabulary size  }\\\\[2pt]
+$$
 
 $$\\textbf{Targets (ground truth token indices)}\\\\[4pt]$$  
 
@@ -683,11 +683,11 @@ Example:
 For $B=2$, $T=4$, $V=10$:
 
 $$
-Logits → shape = (2, 4, 10)
+\\text{Logits shape} = (2, 4, 10)
 $$
 
 $$
-Targets → shape = (2, 4)
+\\text{Targets shape} = (2, 4)
 $$
 
 ---
@@ -698,11 +698,17 @@ $$\\textbf{What CrossEntropy Expects}\\\\[4pt]$$
 
 \`torch.nn.functional.cross_entropy\` expects:
 
+&nbsp;
+
 **Input**: 2D tensor of shape $(N, C)$
 
 where $N$ = number of samples, $C$ = number of classes.
 
+&nbsp;
+
 **Target**: 1D tensor of shape $(N,)$ with integer class indices.
+
+&nbsp;
 
 So we need to flatten both logits and targets.
 
@@ -714,15 +720,20 @@ So we need to flatten both logits and targets.
 
 $$\\textbf{Why .view(-1, logits.size(-1))?}\\\\[4pt]$$
 
-\`logits.view(-1, V)\` reshapes $(B, T, V) \\to (B \\cdot T, V)$.
+\`logits.view(-1, V)\` reshapes $(B, T, V) \\to (B \\times T, V)$.
 
-→ Each row is one token prediction across the vocabulary.
+→ Each row corresponds to one token position (b, t) in the batch, i.e., the model’s distribution over the vocabulary for that position.
 
-\`targets.view(-1)\` reshapes $(B, T) \\to (B \\cdot T,)$.
+&nbsp;
 
-→ Each entry is the correct class index for one token.
+\`targets.view(-1)\` reshapes $(B, T) \\to (B \\times T,)$.
+
+→ Each entry is the correct class index for the next token in the sequence.
+
+&nbsp;
 
 Thus, every token in the batch is treated as an independent classification example.
+The cross-entropy loss is computed for all sequences in the current batch at once.
 
 &nbsp;
 
@@ -730,17 +741,40 @@ Thus, every token in the batch is treated as an independent classification examp
 
 &nbsp;
 
-$$\\textbf{Putting It Together}\\\\[4pt]$$
+$\\textbf{A tiny numerical example}\\\\[4pt]$
 
-\`\`\`python
-loss = F.cross_entropy(
-    logits.view(-1, logits.size(-1)),  # shape (B*T, V)
-    targets.view(-1)                    # shape (B*T,)
-)
-\`\`\`
+&nbsp;
+
+Suppose a 4-class model outputs prediction probabilities for one sequence is:
+$$
+\\bullet \\ p = [0.1, 0.2, 0.6, 0.1]
+$$
+The true class is class 3 (0-indexed: index 2), i.e. one-hot $y = [0, 0, 1, 0]$.
+(In practice (e.g., GPT-2), the target is not one-hot but the class index, i.e., 2. It's equivalent to multiplying by a one-hot, but far more memory/compute efficient)
+
+&nbsp;
+
+Cross-entropy for this example:
+$$
+CE = -\\sum_{i=1}^4 y_i \\log p_i = -\\log p_3 = -\\log 0.6 \\approx 0.5108
+$$
+
+&nbsp;
+
+---
+
+&nbsp;
+
+$\\textbf{References:}\\\\[4pt]$
+$$\\textbf{1. PyTorch docs:}$$
+CrossEntropyLoss (multiclass softmax CE; targets are class indices, not one-hot).
+$$\\href{https://docs.pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html?utm_source=chatgpt.com}{\\texttt{PyTorch Docs}}$$
   
+$$\\textbf{2. CS231n Softmax Classifier:}$$
+notes (derivation of softmax + cross-entropy and gradients).
+$$\\href{https://cs231n.github.io/linear-classify/?utm_source=chatgpt.com}{\\texttt{CS231n Softmax Classifier}}$$
 
-This computes the **average negative log-likelihood** across all tokens in the batch.
+&nbsp;
 
     `,
   },
