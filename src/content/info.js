@@ -614,7 +614,7 @@ for linear layers/embeddings.
 
 &nbsp;
 
-$\\textbf{References:}\\\\[4pt]$$
+$\\textbf{References:}\\\\[4pt]$
 $\\textbf{1. Kaiming initialization: }$
 introduces the initialization for rectifiers (ReLU/LeakyReLU) and derives the variance-preserving scheme.
 $\\href{https://arxiv.org/pdf/1502.01852.pdf}{\\texttt{He et al., 2015}} \\\\[4pt]$
