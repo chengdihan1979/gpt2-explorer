@@ -14,6 +14,7 @@ class DataLoader:
             text = f.read()
         tokenizer = tiktoken.get_encoding("gpt2")
         ids = tokenizer.encode(text) # return the token ids
+        ids = torch.tensor(ids, dtype=torch.long)
         n = int((1.0 - val_fraction) * len(ids))
         self.train_ids = ids[:n]
         self.val_ids = ids[n:]
@@ -23,10 +24,10 @@ class DataLoader:
         if len(data) <= self.block_size + 1:
             # pad by cycling if dataset is too small
             data = data.repeat((self.block_size * 2) // max(1, len(data)) + 1)
-        ix = torch.randint(len(data) - self.block_size - 1, (batch_size,))
+        ix = torch.randint(len(data) - self.block_size - 1, (self.batch_size,))
         x = torch.stack([data[i:i+self.block_size] for i in ix])
         y = torch.stack([data[i+1:i+1+self.block_size] for i in ix])
-        return x, y;
+        return x, y
         
 
 class GPT2(nn.Module):
@@ -60,7 +61,8 @@ class GPT2(nn.Module):
         return logits, loss
 
 # ----- Simple training loop -----
-model = GPT2(vocab_size=50304, n_layer=12, n_embd=768, n_head=12, max_toks=1024, dropout=0.1)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = GPT2(vocab_size=50304, n_layer=12, n_embd=768, n_head=12, max_toks=1024, dropout=0.1).to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), weight_decay=0.1)
 
 batch_size = 4
@@ -82,6 +84,7 @@ for step in range(max_steps):
 
 export const dataLoaderCode = `
 import tiktoken
+import torch
 
 
 class DataLoader:
@@ -94,6 +97,7 @@ class DataLoader:
             text = f.read()
         tokenizer = tiktoken.get_encoding("gpt2")
         ids = tokenizer.encode(text)
+        ids = torch.tensor(ids, dtype=torch.long)
         n = int((1.0 - val_fraction) * len(ids))
         self.train_ids = ids[:n]
         self.val_ids = ids[n:]
@@ -103,10 +107,10 @@ class DataLoader:
         if len(data) <= self.block_size + 1:
             # pad by cycling if dataset is too small
             data = data.repeat((self.block_size * 2) // max(1, len(data)) + 1)
-        ix = torch.randint(len(data) - self.block_size - 1, (batch_size,))
+        ix = torch.randint(len(data) - self.block_size - 1, (self.batch_size,))
         x = torch.stack([data[i:i+self.block_size] for i in ix])
         y = torch.stack([data[i+1:i+1+self.block_size] for i in ix])
-        return x, y;
+        return x, y
 `;
 
 export const attnCode = `import torch

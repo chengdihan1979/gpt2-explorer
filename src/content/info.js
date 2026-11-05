@@ -218,9 +218,9 @@ $$
 $$\\textbf{Rough pattern GPT-2 uses (conceptually):}$$
 $$
 \\text{contractions: }\\texttt{'s, 't, 're, 've, 'm, 'll, 'd}\\\\
-\\text{optional leading space + letters: }\\texttt{?\\p\\{L\\}+}\\\\
-\\text{optional leading space + digits: }\\texttt{?\\p\\{N\\}+}\\\\
-\\text{optional leading space + other symbols: }\\texttt{?[\\s\\p\\{L\\}\\p\\{N\\}]+}\\\\
+\\text{optional leading space + letters: }\\texttt{\\ ?\\textbackslash p\\{L\\}+}\\\\
+\\text{optional leading space + digits: }\\texttt{\\ ?\\textbackslash p\\{N\\}+}\\\\
+\\text{optional leading space + other symbols: }\\texttt{\\ ?[\\textasciicircum \\textbackslash s\\textbackslash p\\{L\\}\\textbackslash p\\{N\\}]+}\\\\
 \\text{whitespace runs (including end-of-string cases).}\\\\[10pt]
 $$
 $$\\textbf{How it affects BPE:}$$
@@ -230,7 +230,7 @@ $$
 \\text{Merges do not cross chunk boundaries. That's why " world" (with its leading space) is a single chunk where merges}\\\\
 \\text{can happen internally, but it won't merge with the preceding token.}\\\\[10pt]
 
-\\textbf{Special tokens:}\\;\\text{handled separately (e.g., }\\texttt{<|endoftext|>)\\text{). They bypass normal splitting when allowed.}\\\\[10pt]
+\\textbf{Special tokens:}\\;\\text{handled separately (e.g., }\\texttt{<|endoftext|>}\\text{). They bypass normal splitting when allowed.}\\\\[10pt]
 $$
 
 $$\\textbf{Examples:}$$
@@ -242,7 +242,7 @@ $$
 \\text{(letters as one chunk, digits as another).}\\\\[8pt]
 \\textbf{Numbers grouped}\\\\[4pt]
 \\text{"Room 1234"}\\ \\to\\ \\text{ chunks: ["Room", " 1234"]}\\\\
-\\text{"1,234.50"}\\ \\to\\ \\text{ chunks: [" 1", ",", "234", ".", "50"]}\\\\
+\\text{"1,234.50"}\\ \\to\\ \\text{ chunks: ["1", ",", "234", ".", "50"]}\\\\
 \\text{(digits group, but punctuation like "," and "." are separate symbol chunks).}\\\\[8pt]
 \\textbf{Punctuation / symbols grouped}\\\\[4pt]
 \\text{"Hello, world!!"}\\ \\to\\ \\text{ chunks: ["Hello", ",", " world", "!!"]}\\\\
@@ -263,29 +263,17 @@ $$
 \\text{chunk boundaries.} \\\\[10pt]
 $$
 $$\\textbf{References:}\\\\[4pt]$$
-$$\\textbf{1. Transformer positional encodings:}$$
-Vaswani et al., "Attention Is All You Need," §3.5. Introduces adding position information to token embeddings via fixed sinusoids.
-$$\\href{https://arxiv.org/pdf/1706.03762v2}{\\texttt{Attention Is All You Need}}$$
+$$\\textbf{1. GPT-2 reference encoder (contains the exact regex):}$$
+OpenAI's original GPT-2 encoder.py, which defines the pre-tokenization pattern and the byte-unicode map.
+$$\\href{https://github.com/openai/gpt-2/blob/master/src/encoder.py}{\\texttt{openai/gpt-2 encoder.py}}$$
 
-$$\\textbf{2. GPT-2 uses learned absolute positional embeddings::}$$
-Hugging Face GPT-2 docs (model card/config) explicitly note GPT-2's absolute position embeddings (not sinusoidal), hence right-padding guidance.
-$$\\href{https://huggingface.co/docs/transformers/v4.34.0/model_doc/gpt2?utm_source=chatgpt.com}{\\texttt{GPT-2 Configs}}$$
+$$\\textbf{2. GPT-2 technical report (input representation):}$$
+Radford et al., §2.2 "Input Representation" — explains why BPE is prevented from merging across character categories.
+$$\\href{https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf}{\\texttt{GPT-2 Technical Report}}$$
 
-$$\\textbf{3. GPT-2 technical report (input representation):}$$
-Radford et al., Language Models are Unsupervised Multitask Learners—describes inputs as token + position embeddings summed before the stack.
-$$\\href{https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf?utm_source=chatgpt.com}{\\texttt{GPT-2 Technical Report}}$$
-
-$$\\textbf{4. Relative position encodings:}$$
-Shaw et al., Self-Attention with Relative Position Representations. Introduces relative positional embeddings as an alternative to absolute positional embeddings.
-$$\\href{https://arxiv.org/pdf/1803.02155}{\\texttt{Self-Attention with Relative Position Representations}}$$
-
-$$\\textbf{5. RoPE (Rotary Position Embeddings):}$$
-Su et al., RoPE: Rotary Position Embedding. Introduces a novel method for encoding relative positions in self-attention.
-$$\\href{https://arxiv.org/pdf/2104.09864}{\\texttt{RoPE: Rotary Position Embedding}}$$
-
-$$\\textbf{6. ALiBi (Attention with Linear Biases):}$$
-Press et al., uses distance-proportional biases in attention scores; enables length extrapolation.
-$$\\href{https://arxiv.org/pdf/2108.12409}{\\texttt{ALiBi: Attention with Linear Biases}}$$
+$$\\textbf{3. tiktoken:}$$
+OpenAI's production tokenizer; its "gpt2" encoding uses the same pattern.
+$$\\href{https://github.com/openai/tiktoken}{\\texttt{tiktoken}}$$
 
 `,
   },
@@ -351,7 +339,7 @@ $$
 **Alternatives / notes**
 
 - Some variants use ratios other than 4, gated linear units (GEGLU/SwishGLU), or different activations; the idea is similar: widen, nonlinearity, project back.
-- In Pre-LN GPT-2 blocks, this comes after LayerNorm and parallel to attention in a residual structure.
+- In Pre-LN GPT-2 blocks, this comes after LayerNorm (ln2) and runs after the attention sublayer, inside its own residual branch. (Running attention and MLP in parallel is a later variant, e.g. GPT-J / PaLM.)
     `,
   },
   mlp_fc_out_notes: {
@@ -519,9 +507,10 @@ $$
 \\text{rank 1: } (an,a) \\to ana\\\\[2pt]
 \\text{rank 2: } (b,an) \\to ban\\\\[4pt]
 \\text{Encoding proceeds:}\\\\[2pt]
-\\text{Merge lowest-rank pairs present } \\to\\ b\\ an\\ a\\ n\\ a\\\\[2pt]
-\\text{Now } (an,a) \\text{ exists } \\to\\ b\\ ana\\ n\\ a\\\\[2pt]
-\\text{No more lower-rank merges available (or continue if others exist) } \\to\\ \\text{final tokens.}\\\\[8pt]
+\\text{Rank 0 } (a,n) \\text{ is the lowest-rank pair present; merge every occurrence } \\to\\ b\\ an\\ an\\ a\\\\[2pt]
+\\text{Pairs now: } (b,an)\\text{ rank 2},\\ (an,an)\\text{ no rule},\\ (an,a)\\text{ rank 1 } \\Rightarrow\\ b\\ an\\ ana\\\\[2pt]
+\\text{Pairs now: } (b,an)\\text{ rank 2},\\ (an,ana)\\text{ no rule } \\Rightarrow\\ ban\\ ana\\\\[2pt]
+\\text{No applicable merges remain } \\to\\ \\text{final tokens: [ban, ana].}\\\\[8pt]
 $$
 $$\\textbf{Space handling:}$$
 $$
@@ -644,7 +633,7 @@ different heads can interact before entering the residual. Without it, heads wou
 
 $\\text{On the high level, think of it as following}\\\\[2pt]$
 $$
-\\bullet\\ \\text{Q/K do routing (which heads to attend to which other heads)}\\\\[2pt]
+\\bullet\\ \\text{Q/K do routing (which tokens attend to which other tokens, within each head)}\\\\[2pt]
 \\bullet\\ \\text{V carries content}\\\\[2pt]
 \\bullet\\ \\text{Projection chooses where/how to write that content into the residual space (a learned basis change)}\\\\[2pt]
 \\text{It lets the model reweight heads, rotate features, and gate what survives to the next layer.}\\\\[10pt]
@@ -967,7 +956,7 @@ $$
   \\text{Made-up attention logits (after the }1/\\sqrt{hs}\\text{ scale):} \\\\[4pt]
   
   \\bullet\\ \\text{to }\\mathtt{The}:\\ -0.5\\\\
-  \\bullet\\ \\text{to }\\mathtt{dogs}:\\ +2.2\\ \\leftarrow\\ \\text{strong match}\\\\
+  \\bullet\\ \\text{to }\\mathtt{dogs}:\\ +2.57\\ \\leftarrow\\ \\text{strong match}\\\\
   \\bullet\\ \\text{to }\\mathtt{that}:\\ +0.3\\\\
   \\bullet\\ \\text{to }\\mathtt{barked}:\\ -0.2\\\\
   \\bullet\\ \\text{to }\\mathtt{loudly}:\\ -0.1
@@ -979,9 +968,9 @@ $$
   
   \\bullet\\ w(\\mathtt{The})=0.04,\\\\
   \\bullet\\ w(\\mathtt{dogs})=0.78,\\\\
-  \\bullet\\ w(\\mathtt{that})=0.10,\\\\
-  \\bullet\\ w(\\mathtt{barked})=0.04,\\\\
-  \\bullet\\ w(\\mathtt{loudly})=0.04
+  \\bullet\\ w(\\mathtt{that})=0.08,\\\\
+  \\bullet\\ w(\\mathtt{barked})=0.05,\\\\
+  \\bullet\\ w(\\mathtt{loudly})=0.05
   
   $$
 
@@ -992,15 +981,15 @@ $$
   
   \\text{Weighted average produces the head's output at position }5\\text{:} \\\\[4pt]
   
-  \\mathbf{y}_6
+  \\mathbf{y}_5
   =0.04\\cdot\\begin{bmatrix}0,0\\end{bmatrix}
   +0.78\\cdot\\begin{bmatrix}+1.0,+0.9\\end{bmatrix}
-  +0.10\\cdot\\begin{bmatrix}0,0.1\\end{bmatrix}
-  +0.04\\cdot\\begin{bmatrix}0,0\\end{bmatrix}
-  +0.04\\cdot\\begin{bmatrix}0,0\\end{bmatrix}
+  +0.08\\cdot\\begin{bmatrix}0,0.1\\end{bmatrix}
+  +0.05\\cdot\\begin{bmatrix}0,0\\end{bmatrix}
+  +0.05\\cdot\\begin{bmatrix}0,0\\end{bmatrix}
   \\\\[4pt]
 
-  \\mathbf{y}_6\\ \\approx\\ \\begin{bmatrix}+0.78,+0.71\\end{bmatrix}\\\\[4pt]
+  \\mathbf{y}_5\\ \\approx\\ \\begin{bmatrix}+0.78,+0.71\\end{bmatrix}\\\\[4pt]
   
   \\textbf{Interpretation:} \\text{ position 5 now carries a strong plural + subject cue.} \\\\[4pt]
   $$
@@ -1029,7 +1018,7 @@ $$
   \\text{Dot products from this head's contribution:} \\\\[4pt]
   
   \\bullet\\ \\operatorname{logit}(\\mathtt{were})\\approx 1.4\\cdot 0.78 + 0.5\\cdot 0.71 \\approx +1.45\\\\
-  \\bullet\\ \\operatorname{logit}(\\mathtt{was})\\approx (-1.1)\\cdot 0.78 + 0.2\\cdot 0.71 \\approx -0.66\\\\[4pt]
+  \\bullet\\ \\operatorname{logit}(\\mathtt{was})\\approx (-1.1)\\cdot 0.78 + 0.2\\cdot 0.71 \\approx -0.72\\\\[4pt]
   
   \\text{After combining with other heads/layers and softmax over the vocab, }\\mathtt{were}\\text{ gets much higher probability than }\\mathtt{was}\\text{.}
   $$
@@ -1067,19 +1056,19 @@ $$
 
   $$
   \\textbf{B) Queries/Keys decide who to listen to (for the next-token slot):}\\\\[4pt]
-  \\text{Potion 5's query compares against keys of position 1 to 5. As before, it strongly matches the subject:}\\\\[4pt]
+  \\text{Position 5's query compares against keys of position 1 to 5. As before, it strongly matches the subject:}\\\\[4pt]
   \\bullet\\ \\text{to }\\mathtt{The}: -0.5\\\\
-  \\bullet\\ \\text{to }\\mathtt{dog}: +2.2\\ \\leftarrow\\ \\text{"Strong match"}\\\\
+  \\bullet\\ \\text{to }\\mathtt{dog}: +2.57\\ \\leftarrow\\ \\text{"Strong match"}\\\\
   \\bullet\\ \\text{to }\\mathtt{that}: +0.3\\\\
   \\bullet\\ \\text{to }\\mathtt{barked}: -0.2\\\\
   \\bullet\\ \\text{to }\\mathtt{loudly}: -0.1\\\\[4pt]
   \\text{Softmax }\\to\\ \\text{attention weights: }\\quad
-  w(\\mathtt{The})=0.04,\\ \\ w(\\mathtt{dog})=0.78,\\ \\ w(\\mathtt{that})=0.10,\\ \\ w(\\mathtt{barked})=0.04,\\ \\ w(\\mathtt{loudly})=0.04
+  w(\\mathtt{The})=0.04,\\ \\ w(\\mathtt{dog})=0.78,\\ \\ w(\\mathtt{that})=0.08,\\ \\ w(\\mathtt{barked})=0.05,\\ \\ w(\\mathtt{loudly})=0.05
   $$
 
   $$
   \\textbf{C) Mix values with those weights (att @ v):}\\\\[4pt]
-  \\mathbf{y}\\ \\approx\\ 0.78\\,\\cdot\\,\\begin{bmatrix}-1.0, +0.9\\end{bmatrix}\\ +\\ 0.10\\,\\cdot\\,\\begin{bmatrix}0.0, 0.1\\end{bmatrix}\\ \\approx\\ \\boxed{\\begin{bmatrix}-0.78, +0.71\\end{bmatrix}}\\\\[4pt]
+  \\mathbf{y}\\ \\approx\\ 0.78\\,\\cdot\\,\\begin{bmatrix}-1.0, +0.9\\end{bmatrix}\\ +\\ 0.08\\,\\cdot\\,\\begin{bmatrix}0.0, 0.1\\end{bmatrix}\\ \\approx\\ \\boxed{\\begin{bmatrix}-0.78, +0.71\\end{bmatrix}}\\\\[4pt]
   \\text{Interpretation: strong singular signal plus subject cue at position 5.}
   $$
 
@@ -1696,7 +1685,7 @@ y_c^{LS} = 1 - \\epsilon,\\; \\;\\; y_{j\\neq c}^{LS} = \\frac{\\epsilon}{C-1} \
 $$
 Then, even if $p \\approx [1,0, \\ldots]$, we get
 $$
-\\triangledown_z L = p - y^{LS} \\approx [\\epsilon, \\frac{\\epsilon}{C-1}, \\ldots]
+\\triangledown_z L = p - y^{LS} \\approx [\\epsilon, -\\frac{\\epsilon}{C-1}, \\ldots]
 $$
 which is non-zero. So logits still receive a useful updates. Intuitively, label smoothing reduces overconfidence by nudging the top logit 
 down a bit and pushing up the others slightly.
@@ -1933,6 +1922,12 @@ $$\\href{https://arxiv.org/pdf/1706.04599}{\\texttt{On Calibration of Modern Neu
 
   &nbsp;
 
+  $\\textbf{Caveat about this toy setup: }$ with $m = 2$ the LayerNorm output is always $\\pm[1, -1]$ (constant up to sign), so its Jacobian is zero for $\\textit{every}$ input, not only here.
+  The exact zero is an artifact of choosing $m = 2$. At realistic widths the Jacobian is not zero; the real issue is that the $\\frac{1}{\\sigma}$ factor
+  and the projection are applied to the whole stream at every layer, so their product across depth can shrink (or grow) the gradient.
+
+  &nbsp;
+
   In pre-norm, you'd compute $y = x + f(LN(x))$. The sublayer always sees unit-scale inputs, and the LN Jacobian is applied before the residual add.
   So there's always a "gradient highway". Even if the residual branch's Jacobian goes to zero, the "gradient highway" still carries gradient through.
   
@@ -2000,7 +1995,6 @@ $$\\href{https://arxiv.org/pdf/1706.04599}{\\texttt{On Calibration of Modern Neu
     md: `
   In this practice, we'll first see an example that under Post-normwithout scaling, the gradient vanishes with depth.
   Then we'll add scaling and show that the gradient does not vanish with depth.
-  Finally we'll see an example of even without scaling, gradient still doesn't vanish with Pre-norm.
   
   &nbsp;
 
@@ -2267,7 +2261,7 @@ $$\\href{https://arxiv.org/pdf/1706.04599}{\\texttt{On Calibration of Modern Neu
   y^\\top w = y^\\top z - \\frac{1}{m} \\underbrace{y^\\top \\mathbf{1}}_{=0} \\mathbf{1}^\\top z - \\frac{1}{m} \\underbrace{y^\\top y}_{=m} y^\\top z = 0
   $$
 
-  Then $w = Pz \\in S$. So $Range(P) \\in S$.
+  Then $w = Pz \\in S$. So $Range(P) \\subseteq S$.
 
   &nbsp;
 
@@ -2292,7 +2286,7 @@ $$\\href{https://arxiv.org/pdf/1706.04599}{\\texttt{On Calibration of Modern Neu
 
   &nbsp;
 
-  $\\bullet \\ $ We showed $Range(P) \\in S$ $\\textbf{from 1)}$ and $Pz = z$ for any $z \\in S \\textbf{ from 2)}$. Hence $Range(P) = S$ and $P$ acts as identity on $S$.
+  $\\bullet \\ $ We showed $Range(P) \\subseteq S$ $\\textbf{from 1)}$ and $Pz = z$ for any $z \\in S \\textbf{ from 2)}$. Hence $Range(P) = S$ and $P$ acts as identity on $S$.
 
   &nbsp;
 
