@@ -77,203 +77,267 @@ export const INFO = {
   tokenizer_notes: {
     title: "Tokenizer (BPE for GPT-2)",
     md: `
-$\\text{This line of code returns the GPT-2's byte-level BPE (BPE) tokenizer (vocab size 50257, includes the special token}$
-$\\texttt{<|endoftext|>}\\text{ with id 50256).}\\\\$
-$$\\text{It contains the byte}\\leftrightarrow\\text{\\href{#info:gpt2_byte_unicode_map_notes}{\\text{unicode map}}, \\href{#info:gpt2_merge_ranks_notes}{\\text{GPT-2 merge ranks}}, \\href{#info:regex_pre_tokenizer_notes}{\\text{regex pre-tokenizer}}, and special tokens.}\\\\[10pt]$$
+This line of code returns GPT-2's **byte-level BPE tokenizer** (vocab size **50257**, includes the special token \`<|endoftext|>\` with id **50256**).
 
-$$\\textbf{How tokenization works}\\\\[4pt]$$
-$$
-1)\\ \\textbf{Byte encoding: }\\text{Encode the input text as UTF-8 bytes (case and whitespace are preserved).} \\\\
-\\text{Map each byte to a safe Unicode symbol via the byte↔unicode table so every byte is representable.}\\\\[4pt]
-\\text{Example:}\\\\[4pt]
-\\text{" café"} \\\\[2pt]
-\\rightarrow\\; \\text{Bytes: }[\\mathtt{0x20},\\ \\mathtt{0x63},\\ \\mathtt{0x61},\\ \\mathtt{0x66},\\ \\mathtt{0xC3},\\ \\mathtt{0xA9}] \\ \\text{(space and accents preserved).}\\\\[2pt]
-\\rightarrow\\; \\text{Unicode: }[\\mathtt{U+0120}\\ \\text{'Ġ'},\\ \\mathtt{U+0063}\\ \\text{'c'},\\ \\mathtt{U+0061}\\ \\text{'a'},\\ \\mathtt{U+0066}\\ \\text{'f'},\\ \\mathtt{U+00C3}\\ \\text{'Ã'},\\ \\mathtt{U+00A9}\\ \\text{'©'}\\ ] \\\\[2pt]
-\\rightarrow\\; \\text{the string "ĠcafÃ©".}\\\\[4pt]
-\\href{#info:gpt2_byte_unicode_map_notes}{\\text{Deep dive into byte-unicode map}}
-$$
+It contains the byte↔[unicode map](#info:gpt2_byte_unicode_map_notes), [GPT-2 merge ranks](#info:gpt2_merge_ranks_notes), [regex pre-tokenizer](#info:regex_pre_tokenizer_notes), and special tokens.
 
-$$
-2)\\ \\textbf{Pre-tokenize: } \\text{Split the text into pieces with GPT-2's regex (separates runs of letters, digits, punctuation,} \\\\[2pt]
-\\text{leading spaces, etc.).}\\\\[4pt]
-\\text{Example:}\\\\[4pt]
-\\text{"Hello, world!" → pieces: ["Hello", ",", "⎵world", "!"] (⎵ = leading space).}\\\\[4pt]
-\\text{"2025-09-19" → ["2025", "-", "09", "-", "19"].}\\\\[4pt]
-\\href{#info:regex_pre_tokenizer_notes}{\\text{Deep dive into regex pre-tokenizer}}
-$$
+## How tokenization works
 
-$$
-3)\\ \\textbf{BPE merges: } \\text{For each piece, iteratively merge symbol pairs using GPT-2's merge-ranks until no more merges apply,} \\\\
-\\text{yielding subword units.}\\\\[10pt]
-$$
+### 1 · Pre-tokenize
 
-$$
-\\textbf{Notes: } \\text{Because it's byte-level, every input string is tokenizable without "unknown" tokens, and the original}\\\\[2pt]
-\\text{spacing/casing is maintained.}\\\\[4pt]
-$$
+Split the raw text into pieces with GPT-2's regex (separates runs of letters, digits, punctuation, leading spaces, etc.).
 
-$$\\textbf{References:}\\\\[4pt]$$
-$$\\textbf{1. Primary source (architecture + input representation):}$$
-GPT-2 technical report. It spells out byte-level BPE, the motivation for byte-level processing, and the expanded vocab (50,257). See §2.2 "Input Representation" and Table 2.
-$$\\href{https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf?utm_source=chatgpt.com}{\\texttt{GPT-2 Technical Report}}$$
+**Example** (each box is one piece; ⎵ marks a space character)
 
-$$\\textbf{2. Tokenizer implementation:}$$
-OpenAI's tiktoken. Clear, practical reference for GPT-2's byte-level BPE (lossless, reversible), and how bytes ↔ tokens map is implemented.
-$$\\href{https://github.com/openai/tiktoken}{\\texttt{tiktoken}}$$
+- \`Hello, world!\` → \`⟦Hello⟧⟦,⟧⟦⎵world⟧⟦!⟧\`
+- \`2025-09-19\` → \`⟦2025⟧⟦-⟧⟦09⟧⟦-⟧⟦19⟧\`
 
-$$\\textbf{3. Foundational BPE paper (why subword/byte-level):}$$
-Sennrich et al. 2016 "Neural Machine Translation of Rare Words with Subword Units." Not GPT-2-specific, but it's the classic reference behind subword/BPE vocabularies GPT-2 builds embeddings over.
-$$\\href{https://aclanthology.org/P16-1162/?utm_source=chatgpt.com}{\\texttt{Neural Machine Translation of Rare Words with Subword Units}}$$
+[Deep dive into regex pre-tokenizer →](#info:regex_pre_tokenizer_notes)
 
-$$\\textbf{4. Let's build the GPT Tokenizer:}$$
-Karpathy's video on GPT Tokenizer. Practical guides on GPT-2's byte-level BPE (from 1430s).
-$$\\href{https://www.youtube.com/watch?v=zduSFxRajkE&t=1430s}{\\texttt{BPE - Let's build the GPT Tokenizer}}$$
+### 2 · Byte encoding
 
-$$\\textbf{5. Hands-on/educational BPE references:}$$
-Karpathy's minBPE (minimal byte-level BPE)
-$$\\href{https://github.com/karpathy/minbpe?utm_source=chatgpt.com}{\\texttt{minbpe}}$$
+Encode each piece as UTF-8 bytes (case and whitespace are preserved). Map each byte to a safe Unicode symbol via the byte↔unicode table so every byte is representable.
 
-$$\\textbf{6. Empirical analysis of GPT-2 embeddings:}$$
-Interpretability deep-dive into GPT-2's embedding weights (distributional properties, relation to positions). Advanced exploration inside wte.
-$$\\href{https://www.alignmentforum.org/posts/BMghmAxYxeSdAteDc/an-exploration-of-gpt-2-s-embedding-weights?utm_source=chatgpt.com}{\\texttt{An exploration of GPT-2's embedding weights}}$$
+**Example 1** (the pieces from step 1)
+
+- \`⟦Hello⟧⟦,⟧⟦⎵world⟧⟦!⟧\` → \`⟦Hello⟧⟦,⟧⟦Ġworld⟧⟦!⟧\`
+- Inside \`⎵world\`: bytes \`[0x20, 0x77, 0x6F, 0x72, 0x6C, 0x64]\` → \`Ġ w o r l d\`
+- Only the space byte \`0x20\` changes (to \`Ġ\`); ASCII letters and punctuation map to themselves.
+
+**Example 2** (a non-ASCII character): the piece \`⎵café\` (from the text \`I love café\`)
+
+- Bytes: \`[0x20, 0x63, 0x61, 0x66, 0xC3, 0xA9]\` (space and accents preserved).
+- Unicode: \`U+0120 Ġ\` · \`U+0063 c\` · \`U+0061 a\` · \`U+0066 f\` · \`U+00C3 Ã\` · \`U+00A9 ©\`
+- The string \`ĠcafÃ©\`.
+
+> **Order matters:** the regex runs on the raw text first, because the stand-in \`Ġ\` counts as a letter and \`HelloĠworld\` would no longer split at the space.
+
+[Deep dive into byte-unicode map →](#info:gpt2_byte_unicode_map_notes)
+
+### 3 · BPE merges
+
+For each piece, iteratively merge symbol pairs using GPT-2's [merge ranks](#info:gpt2_merge_ranks_notes) until no more merges apply, yielding subword units.
+
+### 4 · Look up IDs
+
+Each final subword is looked up in the vocabulary (\`encoder.json\`) to get its token id.
+
+- \`⟦Hello⟧⟦,⟧⟦Ġworld⟧⟦!⟧\` → \`[15496, 11, 995, 0]\`
+- Each of these pieces is already a whole token, so no splitting happens; \`!\` is id 0 because it is the first printable byte.
+
+> **Notes:** Because it's byte-level, every input string is tokenizable without "unknown" tokens, and the original spacing/casing is maintained.
+
+## Recent developments: how tokenizers have changed since GPT-2
+
+BPE is still the mainstream approach today. What has changed most is the vocabulary size:
+
+- GPT-2: ~50K tokens
+- GPT-4 (\`cl100k_base\`): ~100K
+- GPT-4o (\`o200k_base\`): ~200K
+- Llama 3: ~128K
+
+With a larger vocabulary, the same text splits into fewer tokens, so generation is faster, and non-English languages such as Chinese are handled better.
+The cost is a larger embedding table and output layer: both have shape $(V, n\\_embd)$, so they gain one row per token as $V$ grows, while the vector size $n\\_embd$ stays the same.
+
+## References
+
+1. **Primary source (architecture + input representation)**
+
+   GPT-2 technical report. It spells out byte-level BPE, the motivation for byte-level processing, and the expanded vocab (50,257). See §2.2 "Input Representation" and Table 2.
+
+   [GPT-2 Technical Report ↗](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf)
+
+2. **Original GPT-2 BPE tokenizer source code**
+
+   OpenAI's encoder.py, about 120 lines. It holds all the steps above: \`bytes_to_unicode()\` (the byte↔unicode map), the regex pattern \`self.pat\` (pre-tokenize), \`bpe()\` (merges by rank), and \`encode()\` / \`decode()\`. The vocab (\`encoder.json\`) and merge list (\`vocab.bpe\`) it loads are fetched by \`download_model.py\`.
+
+   [openai/gpt-2 encoder.py ↗](https://github.com/openai/gpt-2/blob/master/src/encoder.py)
+
+3. **Tokenizer implementation**
+
+   OpenAI's tiktoken. Clear, practical reference for GPT-2's byte-level BPE (lossless, reversible), and how bytes ↔ tokens map is implemented.
+
+   [tiktoken ↗](https://github.com/openai/tiktoken)
+
+4. **Foundational BPE paper (why subword/byte-level)**
+
+   Sennrich et al. 2016 "Neural Machine Translation of Rare Words with Subword Units." Not GPT-2-specific, but it's the classic reference behind subword/BPE vocabularies GPT-2 builds embeddings over.
+
+   [Neural Machine Translation of Rare Words with Subword Units ↗](https://aclanthology.org/P16-1162/)
+
+5. **Let's build the GPT Tokenizer**
+
+   Karpathy's video on GPT Tokenizer. Practical guides on GPT-2's byte-level BPE (from 1430s).
+
+   [BPE - Let's build the GPT Tokenizer ↗](https://www.youtube.com/watch?v=zduSFxRajkE&t=1430s)
+
+6. **Hands-on/educational BPE references**
+
+   Karpathy's minBPE (minimal byte-level BPE)
+
+   [minbpe ↗](https://github.com/karpathy/minbpe)
+
+7. **Empirical analysis of GPT-2 embeddings**
+
+   Interpretability deep-dive into GPT-2's embedding weights (distributional properties, relation to positions). Advanced exploration inside wte.
+
+   [An exploration of GPT-2's embedding weights ↗](https://www.alignmentforum.org/posts/BMghmAxYxeSdAteDc/an-exploration-of-gpt-2-s-embedding-weights)
+
     `,
   },
 
   gpt2_byte_unicode_map_notes: {
     title: "GPT-2 byte-unicode map",
     md: `
-$$\\textbf{What it is}\\\\[2pt]$$
-$$
-\\text{A fixed, 1-to-1 mapping between the 256 possible bytes (0-255) and 256 printable Unicode code points.}\\\\[4pt]
-\\textbf{byte }\\to\\ \\textbf{unicode ("byte encoder"):}\\ \\text{ turns each raw byte into a single visible Unicode character.}\\\\
-\\textbf{unicode }\\to\\ \\textbf{byte ("byte decoder"):}\\ \\text{ the exact inverse, so it's perfectly reversible.}\\\\[12pt]
-$$
-$$\\textbf{Why it exists:}\\\\[4pt]$$
-$$
-\\text{Classical BPE operates on "characters." GPT-2, however, is byte-level: it wants to handle any byte sequence}\\\\
-\\text{(emoji, accents, binary-ish bytes, etc.) losslessly. Many bytes are control/whitespace and would confuse regex}\\\\
-\\text{splitting or get normalized away. The map solves this by:}\\\\[4pt]
-1. \\text{Giving every byte a safe, visible stand-in,}\\\\[4pt]
-2. \\text{Avoiding collisions with whitespace/control characters,}\\\\[4pt]
-3. \\text{Making regex pre-tokenization and BPE run on a "printable" string while staying reversible.}\\\\[12pt]
-$$
-$$\\textbf{How it's constructed (conceptually)}\\\\[2pt]$$
-$$
-\\bullet\\space \\text{Bytes that are already "nice printable" (e.g., ASCII and many Latin-1 characters) are mapped to themselves}\\\\
-\\text{(same code point).}\\\\
-\\bullet\\space \\text{The remaining bytes (e.g., space, tabs, newlines, etc.) are mapped to } \\textbf{distinct printable code points}\\\\
-\\text{in higher Unicode ranges, ensuring they're visible and not whitespace.}\\\\
-\\space\\space\\space\\text{Example:}\\\\[4pt]
-\\space\\space\\space\\bullet\\space\\text{Byte 0x41 ('A')}\\rightarrow\\text{is mapped to standard-'A' (same character)}\\\\[2pt]
-\\space\\space\\space\\bullet\\space\\text{Byte 0x20 (space)}\\rightarrow\\text{stand-in "Ġ" (U+0120) — that's why " world" encoded as Ġworld with a leading space.}\\\\[2pt]
-\\space\\space\\space\\bullet\\space\\text{Bytes 0xC3 0xA9 (é)}\\rightarrow\\text{stand-ins something like Ã © (two Unicode chars, one per byte)}\\\\[2pt]
-\\space\\space\\space\\bullet\\space\\text{Bytes 0xE2 0x80 0x94 (-)(em dash)}\\rightarrow\\text{three stand-ins (one per byte)}\\\\[6pt]
-\\text{This yields two tables:}\\\\[4pt]
-\\mathtt{byte\\_encoder: \\{0..255 \\to one-char\\ unicode\\ strings\\}}\\\\
-\\mathtt{byte\\_decoder: \\{that\\ unicode\\ char \\to original\\ byte\\}}\\\\[12pt]
-\\text{In GPT-2's map, the following bytes map to themselves: }\\\\[4pt]
-\\text{33\\text{-}126 } \\; (\\text{printable ASCII excluding space}) \\; \\text{and } 161\\text{-}172,\\; 174\\text{-}255\\; (\\text{printable Latin-1}).\\\\[6pt]
-\\text{Bytes outside those ranges (e.g., control chars }0\\text{-}31,\\; \\text{space }32,\\; 127\\text{-}160,\\; \\text{and }173) \\text{ get special stand-ins (e.g., }\\\\
-\\mathrm{U+0100},\\ \\mathrm{U+0102}, \\ldots\\text{).}\\text{ That's why space (0x20) becomes } \\texttt{Ġ}\\text{.}\\\\[10pt]
-\\textbf{Emoji example (UTF-8: F0 9F 98 8A)}\\\\[4pt]
-\\space\\space\\space\\bullet\\space\\texttt{0xF0} \\; (=240) \\; \\text{is in the range 174 - 255} \\Rightarrow \\text{ maps to itself (prints as } \\texttt{ð} \\text{ in Latin-1).}\\\\[4pt]
-\\space\\space\\space\\bullet\\space\\texttt{0x9F}\\; (159),\\; \\texttt{0x98}\\; (152),\\; \\texttt{0x8A}\\; (138) \\; \\text{are not in the printable sets } \\Rightarrow \\text{ each maps to a printable stand-in}\\\\
-\\space\\space\\space\\text{Latin-Extended characters).}\\\\[6pt]
-\\space\\space\\space\\text{So you get a mix: one "self" character plus three stand-ins — still one visible char per byte, fully reversible.}\\\\[10pt]
-$$
-$$\\textbf{How it's used (encode path)}\\\\[2pt]$$
-$$
-1.\\space\\text{Text }\\to\\ \\text{ UTF-8 bytes.}\\\\
-2.\\space\\text{Map each byte } b \\text{ to its stand-in Unicode char } u = \\mathtt{byte\\_encoder}[b].\\\\
-\\space\\space\\space\\space\\bullet\\space\\text{Example: " Hello" (leading space) }\\to\\ \\text{ bytes [0x20, 0x48, 0x65, 0x6C, 0x6C, 0x6F]}\\\\
-\\quad \\to\\ \\text{ mapped string "ĠHello" (space became "Ġ"; ASCII letters map to themselves).}\\\\
-\\space\\space\\space\\space\\bullet\\space\\text{Non-ASCII (e.g., é }\\to\\ \\text{ bytes C3 A9) becomes two mapped chars, one for each byte; both are visible stand-ins.}\\\\
-3.\\space\\text{Run regex pre-tokenizer and BPE merges on this printable string.}\\\\[12pt]
-$$
-$$\\textbf{Decoding (exact inverse)}\\\\[2pt]$$
-$$
-1.\\space\\text{Take the merged "printable" token pieces }\\to\\ \\text{ concatenate to a string of mapped chars.}\\\\[4pt]
-2.\\space\\text{Map each char back to a byte via } \\mathtt{byte\\_decoder}.\\\\[4pt]
-3.\\space\\text{UTF-8 decode the bytes}\\to\\text{original text.}\\\\[4pt]
-\\text{This guarantees lossless round-trip: } \\mathtt{decode(encode(s)) == s}
-$$
+## What it is
+
+A fixed, 1-to-1 mapping between the 256 possible bytes (0–255) and 256 printable Unicode code points.
+
+- **byte → unicode ("byte encoder"):** turns each raw byte into a single visible Unicode character.
+- **unicode → byte ("byte decoder"):** the exact inverse, so it's perfectly reversible.
+
+## Why it exists
+
+Classical BPE operates on "characters." GPT-2, however, is byte-level: it wants to handle any byte sequence (emoji, accents, binary-ish bytes, etc.) losslessly. But the BPE code works on strings, and its merge list (\`vocab.bpe\`) writes each pair as two symbols separated by a space, e.g. \`Ġ t\`. A raw space, newline or control byte inside a symbol would break that format. The map solves this by:
+
+1. Giving every byte a safe, visible stand-in,
+2. Avoiding collisions with whitespace/control characters,
+3. Letting BPE run on a printable string while staying exactly reversible.
+
+> The regex pre-tokenizer runs earlier, on the raw text, so it never sees these stand-ins.
+
+## How it's constructed (conceptually)
+
+- Bytes that are already "nice printable" (e.g., ASCII and many Latin-1 characters) are mapped to themselves (same code point).
+- The remaining bytes (e.g., space, tabs, newlines, etc.) are mapped to **distinct printable code points** starting at U+0100 (256 + n, in byte order), ensuring they're visible and not whitespace.
+
+**Example**
+
+- Byte \`0x41\` (\`A\`) → is mapped to standard \`A\` (same character)
+- Byte \`0x20\` (space) → stand-in \`Ġ\` (U+0120), which is why the piece \`⟦⎵world⟧\` is shown as \`⟦Ġworld⟧\`.
+- Bytes \`0xC3 0xA9\` (é) → \`Ã©\` (both bytes are printable Latin-1, so each maps to itself: two chars, one per byte)
+- Bytes \`0xE2 0x80 0x94\` (em dash —) → \`âĢĶ\` (\`0xE2\` maps to itself as \`â\`; \`0x80\` → \`Ģ\`, \`0x94\` → \`Ķ\`)
+
+This yields two tables:
+
+- \`byte_encoder: {0..255 → one-char unicode strings}\`
+- \`byte_decoder: {that unicode char → original byte}\`
+
+**Which bytes map to themselves?** In GPT-2's map: **33–126** (printable ASCII excluding space) and **161–172, 174–255** (printable Latin-1).
+
+Bytes outside those ranges (e.g., control chars 0–31, space 32, 127–160, and 173) get special stand-ins (\`U+0100\`, \`U+0101\`, …, \`U+0143\`): 68 bytes in total. Space is the 33rd of them (n = 32), so it becomes U+0120 \`Ġ\`.
+
+**Emoji example** (UTF-8: \`F0 9F 98 8A\`)
+
+- \`0xF0\` (= 240) is in the range 174–255 ⇒ maps to itself (prints as \`ð\` in Latin-1).
+- \`0x9F\` (159), \`0x98\` (152), \`0x8A\` (138) are not in the printable sets ⇒ stand-ins \`Ł\`, \`ĺ\`, \`Ĭ\` (Latin Extended-A characters).
+- So 😊 becomes the string \`ðŁĺĬ\`: one self-mapped character plus three stand-ins, one visible char per byte, fully reversible.
+
+## How it's used (encode path)
+
+1. Split the raw text into chunks with the regex pre-tokenizer.
+2. Encode each chunk as UTF-8 bytes.
+3. Map each byte \`b\` to its stand-in Unicode char \`u = byte_encoder[b]\`.
+   - Example: the chunk \`⟦⎵Hello⟧\` (leading space) → bytes \`[0x20, 0x48, 0x65, 0x6C, 0x6C, 0x6F]\` → mapped string \`ĠHello\` (space became \`Ġ\`; ASCII letters map to themselves).
+   - Non-ASCII (e.g., é → bytes \`C3 A9\`) becomes two mapped chars, one for each byte.
+4. Run BPE merges on each mapped chunk, then look up each resulting token's id.
+
+## Decoding (exact inverse)
+
+1. Look up each token id's string in the vocabulary → concatenate them into one string of mapped chars.
+2. Map each char back to a byte via \`byte_decoder\`.
+3. UTF-8 decode the bytes → original text.
+
+> This guarantees lossless round-trip: \`decode(encode(s)) == s\`
+
     `,
   },
 
   regex_pre_tokenizer_notes: {
     title: "Regex pre-tokenizer",
     md: `
-$$\\textbf{What it is:}$$
-$$
-\\text{A regular expression based splitter that chops the input text into chunks before BPE merging happens.}\\\\[4pt]
-\\text{BPE merges are then applied within each chunk only, never across chunk boundaries.}\\\\[10pt]
-$$
-$$\\textbf{Why it exists:}$$
-$$
-\\text{Speed \\& determinism — fewer candidate merges, stable behavior.}\\\\[4pt]
-\\text{Semantics — keeps leading spaces with the following token (so you get tokens like "}\\texttt{Ġworld}\\text{"),}\\\\
-\\text{groups letters together, groups numbers together, and groups punctuation/symbols together.}\\\\[4pt]
-\\text{Reversibility — pairs neatly with byte-level encoding for lossless round-trip.}\\\\[10pt]
-$$
-$$\\textbf{Rough pattern GPT-2 uses (conceptually):}$$
-$$
-\\text{contractions: }\\texttt{'s, 't, 're, 've, 'm, 'll, 'd}\\\\
-\\text{optional leading space + letters: }\\texttt{\\ ?\\textbackslash p\\{L\\}+}\\\\
-\\text{optional leading space + digits: }\\texttt{\\ ?\\textbackslash p\\{N\\}+}\\\\
-\\text{optional leading space + other symbols: }\\texttt{\\ ?[\\textasciicircum \\textbackslash s\\textbackslash p\\{L\\}\\textbackslash p\\{N\\}]+}\\\\
-\\text{whitespace runs (including end-of-string cases).}\\\\[10pt]
-$$
-$$\\textbf{How it affects BPE:}$$
-$$
-\\text{Start from bytes (byte-level BPE) }\\to\\ \\text{ apply the regex pre-tokenizer }\\to\\ \\text{ for each chunk, repeatedly}\\\\
-\\text{merge the lowest-rank adjacent pair until no more merges apply.}\\\\
-\\text{Merges do not cross chunk boundaries. That's why " world" (with its leading space) is a single chunk where merges}\\\\
-\\text{can happen internally, but it won't merge with the preceding token.}\\\\[10pt]
+## What it is
 
-\\textbf{Special tokens:}\\;\\text{handled separately (e.g., }\\texttt{<|endoftext|>}\\text{). They bypass normal splitting when allowed.}\\\\[10pt]
-$$
+A regular expression based splitter that chops the input text into chunks before BPE merging happens. BPE merges are then applied within each chunk only, never across chunk boundaries.
 
-$$\\textbf{Examples:}$$
-$$
-\\textbf{Letters grouped}\\\\[4pt]
-\\text{"Hello world"}\\ \\to\\ \\text{ chunks: ["Hello", " world"]}\\\\
-\\text{(letters stay together; the leading space sticks to the next chunk).}\\\\
-\\text{"AB12"}\\ \\to\\ \\text{ chunks: ["AB", "12"]}\\\\
-\\text{(letters as one chunk, digits as another).}\\\\[8pt]
-\\textbf{Numbers grouped}\\\\[4pt]
-\\text{"Room 1234"}\\ \\to\\ \\text{ chunks: ["Room", " 1234"]}\\\\
-\\text{"1,234.50"}\\ \\to\\ \\text{ chunks: ["1", ",", "234", ".", "50"]}\\\\
-\\text{(digits group, but punctuation like "," and "." are separate symbol chunks).}\\\\[8pt]
-\\textbf{Punctuation / symbols grouped}\\\\[4pt]
-\\text{"Hello, world!!"}\\ \\to\\ \\text{ chunks: ["Hello", ",", " world", "!!"]}\\\\
-\\text{(",", and the "!!" run are symbol chunks).}\\\\
-\\text{"Good-morning :) "}\\ \\to\\ \\text{ chunks: ["Good", "-", "morning", " :)", " "]}\\\\
-\\text{(" :)" is a single symbols chunk; trailing space can be its own whitespace chunk).}\\\\[8pt]
-\\textbf{Contractions handled specially}\\\\[4pt]
-\\text{"can't"}\\ \\to\\ \\text{ chunks: ["can", "'t"]}\\\\
-\\text{(the pre-tokenizer has specific rules for pieces like "'t", "'s", "'re", etc.).}\\\\[8pt]
-\\textbf{Non-ASCII symbols / emoji}\\\\[4pt]
-\\text{"Hi — ok 😊"}\\ \\to\\ \\text{ chunks: ["Hi", " —", " ok", " 😊"]}\\\\
-\\text{(em dash and emoji are symbols; each becomes its own symbol chunk with any leading space).}\\\\[10pt]
-$$
-$$\\textbf{Key idea}$$
-$$
-\\text{It first splits the UTF-8 bytes into chunks using a regex: letters together, digits together, and symbols together,}\\\\
-\\text{keeping any leading space with the next chunk. Then BPE merges run inside each chunk only—they don't cross}\\\\
-\\text{chunk boundaries.} \\\\[10pt]
-$$
-$$\\textbf{References:}\\\\[4pt]$$
-$$\\textbf{1. GPT-2 reference encoder (contains the exact regex):}$$
-OpenAI's original GPT-2 encoder.py, which defines the pre-tokenization pattern and the byte-unicode map.
-$$\\href{https://github.com/openai/gpt-2/blob/master/src/encoder.py}{\\texttt{openai/gpt-2 encoder.py}}$$
+## Why it exists
 
-$$\\textbf{2. GPT-2 technical report (input representation):}$$
-Radford et al., §2.2 "Input Representation" — explains why BPE is prevented from merging across character categories.
-$$\\href{https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf}{\\texttt{GPT-2 Technical Report}}$$
+- **Main reason (GPT-2 paper, §2.2)** — without it, BPE would merge across character types and waste vocabulary on variants like \`dog.\`, \`dog!\`, \`dog?\`. Splitting first keeps letters, digits and punctuation in separate chunks.
+- **Speed & determinism** — BPE runs on short chunks, so there are fewer candidate merges.
+- **Semantics** — keeps leading spaces with the following token (so you get tokens like \`Ġworld\`), groups letters together, groups numbers together, and groups punctuation/symbols together.
+- **Reversibility** — pairs neatly with byte-level encoding for lossless round-trip.
 
-$$\\textbf{3. tiktoken:}$$
-OpenAI's production tokenizer; its "gpt2" encoding uses the same pattern.
-$$\\href{https://github.com/openai/tiktoken}{\\texttt{tiktoken}}$$
+## Rough pattern GPT-2 uses (conceptually)
+
+In these patterns, ⎵ stands for a literal space character.
+
+- **contractions:** \`'s, 't, 're, 've, 'm, 'll, 'd\` (lowercase only: \`CAN'T\` → \`⟦CAN⟧⟦'⟧⟦T⟧\`)
+- **optional leading space + letters:** \`⎵?\\p{L}+\`
+- **optional leading space + digits:** \`⎵?\\p{N}+\`
+- **optional leading space + other symbols:** \`⎵?[^\\s\\p{L}\\p{N}]+\`
+- **whitespace:** \`\\s+(?!\\S)\` takes a run of spaces but leaves the last one for the next word; \`\\s+\` catches the rest.
+  - \`Hello⎵⎵⎵world\` → \`⟦Hello⟧⟦⎵⎵⟧⟦⎵world⟧\`
+
+## How it affects BPE
+
+Apply the regex pre-tokenizer to the raw text → convert each chunk to UTF-8 bytes and map them to stand-in characters (space → \`Ġ\`) → in each chunk, repeatedly merge the lowest-rank adjacent pair.
+
+> The regex must run before the byte mapping: \`Ġ\` counts as a letter, so \`HelloĠworld\` would not split.
+
+Merges do not cross chunk boundaries. That's why \`⟦⎵world⟧\` (with its leading space) is a single chunk where merges can happen internally, but it won't merge with the preceding token.
+
+**Special tokens:** the original \`encoder.py\` has no special handling: the text \`<|endoftext|>\` is split like any other text into 7 ordinary tokens. \`tiktoken\` maps it to the single id 50256 only if you pass it in \`allowed_special\` (by default it raises an error).
+
+## Examples
+
+Each box is one chunk; ⎵ marks a space character.
+
+### Letters grouped
+
+- \`Hello world\` → \`⟦Hello⟧⟦⎵world⟧\` — letters stay together; the leading space sticks to the next chunk.
+- \`AB12\` → \`⟦AB⟧⟦12⟧\` — letters as one chunk, digits as another.
+
+### Numbers grouped
+
+- \`Room 1234\` → \`⟦Room⟧⟦⎵1234⟧\`
+- \`1,234.50\` → \`⟦1⟧⟦,⟧⟦234⟧⟦.⟧⟦50⟧\` — digits group, but the comma and the period are separate symbol chunks.
+
+### Punctuation / symbols grouped
+
+- \`Hello, world!!\` → \`⟦Hello⟧⟦,⟧⟦⎵world⟧⟦!!⟧\` — the comma, and the run of two exclamation marks, are symbol chunks.
+- \`Good-morning :)⎵\` → \`⟦Good⟧⟦-⟧⟦morning⟧⟦⎵:)⟧⟦⎵⟧\` — the smiley and its leading space form one symbol chunk; the trailing space becomes its own whitespace chunk.
+
+### Contractions handled specially
+
+- \`can't\` → \`⟦can⟧⟦'t⟧\` — the pre-tokenizer has dedicated rules for \`'s, 't, 're, 've, 'm, 'll, 'd\`.
+
+### Non-ASCII symbols
+
+- \`Hi — ok ★\` → \`⟦Hi⟧⟦⎵—⟧⟦⎵ok⟧⟦⎵★⟧\` — the em dash and the star are non-ASCII symbols; each becomes its own chunk with its leading space.
+
+## Key idea
+
+> It first splits the raw text into chunks using a regex: letters together, digits together, and symbols together, keeping any leading space with the next chunk. Then BPE merges run inside each chunk only—they don't cross chunk boundaries.
+
+## References
+
+1. **GPT-2 reference encoder (contains the exact regex)**
+
+   OpenAI's original GPT-2 encoder.py, which defines the pre-tokenization pattern and the byte-unicode map.
+
+   [openai/gpt-2 encoder.py ↗](https://github.com/openai/gpt-2/blob/master/src/encoder.py)
+
+2. **GPT-2 technical report (input representation)**
+
+   Radford et al., §2.2 "Input Representation" — explains why BPE is prevented from merging across character categories.
+
+   [GPT-2 Technical Report ↗](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf)
+
+3. **tiktoken**
+
+   OpenAI's production tokenizer; its "gpt2" encoding uses the same pattern.
+
+   [tiktoken ↗](https://github.com/openai/tiktoken)
 
 `,
   },
@@ -283,7 +347,7 @@ $$\\href{https://github.com/openai/tiktoken}{\\texttt{tiktoken}}$$
     md: `
 $$
 \\textbf{Lossless round-trip:}\\\\[4pt]
-\\text{Lossless round-trip" means if you encode text into token IDs and then decode those IDs back to text,}\\\\[1pt]
+\\text{"Lossless round-trip" means if you encode text into token IDs and then decode those IDs back to text,}\\\\[1pt]
 \\text{you get exactly the same bytes you started with—nothing is altered or lost.}\\\\[6pt]
 \\text{Formally: }\\; \\mathtt{decode(encode(s)) = s}.\\\\[10pt]
 \\textbf{Why true for GPT-2 (byte-level BPE):}\\\\[4pt]
@@ -474,49 +538,54 @@ $$
   gpt2_merge_ranks_notes: {
     title: "GPT-2 merge ranks",
     md: `
-$$\\textbf{Byte-Pair Encoding (BPE) refresher:}$$
-$$
-\\text{Start from a sequence of basic symbols (for GPT-2, bytes). A BPE model has a list of symbol-pair merges}\\\\
-\\text{learned from a large corpus. The most frequent pair gets merge rank 0, the next gets rank 1, etc. This order is the}\\\\
-\\text{merge ranks.}\\\\[10pt]
-$$
-$$\\textbf{Why ranks matter:}$$
-$$
-\\text{During encoding, the tokenizer repeatedly looks at adjacent pairs and merges the pair with the lowest rank}\\\\
-\\text{number (highest priority) that appears in the list. It updates the sequence and repeats until no mergeable pairs}\\\\
-\\text{remain. The final merged chunks are your tokens.}\\\\[10pt]
-$$
-$$\\textbf{What }\\mathtt{tiktoken}\\textbf{ stores:}$$
-$$
-\\text{GPT-2's tokenizer ships with a mapping that effectively represents these ranks. In practice:}\\\\[4pt]
-\\bullet\\ \\text{Lower rank } \\Rightarrow \\text{ earlier (more frequent) merge rule } \\Rightarrow \\text{ applied before higher-rank rules.}\\\\[4pt]
-\\bullet\\ \\text{This makes tokenization deterministic and matches GPT-2's training.}\\\\[10pt]
-$$
-$$\\textbf{Relation to token IDs:}$$
-$$
-\\text{In GPT-2/}\\mathtt{tiktoken}\\text{, every final merged result that BPE learns becomes an entry in the GPT-2 vocabulary with}\\\\[2pt] 
-\\text{an integer token id. For normal tokens, tiktoken reuses the BPE rank as the token id. But special tokens,} \\\\[2pt]
-\\text{e.g. <|endoftext|>, are assigned separate ids like 50256 and don't follow the rank rule.} \\\\[2pt]
-\\text{So, in practice: If a merged string got rank 12345, then in GPT-2/tiktoken its token id is 12345 (unless it's a special token).} \\\\[4pt]
-$$
-$$\\textbf{Tiny toy example (made up):}$$
-$$
-\\text{Text: } \\mathtt{banana} \\;\\to\\; \\text{bytes} \\;\\to\\; \\text{initial symbols: } b\\ a\\ n\\ a\\ n\\ a\\\\[4pt]
-\\text{Suppose merges (with ranks):}\\\\[2pt]
-\\text{rank 0: } (a,n) \\to an\\\\[2pt]
-\\text{rank 1: } (an,a) \\to ana\\\\[2pt]
-\\text{rank 2: } (b,an) \\to ban\\\\[4pt]
-\\text{Encoding proceeds:}\\\\[2pt]
-\\text{Rank 0 } (a,n) \\text{ is the lowest-rank pair present; merge every occurrence } \\to\\ b\\ an\\ an\\ a\\\\[2pt]
-\\text{Pairs now: } (b,an)\\text{ rank 2},\\ (an,an)\\text{ no rule},\\ (an,a)\\text{ rank 1 } \\Rightarrow\\ b\\ an\\ ana\\\\[2pt]
-\\text{Pairs now: } (b,an)\\text{ rank 2},\\ (an,ana)\\text{ no rule } \\Rightarrow\\ ban\\ ana\\\\[2pt]
-\\text{No applicable merges remain } \\to\\ \\text{final tokens: [ban, ana].}\\\\[8pt]
-$$
-$$\\textbf{Space handling:}$$
-$$
-\\text{GPT-2 is byte-level. Space is part of the bytes and many tokens encode "space+word" as a single token}\\\\[2pt]
-\\text{(often shown with a leading \\texttt{Ġ} in visualizations). Those arise from specific merges and their ranks.}\\\\[8pt]
-$$
+## Byte-Pair Encoding (BPE) refresher
+
+Start from a sequence of basic symbols (for GPT-2, bytes). A BPE model has a list of symbol-pair merges learned from a large corpus, one at a time: the most frequent pair is merged first (rank 0), then the most frequent pair in the updated corpus (rank 1), and so on. GPT-2 learned 50,000 merges; its rank 0 is \`Ġ t\`.
+
+## Why ranks matter
+
+During encoding, the tokenizer repeatedly looks at adjacent pairs and merges the pair with the lowest rank number (highest priority) that appears in the list. It updates the sequence and repeats until no mergeable pairs remain. The final merged chunks are your tokens.
+
+## What \`tiktoken\` stores
+
+GPT-2's tokenizer ships with a mapping that effectively represents these ranks. In practice:
+
+- Lower rank ⇒ earlier (more frequent) merge rule ⇒ applied before higher-rank rules.
+- This makes tokenization deterministic and matches GPT-2's training.
+
+## Relation to token IDs
+
+Every merge creates one new vocabulary entry. GPT-2's 50,257 ids are laid out as:
+
+- **ids 0–255:** the 256 single bytes (printable bytes first, so \`!\` = 0);
+- **ids 256–50255:** the 50,000 merges, in rank order, so the result of merge rank $r$ has id $256 + r$;
+- **id 50256:** the special token \`<|endoftext|>\`.
+
+\`tiktoken\` stores these as a single table of token ranks, where a token's rank equals its id, and merges prefer the pair whose merged result has the lowest rank. That is the same order as above.
+
+## Tiny toy example (made up)
+
+Text: \`banana\` → bytes → initial symbols: \`⟦b⟧⟦a⟧⟦n⟧⟦a⟧⟦n⟧⟦a⟧\`
+
+Suppose merges (with ranks):
+
+- rank 0: \`(a, n) → an\`
+- rank 1: \`(an, a) → ana\`
+- rank 2: \`(b, an) → ban\`
+
+Encoding proceeds:
+
+1. Rank 0 \`(a, n)\` is the lowest-rank pair present; merge every occurrence → \`⟦b⟧⟦an⟧⟦an⟧⟦a⟧\`
+2. Pairs now: \`(b, an)\` rank 2, \`(an, an)\` no rule, \`(an, a)\` rank 1 ⇒ \`⟦b⟧⟦an⟧⟦ana⟧\`
+3. Pairs now: \`(b, an)\` rank 2, \`(an, ana)\` no rule ⇒ \`⟦ban⟧⟦ana⟧\`
+4. No applicable merges remain → final tokens: \`⟦ban⟧⟦ana⟧\`
+
+> The real GPT-2 tokenizer happens to give the same split: \`banana\` → \`[3820, 2271]\`.
+
+## Space handling
+
+GPT-2 is byte-level. Space is part of the bytes and many tokens encode "space+word" as a single token (often shown with a leading \`Ġ\` in visualizations). Those arise from specific merges and their ranks.
+
     `,
   },
 

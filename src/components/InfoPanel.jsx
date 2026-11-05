@@ -7,6 +7,25 @@ import "katex/dist/katex.min.css";
 import { useInfo } from "../context/InfoContext";
 import { INFO } from "../content/info";
 
+// Inline code written as `⟦Hello⟧⟦,⟧⟦⎵world⟧` renders as a row of boxed token chunks.
+function NoteCode({ children, className, ...props }) {
+  delete props.node; // react-markdown passes the AST node; keep it off the DOM
+  const text = Array.isArray(children) ? children.join("") : children;
+  if (!className && typeof text === "string" && text.startsWith("⟦") && text.endsWith("⟧")) {
+    const pieces = text.slice(1, -1).split("⟧⟦");
+    return (
+      <span className="chunk-row">
+        {pieces.map((p, i) => (
+          <span key={i} className="chunk">
+            {[...p].map((ch, j) => (ch === "⎵" ? <span key={j} className="chunk-space">⎵</span> : ch))}
+          </span>
+        ))}
+      </span>
+    );
+  }
+  return <code className={className} {...props}>{children}</code>;
+}
+
 export default function InfoPanel() {
   const { active, previous, close, open, back } = useInfo();
   const bodyRef = useRef(null);
@@ -110,6 +129,7 @@ export default function InfoPanel() {
         remarkPlugins={[remarkMath]}
         rehypePlugins={[[rehypeKatex, { trust: (ctx) => ctx.command === "\\href", strict: "ignore", fleqn: true }], rehypeSlug]}
         components={{
+          code: NoteCode,
           a: ({ href, children, ...props }) => {
             if (href && href.startsWith("#info:")) {
               const id = href.slice("#info:".length);

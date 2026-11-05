@@ -183,3 +183,94 @@ body {
 .note-body pre {
   border-radius: 10px;
 }
+/* The typography plugin wraps inline code in literal backticks; show a subtle chip instead. */
+.note-body :not(pre) > code::before,
+.note-body :not(pre) > code::after,
+.note-popup :not(pre) > code::before,
+.note-popup :not(pre) > code::after {
+  content: none;
+}
+.note-body :not(pre) > code,
+.note-popup :not(pre) > code {
+  background: #f1f5f9;
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-weight: 500;
+}
+/* JetBrains Mono ligatures would turn `<|endoftext|>` into arrows. */
+.note-body code,
+.note-popup code,
+.chunk {
+  font-variant-ligatures: none;
+  font-feature-settings: "calt" 0, "liga" 0;
+}
+
+/* Markdown-structured notes */
+.note-body h2 {
+  font-size: 1.05rem;
+  font-weight: 650;
+  color: #0f172a;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid #e2e8f0;
+  margin-top: 1.6em;
+}
+.note-body h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #3730a3;
+  margin-top: 1.4em;
+}
+.note-body li {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+}
+.note-body blockquote {
+  font-style: normal;
+  font-weight: 400;
+  color: #334155;
+  background: #f8fafc;
+  border-left: 3px solid #a5b4fc;
+  border-radius: 0 8px 8px 0;
+  padding: 0.5em 0.9em;
+  margin: 0.9em 0;
+  quotes: none;
+}
+.note-body blockquote p::before,
+.note-body blockquote p::after {
+  content: none;
+}
+.note-body blockquote p {
+  margin: 0;
+}
+.note-body ol > li > p:first-child {
+  margin-bottom: 0.15em;
+}
+.note-body ol > li {
+  margin-bottom: 0.9em;
+}
+
+/* Token chunks: `⟦Hello⟧⟦,⟧⟦⎵world⟧` in notes */
+.chunk-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  vertical-align: middle;
+}
+.chunk {
+  display: inline-block;
+  min-width: 1.4em;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  font-weight: 500;
+  line-height: 1.5;
+  color: #312e81;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 5px;
+  padding: 0 0.4em;
+  white-space: pre;
+}
+.chunk-space {
+  color: #818cf8;
+}
