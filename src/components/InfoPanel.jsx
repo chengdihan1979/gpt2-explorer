@@ -1,4 +1,4 @@
-import React, { useState, useRef, useLayoutEffect, useCallback } from "react";
+import React, { useState, useRef, useLayoutEffect, useCallback, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -8,7 +8,8 @@ import { useInfo } from "../context/InfoContext";
 import { INFO } from "../content/info";
 
 export default function InfoPanel() {
-  const { active, previous, close, open } = useInfo();
+  const { active, previous, close, open, back } = useInfo();
+  const bodyRef = useRef(null);
   const [hoverInfoId, setHoverInfoId] = useState(null);
   const [hoverPos, setHoverPos] = useState({ top: 0, left: 0 });
   const popupRef = useRef(null);
@@ -51,97 +52,60 @@ export default function InfoPanel() {
     window.addEventListener('resize', onResize);
     return () => { ro.disconnect(); window.removeEventListener('resize', onResize); };
   }, [recomputePopup, popupRef]);
+  // Esc closes the drawer (or the hover popup first, if one is open).
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (hoverInfoId) setHoverInfoId(null);
+      else close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, hoverInfoId, close]);
+
+  // Each new note starts at the top, and any hover popup from the previous note goes away.
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+    setHoverInfoId(null);
+  }, [active]);
+
   if (!active) return null;
 
   return (
-    <div className="mt-4 pt-3 border-t text-xs text-slate-700 prose prose-sm max-w-none">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-3">
-          {active === "weight_tying" && (
-            <button className="text-xs underline" onClick={() => open("embedding_tok")}>← Back</button>
-          )}
-          {active === "broadcasting" && (
-            <button className="text-xs underline" onClick={() => open("embedding_pos")}>← Back</button>
-          )}
-          {active === "positional_embeddings_example_notes" && (
-            <button className="text-xs underline" onClick={() => open("embedding_pos")}>← Back</button>
-          )}
-          {(active === "torch_ones_notes" || active === "torch_tril_notes" || active === "unsqueeze_notes") && (
-            <button className="text-xs underline" onClick={() => open("causal_mask_notes")}>← Back</button>
-          )}
-          {active === "contiguous_notes" && (
-            <button className="text-xs underline" onClick={() => open("reorder_merge_heads_notes")}>← Back</button>
-          )}
-          {(active === "lossless_round_trip_notes" || active === "gpt2_merge_ranks_notes" || active === "regex_pre_tokenizer_notes" || active === "gpt2_byte_unicode_map_notes") && (
-            <button className="text-xs underline" onClick={() => open("tokenizer_notes")}>← Back</button>
-          )}
-          {active === "lm_head_insights_notes" && (
-            <button className="text-xs underline" onClick={() => open("lm_head_notes")}>← Back</button>
-          )}
-          {active === "stabilize_training_notes" && (
-            <button className="text-xs underline" onClick={() => open("layernorm")}>← Back</button>
-          )}
-          {active === "improves_gradient_flow_notes" && (
-            <button className="text-xs underline" onClick={() => open("layernorm")}>← Back</button>
-          )}
-          {active === "post_norm_gradient_example_notes" && (
-            <button className="text-xs underline" onClick={() => open("layernorm")}>← Back</button>
-          )}
-          {active === "rmsnorm_gradient_example_notes" && (
-            <button className="text-xs underline" onClick={() => open("layernorm")}>← Back</button>
-          )}
-          {active === "post_norm_scaling_example_notes" && (
-            <button className="text-xs underline" onClick={() => open("attention_output_linear_notes")}>← Back</button>
-          )}
-          {active === "ln_jacobian_closed_form_proof_notes" && (
-            <button className="text-xs underline" onClick={() => open("post_norm_gradient_example_notes")}>← Back</button>
-          )}
-          {active === "ln_gradient_attenuation_upper_bound_proof_notes" && (
-            <button className="text-xs underline" onClick={() => open("post_norm_scaling_example_notes")}>← Back</button>
-          )}
-          {active === "orthogonal_projection_notes" && (
-            <button className="text-xs underline" onClick={() => open("ln_gradient_attenuation_upper_bound_proof_notes")}>← Back</button>
-          )}
-          {active === "stabilize_training_no_layernorm_backprop_notes" && (
-            <button className="text-xs underline" onClick={() => open("stabilize_training_notes")}>← Back</button>
-          )}
-          {(active === "prevents_vanishing_exploding_notes" || active === "gradient_notes") && (
-            <button className="text-xs underline" onClick={() => open("attn_residual_notes")}>← Back</button>
-          )}
-          {active === "mlp_prevents_vanishing_exploding_notes" && (
-            <button className="text-xs underline" onClick={() => open("mlp_residual_notes")}>← Back</button>
-          )}
-          {active === "mlp_dropout_notes" && previous === "resid_dropout_notes" && (
-            <button className="text-xs underline" onClick={() => open("resid_dropout_notes")}>← Back</button>
-          )}
-          {active === "label_smoothing_notes" && (
-            <button className="text-xs underline" onClick={() => open("stabilize_training_no_layernorm_backprop_notes")}>← Back</button>
-          )}
-          {active === "gradient_loss_to_logits_proof_notes" && (
-            <button className="text-xs underline" onClick={() => open("stabilize_training_no_layernorm_backprop_notes")}>← Back</button>
-          )}
-          {active === "sgd_notes" && (
-            <button className="text-xs underline" onClick={() => open("optim_adamw_notes")}>← Back</button>
-          )}
-          {active === "sgd_momentum_notes" && (
-            <button className="text-xs underline" onClick={() => open("optim_adamw_notes")}>← Back</button>
-          )}
-          {active === "adagrad_notes" && (
-            <button className="text-xs underline" onClick={() => open("optim_adamw_notes")}>← Back</button>
-          )}
-          {active === "rmsprop_notes" && (
-            <button className="text-xs underline" onClick={() => open("optim_adamw_notes")}>← Back</button>
-          )}
-          {active === "adam_notes" && (
-            <button className="text-xs underline" onClick={() => open("optim_adamw_notes")}>← Back</button>
-          )}
-          {active === "adamw_notes" && (
-            <button className="text-xs underline" onClick={() => open("optim_adamw_notes")}>← Back</button>
-          )}
-          <h3 className="font-medium my-0">{INFO[active]?.title ?? "Info"}</h3>
+    <aside
+      className="notes-drawer fixed inset-x-0 bottom-0 top-16 z-40 flex flex-col border-r border-slate-200 bg-white shadow-2xl lg:right-auto lg:w-1/2"
+      aria-label="Notes"
+    >
+      <header className="flex items-center gap-3 border-b border-slate-200 px-6 py-3">
+        {previous && (
+          <button
+            type="button"
+            onClick={back}
+            className="inline-flex max-w-[45%] items-center gap-1 truncate rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+            title={`Back to ${INFO[previous]?.title ?? "previous note"}`}
+          >
+            <span aria-hidden="true">←</span>
+            <span className="truncate">{INFO[previous]?.title ?? "Back"}</span>
+          </button>
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-600">Notes</p>
+          <h2 className="truncate text-base font-semibold text-slate-900">{INFO[active]?.title ?? "Info"}</h2>
         </div>
-        <button className="text-xs underline" onClick={close}>Close</button>
-      </div>
+        <button
+          type="button"
+          onClick={close}
+          className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+          aria-label="Close notes"
+          title="Close (Esc)"
+        >
+          <svg viewBox="0 0 20 20" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+            <path d="M5 5l10 10M15 5L5 15" />
+          </svg>
+        </button>
+      </header>
+      <div ref={bodyRef} className="note-body prose prose-slate prose-sm max-w-none flex-1 overflow-y-auto px-6 py-5">
       <ReactMarkdown
         remarkPlugins={[remarkMath]}
         rehypePlugins={[[rehypeKatex, { trust: (ctx) => ctx.command === "\\href", strict: "ignore", fleqn: true }], rehypeSlug]}
@@ -150,7 +114,7 @@ export default function InfoPanel() {
             if (href && href.startsWith("#info:")) {
               const id = href.slice("#info:".length);
               return (
-                <a href={href} onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (INFO[id]) open(id); }} className="underline cursor-pointer" {...props}>
+                <a href={href} onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (INFO[id]) open(id); }} className="note-link" {...props}>
                   {children}
                 </a>
               );
@@ -174,7 +138,7 @@ export default function InfoPanel() {
                     // In next frame, recompute with actual popup size
                     setTimeout(() => recomputePopup(), 0);
                   }}
-                  className="underline cursor-pointer"
+                  className="note-link"
                   {...props}
                 >
                   {children}
@@ -183,14 +147,14 @@ export default function InfoPanel() {
             }
             if (href === "#cdf") {
               return (
-                <a href={href} onClick={(e) => { e.preventDefault(); e.stopPropagation(); open("cdf"); }} className="underline cursor-pointer" {...props}>
+                <a href={href} onClick={(e) => { e.preventDefault(); e.stopPropagation(); open("cdf"); }} className="note-link" {...props}>
                   {children}
                 </a>
               );
             }
             const isExternal = /^https?:\/\//.test(href || "");
             return (
-              <a href={href} className="underline cursor-pointer" {...(isExternal ? { target: "_blank", rel: "noopener noreferrer" } : {})} {...props}>
+              <a href={href} className="note-link" {...(isExternal ? { target: "_blank", rel: "noopener noreferrer" } : {})} {...props}>
                 {children}
               </a>
             );
@@ -202,7 +166,7 @@ export default function InfoPanel() {
       {hoverInfoId && INFO[hoverInfoId] && (
         <div
           ref={popupRef}
-          className="fixed z-50 bg-white border rounded shadow-lg p-3 text-xs overflow-auto"
+          className="note-popup prose prose-slate prose-sm fixed z-50 overflow-auto rounded-xl border border-slate-200 bg-white p-4 shadow-xl"
           style={{ top: hoverPos.top, left: hoverPos.left, maxWidth: 720, maxHeight: '70vh', minWidth: 360 }}
           onClick={(e) => { e.stopPropagation(); }}
         >
@@ -214,6 +178,7 @@ export default function InfoPanel() {
           </ReactMarkdown>
         </div>
       )}
-    </div>
+      </div>
+    </aside>
   );
 }

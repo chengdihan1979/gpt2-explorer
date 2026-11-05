@@ -203,6 +203,106 @@ export function buildCodeHtml({ component, selectedId }) {
   // 9) Optimizer: make torch.optim.AdamW clickable to open notes
   html = html.replace(/torch\.optim\.AdamW\([^)]*\)/g, (m) => `<span data-action="open:optim_adamw_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
 
-  
-  return html;
+  // 10) Presentation: links get a class instead of inline styles, then Python syntax colors.
+  html = html.split('style="text-decoration: underline; cursor: pointer;"').join('class="code-link"');
+  return highlightPython(html);
+}
+
+const PY_KEYWORDS = new Set(
+  "False None True and as assert break class continue def del elif else except finally for from if import in is lambda not or pass raise return try while with yield".split(" ")
+);
+const PY_BUILTINS = new Set("int float len max min range print super str list dict tuple isinstance".split(" "));
+
+// Colors Python tokens in an HTML string that already contains our own tags (<mark>, link spans).
+// Tags are passed through untouched; only the text between them is tokenized, and comment/string
+// state carries across tags so a link inside a comment still renders as a comment.
+export function highlightPython(html) {
+  const state = { mode: null, quote: null, prevWord: "" };
+  return html
+    .split(/(<[^>]+>)/)
+    .map((part) => (part.startsWith("<") ? part : highlightText(part, state)))
+    .join("");
+}
+
+function wrap(cls, s) {
+  return s ? `<span class="tok-${cls}">${s}</span>` : "";
+}
+
+function highlightText(text, state) {
+  let out = "";
+  let i = 0;
+
+  // Scan a string literal starting at `from` (opening quote already consumed); returns end index.
+  const scanString = (from) => {
+    let j = from;
+    while (j < text.length && text[j] !== state.quote && text[j] !== "\n") j += text[j] === "\\" ? 2 : 1;
+    if (j < text.length && text[j] === state.quote) {
+      state.mode = null;
+      return j + 1;
+    }
+    if (text[j] === "\n") state.mode = null;
+    return j;
+  };
+
+  while (i < text.length) {
+    if (state.mode === "com") {
+      const nl = text.indexOf("\n", i);
+      const end = nl === -1 ? text.length : nl;
+      out += wrap("com", text.slice(i, end));
+      i = end;
+      if (nl !== -1) state.mode = null;
+      continue;
+    }
+    if (state.mode === "str") {
+      const end = scanString(i);
+      out += wrap("str", text.slice(i, end));
+      i = end;
+      continue;
+    }
+
+    const ch = text[i];
+    const rest = text.slice(i);
+    if (ch === "#") {
+      state.mode = "com";
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      state.mode = "str";
+      state.quote = ch;
+      const end = scanString(i + 1);
+      out += wrap("str", text.slice(i, end));
+      i = end;
+      continue;
+    }
+    if (ch === "&") {
+      const semi = text.indexOf(";", i);
+      const end = semi === -1 ? i + 1 : semi + 1;
+      out += text.slice(i, end);
+      i = end;
+      continue;
+    }
+    const word = /^[A-Za-z_][A-Za-z0-9_]*/.exec(rest);
+    if (word) {
+      const w = word[0];
+      let cls = null;
+      if (state.prevWord === "def" || state.prevWord === "class") cls = "fn";
+      else if (PY_KEYWORDS.has(w)) cls = "kw";
+      else if (w === "self") cls = "self";
+      else if (PY_BUILTINS.has(w)) cls = "bi";
+      else if (text[i + w.length] === "(") cls = "call";
+      out += cls ? wrap(cls, w) : w;
+      state.prevWord = w;
+      i += w.length;
+      continue;
+    }
+    const num = /^\d+(\.\d+)?(e-?\d+)?/.exec(rest);
+    if (num) {
+      out += wrap("num", num[0]);
+      i += num[0].length;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
 }
