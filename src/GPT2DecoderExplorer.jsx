@@ -245,68 +245,49 @@ with properties: $\\Phi(0)=0.5$, it is monotonically increasing, and its derivat
   embedding_tok: {
     title: "Token Embedding",
     md: `
-  $$\\textbf{Maps token IDs to dense vectors.}\\\\[8pt]$$
-  
-  $$\\textbf{Weight matrix:}$$
-  $$
-  W \\in \\mathbb{R}^{\\text{vocab\\_size} \\times \\text{n\\_embd}}
-  $$
-  $$\\textbf{Input IDs:}$$
-  $$
-  \\text{input\\_ids} \\in \\mathbb{Z}^{B \\times T}
-  $$
+**Maps token IDs to dense vectors.**
 
-  $$\\textbf{Embedding lookup:}$$
-  $$
-  \\text{tok\\_emb}(\\text{input\\_ids}) \\in \\mathbb{R}^{B \\times T \\times n\\_embd}
-  $$
+## Shapes
 
-  $$\\textbf{Parameter count:}$$
-  $$
-  \\text{params} = \\text{vocab\\_size} \\times n\\_embd
-  $$
-  (e.g. GPT-2 small: $50{,}257 \\times 768 \\approx 3.86 \\times 10^7$)
+- **Weight matrix:** $W \\in \\mathbb{R}^{\\text{vocab\\_size} \\times n\\_embd}$, one row per token in the vocabulary.
+- **Input IDs:** $\\text{input\\_ids} \\in \\mathbb{Z}^{B \\times T}$
+- **Embedding lookup:** $\\text{tok\\_emb}(\\text{input\\_ids}) \\in \\mathbb{R}^{B \\times T \\times n\\_embd}$
 
-  &nbsp;
-  
-  ---
+### Parameter count
 
-  &nbsp;
+$$
+\\text{params} = \\text{vocab\\_size} \\times n\\_embd
+$$
 
-  $$\\textbf{Training}\\\\[4pt]$$
+> GPT-2 small: $50{,}257 \\times 768 \\approx 3.86 \\times 10^7$
 
-  $$\\text{- W is learned via backprop.}\\\\[2pt]$$
-  $$\\text{- Only rows for tokens in the batch get updated.}\\\\[2pt]$$
-  $$\\text{- GPT-2 often ties W with the output softmax weights.}$$ ([What is weight tying?](#info:weight_tying_notes))
-  
-  &nbsp;
+## Training
 
-  ---
+- $W$ is learned via backprop.
+- Only rows for tokens in the batch get updated.
+- GPT-2 ties $W$ with the output softmax weights (\`lm_head\`). [What is weight tying?](#info:weight_tying_notes)
 
-  &nbsp;
+## Why use an embedding, not one-hot encoding?
 
-  $$\\textbf{Why use embedding? Not one hot encoding.}\\\\[4pt]$$
+A one-hot token vector would be length $\\text{vocab\\_size}$ and extremely sparse. \`nn.Embedding\` is equivalent to multiplying a one-hot vector by $W$, but it:
 
-  A one-hot token vector would be length $vocab\\_size$ and extremely sparse. $nn.Embedding$ is equivalent to multiplying a one-hot vector by $W$, but it:
+- avoids creating huge sparse vectors,
+- learns dense, semantic representations where related tokens end up close in the embedding space.
 
-  $$\\bullet\\ \\text{avoids creating huge sparse vectors,}$$
+## References
 
-  $$\\bullet\\ \\text{learns dense, semantic representations where related tokens end up close in the embedding space.}$$
+1. **PyTorch docs**
 
-  &nbsp;
+   \`nn.Embedding\` defines an embedding as a lookup table that "stores embeddings of a fixed dictionary and size" and is "retrieved using indices."
 
-  ---
+   [nn.Embedding ↗](https://pytorch.org/docs/stable/generated/torch.nn.Embedding.html)
 
-  &nbsp;
+2. **GPT-2 technical report (Input Representation)**
 
-  $$\\textbf{References:}\\\\[4pt]$$
-  $$\\textbf{1. PyTorch docs:}$$
-  nn.Embedding doc: Defines an embedding as a lookup table that “stores embeddings of a fixed dictionary and size” and is “retrieved using indices,”
-  $$\\href{https://pytorch.org/docs/stable/generated/torch.nn.Embedding.html}{\\texttt{nn.Embedding}}$$
-  
-  $$\\textbf{2. GPT-2 technical report (Input Representation):}$$
-  Describes GPT-2’s inputs as token embeddings + position embeddings (sum), establishing that token ids are first converted to embeddings before entering the stack.
-  $$\\href{https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf?utm_source=chatgpt.com}{\\texttt{GPT-2 Technical Report}}$$
+   Describes GPT-2's inputs as token embeddings + position embeddings (sum), establishing that token ids are first converted to embeddings before entering the stack.
+
+   [GPT-2 Technical Report ↗](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf)
+
   `,
   },
   
@@ -315,32 +296,83 @@ with properties: $\\Phi(0)=0.5$, it is monotonically increasing, and its derivat
   weight_tying_notes: {
     title: "Weight Tying",
     md: `
-  $$\\textbf{Weight tying (shared input/output embeddings)}\\\\[4pt]$$
-  
-  The idea comes from the paper [Using the Output Embedding to Improve Language Models](https://arxiv.org/abs/1608.05859)
-    
-  Weight tying sets the output softmax weights equal to the input token embedding weights:
-  
-  &nbsp;
+**Weight tying (shared input/output embeddings)**
 
-  \`\`\`python
-  # tie lm_head weight to tok_emb
-  self.lm_head.weight = self.tok_emb.weight
-  \`\`\`
-  
-  &nbsp;
-  
-  $$\\textbf{Why do this?}\\\\[4pt]$$
-    
-  - Fewer parameters (≈ halves \`V*d\` + \`d*V\` to just \`V*d\`).
-  - Acts as a helpful regularizer and often improves perplexity.
-  
-  &nbsp;
-  
-  $$\\textbf{Notes:}\\\\[4pt]$$
+Weight tying sets the output softmax weights equal to the input token embedding weights:
 
-  - Many GPT-2 implementations use \`bias=False\` on \`lm_head\` when tying.
-  - Tying requires identical shapes: \`lm_head.weight.shape == tok_emb.weight.shape == (vocab_size, n_embd)\`.
+\`\`\`python
+self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
+# tie lm_head weight to tok_emb
+self.lm_head.weight = self.tok_emb.weight
+\`\`\`
+
+> The idea comes from the paper [Using the Output Embedding to Improve Language Models ↗](https://arxiv.org/abs/1608.05859)
+
+## What it does
+
+After the last block, each position has a final vector $h \\in \\mathbb{R}^{n\\_embd}$. \`lm_head\` gives every token in the vocabulary a score (logit) by taking a dot product with that token's row:
+
+$$
+\\text{logit}_i = h \\cdot W[i]
+$$
+
+The more $h$ points in the same direction as row $i$, the higher token $i$ scores. With tying, row $i$ plays two roles:
+
+- **Input:** the vector that represents token $i$ when it is read in.
+- **Output:** the template the model matches against to predict token $i$ next.
+
+> To predict \`Ġcat\`, the model has to move $h$ toward the embedding of \`Ġcat\` itself.
+
+## Why do this?
+
+- **Fewer parameters:** two matrices, \`V*d\` + \`d*V\`, become one \`V*d\`, roughly halving them. For GPT-2 small that saves $50{,}257 \\times 768 \\approx 38.6\\text{M}$ parameters: the model has about 124M instead of about 163M.
+- **Better generalization:** acts as a helpful regularizer and often improves perplexity.
+
+## How gradients flow
+
+The assignment does not copy anything: both layers point to the **same \`Parameter\` object**, so the shared matrix receives the **sum** of the gradients from both uses.
+
+- **Input side:** only the rows of tokens that appear in the batch get a gradient.
+- **Output side:** the softmax gives a gradient to **all 50,257 rows** every step, pushing down the scores of the wrong tokens.
+
+So with tying, even a rare token's embedding keeps getting trained, through the output side.
+
+## Notes
+
+- Many GPT-2 implementations use \`bias=False\` on \`lm_head\` when tying.
+- Tying requires identical shapes: \`lm_head.weight.shape == tok_emb.weight.shape == (vocab_size, n_embd)\`.
+- The shapes line up without a transpose because \`nn.Linear(n_embd, vocab_size)\` stores its weight as \`(out, in)\` = \`(vocab_size, n_embd)\`, the same layout as \`nn.Embedding(vocab_size, n_embd)\`.
+- The original GPT-2 ties too: OpenAI's code computes the logits with the token embedding table \`wte\` itself: \`logits = tf.matmul(h_flat, wte, transpose_b=True)\`.
+
+## Recent developments
+
+Tying is a trade-off. The input row should say "what this token is"; the output row should say "what context comes before this token". Forcing one vector to do both is a constraint.
+
+- **Large models usually don't tie:** Llama 3.1 8B and 70B, Qwen2.5 7B and 72B. At that scale the embedding table is a small share of the parameters, so the saving matters less.
+- **Small models often do:** Llama 3.2 1B and 3B, Qwen2.5 0.5B and 3B, Gemma 2. Here the embedding table is a large share of the parameters.
+
+> In Hugging Face model configs this is the \`tie_word_embeddings\` flag.
+
+## References
+
+1. **Using the Output Embedding to Improve Language Models**
+
+   Press & Wolf, 2016. Shows that tying input and output embeddings reduces parameters and improves perplexity.
+
+   [arXiv:1608.05859 ↗](https://arxiv.org/abs/1608.05859)
+
+2. **Tying Word Vectors and Word Classifiers**
+
+   Inan, Khosravi & Socher, 2016. Proposes the same idea independently, motivated by a loss framework for language modeling.
+
+   [arXiv:1611.01462 ↗](https://arxiv.org/abs/1611.01462)
+
+3. **GPT-2 reference model code**
+
+   OpenAI's original model.py, where the logits are computed with \`wte\`.
+
+   [openai/gpt-2 model.py ↗](https://github.com/openai/gpt-2/blob/master/src/model.py)
+
   `,
   },
 

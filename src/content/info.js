@@ -139,6 +139,24 @@ BPE is still the mainstream approach today. What has changed most is the vocabul
 With a larger vocabulary, the same text splits into fewer tokens, so generation is faster, and non-English languages such as Chinese are handled better.
 The cost is a larger embedding table and output layer: both have shape $(V, n\\_embd)$, so they gain one row per token as $V$ grows, while the vector size $n\\_embd$ stays the same.
 
+### How numbers are split
+
+GPT-2's regex keeps a whole run of digits together (\` ?\\p{N}+\`), then BPE merges inside it. The tokenizer is deterministic (the same number always splits the same way), but the split has nothing to do with place value:
+
+- \`1234\` → \`⟦12⟧⟦34⟧\`
+- \`12345\` → \`⟦123⟧⟦45⟧\`
+- \`1234567\` → \`⟦123⟧⟦45⟧⟦67⟧\`
+- \`3517+4825=8342\` → \`⟦35⟧⟦17⟧⟦+⟧⟦48⟧⟦25⟧⟦=⟧⟦8⟧⟦342⟧\`
+
+The same token can stand for different place values. In \`4825\` → \`⟦48⟧⟦25⟧\`, the \`2\` in \`25\` is the tens digit; in \`2517\` → \`⟦25⟧⟦17⟧\` it is the thousands digit. To add two numbers, the model must first work out which digit sits in which place from the token lengths and count, and when it writes the answer it must also emit the exact split BPE would produce (\`⟦8⟧⟦342⟧\`, not \`⟦83⟧⟦42⟧\`). This does not make arithmetic impossible, but it makes it harder to learn.
+
+Newer tokenizers changed the digit rule. There are two main approaches:
+
+- **At most 3 digits per chunk** (\`\\p{N}{1,3}\`): GPT-4 (\`cl100k_base\`), GPT-4o (\`o200k_base\`), Llama 3, DeepSeek-V3. \`1234567\` → \`⟦123⟧⟦456⟧⟦7⟧\`. Every chunk has 1–3 digits, and a leading space no longer sticks to the digits. Grouping still runs left to right, though, so chunk boundaries do not line up with thousands the way \`1,234,567\` does.
+- **One digit per token** (\`\\p{N}\`): Qwen2.5, Qwen3; LLaMA 1/2 used SentencePiece with digit splitting. \`1234567\` → \`⟦1⟧⟦2⟧⟦3⟧⟦4⟧⟦5⟧⟦6⟧⟦7⟧\`. Place values line up cleanly and carrying works the same in every number, at the cost of longer sequences.
+
+> There is no single winner: Meta moved from per-digit splitting (LLaMA 1/2) to 3-digit groups (Llama 3) when it switched to a tiktoken-based 128K vocabulary. Closed models (Claude, Gemini, etc.) do not publish their tokenizers. Today's models also lean on step-by-step reasoning or calculator/code tools for large arithmetic, not on tokenization alone.
+
 ## References
 
 1. **Primary source (architecture + input representation)**
@@ -1179,162 +1197,289 @@ $$
   embedding_pos: {
     title: "Positional Embedding",
     md: `
-  $$\\textbf{What it is:}\\\\[4pt]$$
-  Transformers need order information because self-attention has no sense of sequence.
-  Positional embeddings give each token a unique vector based on its position.
-  
-  &nbsp;
+## What it is
 
-  Note that GPT-2's positional embeddings are learnable parameters in a lookup table that get trained by backpropagation exactly like any other weight.
-  It's not the fixed sinusoids like in the original Transformer paper.
-  
-  &nbsp;
+Transformers need order information because self-attention has no sense of sequence. Positional embeddings give each token a unique vector based on its position.
 
-  The shape of the positional embedding weight matrix is:
-  $$
-  P \\in \\mathbb{R}^{\\text{max\\_toks} \\times n\\_embd}
-  $$
-  
-  $$\\text{- Here, max\\_toks is the maximum sequence length (e.g. 1024 for GPT-2).}$$
-  $$\\text{- Each row }P_j\\text{ corresponds to position }j\\text{ in the sequence.}$$
-  
-  &nbsp;
-  
-  ---
-  
-  &nbsp;
+> GPT-2's positional embeddings are **learnable parameters** in a lookup table, trained by backpropagation exactly like any other weight. They are not the [fixed sinusoids](#info:sinusoidal_pos_notes) of the original Transformer paper.
 
-  $$\\textbf{Why do we need positional embeddings?}\\\\[4pt]$$
-  Intuitively, we need positional embeddings to give the model a sense of order and position in the sequence. But how does it exactly work?
+The shape of the positional embedding weight matrix is:
 
-  Suppose we don't add the positional embeddings, only the token embeddings $$\\mathtt{X} \\in \\mathbb{R}^{T \\times n\\_embd}$$ (We ignore the batch dimension for simplicity).
+$$
+W_{pos} \\in \\mathbb{R}^{\\text{max\\_toks} \\times n\\_embd}
+$$
 
-  Self attention computes the following:
-  $$
-  \\mathtt{Q} = \\mathtt{X} \\cdot \\mathtt{W}_q, \\quad \\mathtt{K} = \\mathtt{X} \\cdot \\mathtt{W}_k, \\quad scores = \\mathtt{Q} \\cdot \\mathtt{K}^\\top
-  $$
+- $\\text{max\\_toks}$ is the maximum sequence length (1024 for GPT-2).
+- Each row $p_j$ corresponds to position $j$ in the sequence.
 
-  Now permute (shuffle) the sequence with a permutation matrix $$\\mathtt{P}$$.
-  The new inputs are $$\\mathtt{X'} = \\mathtt{P} \\cdot \\mathtt{X}$$. Then
+## Why do we need positional embeddings?
 
-  $$
-  \\mathtt{Q'} = \\mathtt{X'} \\cdot \\mathtt{W}_q = \\mathtt{P} \\cdot \\mathtt{X} \\cdot \\mathtt{W}_q = \\mathtt{P} \\cdot \\mathtt{Q} \\\\[2pt]
-  \\mathtt{K'} = \\mathtt{X'} \\cdot \\mathtt{W}_k = \\mathtt{P} \\cdot \\mathtt{X} \\cdot \\mathtt{W}_k = \\mathtt{P} \\cdot \\mathtt{K}
-  $$
-  
-  So the scores become:
-  $$
-  \\mathtt{scores'} = \\mathtt{Q'} \\cdot \\mathtt{K'}^\\top = (\\mathtt{P} \\cdot \\mathtt{Q}) \\cdot (\\mathtt{P} \\cdot \\mathtt{K})^\\top = \\mathtt{P} \\cdot (\\mathtt{Q} \\cdot \\mathtt{K}^\\top) \\cdot \\mathtt{P}^\\top
-  $$
+Intuitively, they give the model a sense of order and position in the sequence. But how exactly does that work?
 
-  That's the same numbers as before, just with rows/columns permuted. In other words, self-attention is permutation-equivariant when there's no position info: 
-  shuffling inputs just shuffles the attention matrix in the same way. The model can "see" which tokens are present but not their order.
+### Without position information
 
-  &nbsp;
+Suppose we only have the token embeddings $X \\in \\mathbb{R}^{T \\times n\\_embd}$ (ignoring the batch dimension for simplicity). Self-attention computes:
 
-  Adding positional embeddings $$\\mathtt{P_t}$$ breaks that symmetry: it changes $$\\mathtt{Q}$$ and $$\\mathtt{K}$$ so that swapping tokens also swaps which
-  $$\\mathtt{P_t}$$ they get. Now the dot products include position-dependent terms, so $$\\mathtt{QK}^\\top$$ changes in value, not just by a row/column reordering.
-  That's how the model becomes sensitive to order.
+$$
+Q = X W_q, \\quad K = X W_k, \\quad \\text{scores} = Q K^\\top
+$$
 
-  &nbsp;
+Now shuffle the sequence with a permutation matrix $P$. The new input is $X' = P X$, so
 
-  If you are still confused, look at the tiny example $$\\href{#info:positional_embeddings_example_notes}{\\text{here}}$$
+$$
+Q' = X' W_q = P X W_q = P Q \\\\[2pt]
+K' = X' W_k = P X W_k = P K
+$$
 
-  &nbsp;
+and the scores become:
 
-  ---
+$$
+\\text{scores}' = Q' K'^\\top = (P Q)(P K)^\\top = P \\, (Q K^\\top) \\, P^\\top
+$$
 
-  &nbsp;
-  
-  $$\\textbf{Runtime usage}\\\\[8pt]$$
-  
-  1. Token IDs → token embeddings:  
-  $$
-  \\text{tok\\_emb}(\\text{input\\_ids}) \\in \\mathbb{R}^{B \\times T \\times n\\_embd}
-  $$
-  
-  2. Positions $0,1,\\dots,T-1$ → positional embeddings:  
-  $$
-  \\text{pos\\_emb}(\\text{positions}) \\in \\mathbb{R}^{T \\times n\\_embd}
-  $$
-  
-  3. Add them together via broadcasting: ([What is broadcasting?](#info:broadcasting)) 
-  $$
-  x = \\text{tok\\_emb}(\\text{input\\_ids}) + \\text{pos\\_emb}(\\text{positions})
-  $$
-  
-  ---
-  
-  &nbsp;
-  
-  $$\\textbf{Parameters}\\\\[4pt]$$
-  
-  $$
-  \\text{params} = \\text{max\\_toks} \\times n\\_embd
-  $$
-  
-  For GPT-2 small:  
-  $$
-  1024 \\times 768 \\approx 7.86 \\times 10^5
-  $$
-  
-  Much smaller than the token embedding table (~38M params).
-  
-  &nbsp;
-  
-  ---
-  
-  &nbsp;
-  
-  $$\\textbf{Shapes at a glance}\\\\[8pt]$$
-  $$\\bullet$$ Weight: $[\\text{max\\_toks}, n\\_embd]$  
-  $$\\bullet$$ Positions: $[T]$  
-  $$\\bullet$$ Pos embeddings: $[T, n\\_embd]$  
-  $$\\bullet$$ Final sum: $[B, T, n\\_embd]$  
+These are the same numbers as before, with rows and columns reordered.
 
-  &nbsp;
+> Without position information (and without a mask), self-attention is **permutation-equivariant**: shuffling the inputs just shuffles the attention matrix the same way. The model can "see" which tokens are present, but not their order.
 
-  ---
+### With position information
 
-  &nbsp;
+Adding positional embeddings $p_t$ breaks that symmetry. Swapping two tokens now also swaps which $p_t$ each one gets, so $Q$ and $K$ change. The dot products include position-dependent terms, so $QK^\\top$ changes in value, not just by a row/column reordering. That's how the model becomes sensitive to order.
 
-  $$\\textbf{Extra Notes:}\\\\[4pt]$$
-  Learned absolute positional embeddings used in GPT-2 are not widely used in the newest state-of-the-art LLMs, 
-  which have largely transitioned to relative positional embeddings and other novel methods like $$\\href{https://arxiv.org/pdf/2104.09864}{\\texttt{RoPE (Rotary Position Embeddings)}}$$ 
-  or $$\\href{https://arxiv.org/pdf/2108.12409}{\\texttt{ALiBi (Attention with Linear Biases)}}$$ .
+Still confused? See the [tiny example](#info:positional_embeddings_example_notes).
 
-  &nbsp;
+### What about the causal mask?
 
-  ---
+The argument above assumes every token can attend to every other token. GPT-2 uses a [causal mask](#info:causal_analogy_notes): position $t$ only attends to positions $0, \\dots, t$. The mask by itself carries order information in two ways:
 
-  &nbsp;
+- **Which tokens each position sees changes.** Shuffle \`A B C\` into \`C A B\`: \`B\` used to see $\\{A, B\\}$, now it sees $\\{C, A, B\\}$, so its output changes. The result is no longer just a reordering, so causal attention is already sensitive to order.
+- **How many tokens each position sees differs.** Position $t$ always sees $t + 1$ tokens. Even in \`a a a a\`, where every position sees the same kind of token, the count still differs (e.g. averaging over the visible tokens gives each one a weight of $\\frac{1}{t+1}$). This lets the model infer its absolute position.
 
-  $$\\textbf{References:}\\\\[4pt]$$
-  $$\\textbf{1. Transformer positional encodings:}$$
-  Vaswani et al., "Attention Is All You Need," §3.5. Introduces adding position information to token embeddings via fixed sinusoids.
-  $$\\href{https://arxiv.org/pdf/1706.03762v2}{\\texttt{Attention Is All You Need}}$$
+Haviv et al. (2022) trained causal language models with **no positional encoding at all** and found they were still competitive with standard models. Probing showed these models learn an implicit sense of absolute position; the authors conjecture that the causal mask lets each token infer how many tokens come before it.
 
-  $$\\textbf{2. GPT-2 uses learned absolute positional embeddings::}$$
-  Hugging Face GPT-2 docs (model card/config) explicitly note GPT-2's absolute position embeddings (not sinusoidal), hence right-padding guidance.
-  $$\\href{https://huggingface.co/docs/transformers/v4.34.0/model_doc/gpt2?utm_source=chatgpt.com}{\\texttt{GPT-2 Configs}}$$
-  
-  $$\\textbf{3. GPT-2 technical report (input representation):}$$
-  Radford et al., Language Models are Unsupervised Multitask Learners—describes inputs as token + position embeddings summed before the stack.
-  $$\\href{https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf?utm_source=chatgpt.com}{\\texttt{GPT-2 Technical Report}}$$
-  
-  $$\\textbf{4. Relative position encodings:}$$
-  Shaw et al., Self-Attention with Relative Position Representations. Introduces relative positional embeddings as an alternative to absolute positional embeddings.
-  $$\\href{https://arxiv.org/pdf/1803.02155}{\\texttt{Self-Attention with Relative Position Representations}}$$
+> So "the model cannot see order" holds for attention without a mask. GPT-2 still adds explicit positional embeddings, and today's LLMs still use explicit position information (usually RoPE).
 
-  $$\\textbf{5. RoPE (Rotary Position Embeddings):}$$
-  Su et al., RoPE: Rotary Position Embedding. Introduces a novel method for encoding relative positions in self-attention.
-  $$\\href{https://arxiv.org/pdf/2104.09864}{\\texttt{RoPE: Rotary Position Embedding}}$$
+## Runtime usage
 
-  $$\\textbf{6. ALiBi (Attention with Linear Biases):}$$
-  Press et al., uses distance-proportional biases in attention scores; enables length extrapolation.
-  $$\\href{https://arxiv.org/pdf/2108.12409}{\\texttt{ALiBi: Attention with Linear Biases}}$$
+1. **Token IDs → token embeddings**
+
+   $$
+   \\text{tok\\_emb}(\\text{input\\_ids}) \\in \\mathbb{R}^{B \\times T \\times n\\_embd}
+   $$
+
+2. **Positions $0, 1, \\dots, T-1$ → positional embeddings**
+
+   $$
+   \\text{pos\\_emb}(\\text{positions}) \\in \\mathbb{R}^{T \\times n\\_embd}
+   $$
+
+3. **Add them together via broadcasting** ([What is broadcasting?](#info:broadcasting))
+
+   $$
+   x = \\text{tok\\_emb}(\\text{input\\_ids}) + \\text{pos\\_emb}(\\text{positions})
+   $$
+
+### Example with $n\\_embd = 4$
+
+A toy vocabulary of 3 tokens, at most 3 positions, 4-dimensional vectors. The numbers are made up to keep the arithmetic easy; in a real model they start random and are learned.
+
+\`\`\`text
+tok_emb (3 x 4)                      pos_emb (3 x 4)
+id 0  dog    [1.0, 0.0, 0.5, 0.0]    pos 0  [0.1, 0.1, 0.0, 0.0]
+id 1  bites  [0.0, 1.0, 0.0, 0.5]    pos 1  [0.0, 0.1, 0.1, 0.0]
+id 2  man    [0.5, 0.0, 1.0, 0.0]    pos 2  [0.0, 0.0, 0.1, 0.1]
+\`\`\`
+
+**Sentence 1:** \`dog bites man\`, ids = [0, 1, 2]
+
+\`\`\`text
+pos 0  dog    [1.0, 0.0, 0.5, 0.0] + p0 = [1.1, 0.1, 0.5, 0.0]
+pos 1  bites  [0.0, 1.0, 0.0, 0.5] + p1 = [0.0, 1.1, 0.1, 0.5]
+pos 2  man    [0.5, 0.0, 1.0, 0.0] + p2 = [0.5, 0.0, 1.1, 0.1]
+\`\`\`
+
+**Sentence 2:** \`man bites dog\`, ids = [2, 1, 0]
+
+\`\`\`text
+pos 0  man    [0.5, 0.0, 1.0, 0.0] + p0 = [0.6, 0.1, 1.0, 0.0]
+pos 1  bites  [0.0, 1.0, 0.0, 0.5] + p1 = [0.0, 1.1, 0.1, 0.5]
+pos 2  dog    [1.0, 0.0, 0.5, 0.0] + p2 = [1.0, 0.0, 0.6, 0.1]
+\`\`\`
+
+What the result shows:
+
+- **Same token, different position → different vector.** \`dog\` at position 0 in sentence 1 is [1.1, 0.1, 0.5, 0.0]; at position 2 in sentence 2 it is [1.0, 0.0, 0.6, 0.1]. Similar (both are \`dog\`), but not identical.
+- **Same token, same position → identical vector.** \`bites\` is at position 1 in both sentences and gets [0.0, 1.1, 0.1, 0.5] both times.
+- **Without positional embeddings**, both sentences would give the same three vectors {dog, bites, man}, only in a different order. Now the inputs for "dog bites man" and "man bites dog" really differ.
+
+Shapes, with both sentences in one batch ($B = 2$):
+
+\`\`\`text
+idx           = [[0, 1, 2],
+                 [2, 1, 0]]       (2, 3)
+tok_emb(idx)                      (2, 3, 4)
+pos_emb(pos)   pos = [0, 1, 2]    (3, 4)
+  [None, :, :]                    (1, 3, 4)   broadcast to every sequence in the batch
+x = sum                           (2, 3, 4)
+\`\`\`
+
+> Both sentences add the **same** $p_0, p_1, p_2$: a positional vector depends only on the position, not on the sentence.
+
+## Parameters
+
+$$
+\\text{params} = \\text{max\\_toks} \\times n\\_embd
+$$
+
+> GPT-2 small: $1024 \\times 768 \\approx 7.86 \\times 10^5$, much smaller than the token embedding table (~38M params).
+
+## Shapes at a glance
+
+- **Weight:** $[\\text{max\\_toks}, n\\_embd]$
+- **Positions:** $[T]$
+- **Pos embeddings:** $[T, n\\_embd]$
+- **Final sum:** $[B, T, n\\_embd]$
+
+## Recent developments
+
+Learned absolute positional embeddings, as used in GPT-2, are not widely used in the newest state-of-the-art LLMs. These have largely moved to relative positional methods such as [RoPE (Rotary Position Embeddings) ↗](https://arxiv.org/pdf/2104.09864) or [ALiBi (Attention with Linear Biases) ↗](https://arxiv.org/pdf/2108.12409).
+
+## References
+
+1. **Transformer positional encodings**
+
+   Vaswani et al., "Attention Is All You Need," §3.5. Introduces adding position information to token embeddings via fixed sinusoids.
+
+   [Attention Is All You Need ↗](https://arxiv.org/pdf/1706.03762v2)
+
+2. **GPT-2 uses learned absolute positional embeddings**
+
+   The Hugging Face GPT-2 docs explicitly note that GPT-2 uses absolute position embeddings (not sinusoidal), hence their advice to pad inputs on the right.
+
+   [GPT-2 Configs ↗](https://huggingface.co/docs/transformers/v4.34.0/model_doc/gpt2)
+
+3. **GPT-2 technical report (input representation)**
+
+   Radford et al., "Language Models are Unsupervised Multitask Learners." Describes the inputs as token + position embeddings summed before the stack.
+
+   [GPT-2 Technical Report ↗](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf)
+
+4. **Relative position encodings**
+
+   Shaw et al., "Self-Attention with Relative Position Representations." Introduces relative positional embeddings as an alternative to absolute ones.
+
+   [Self-Attention with Relative Position Representations ↗](https://arxiv.org/pdf/1803.02155)
+
+5. **RoPE (Rotary Position Embeddings)**
+
+   Su et al., "RoFormer: Enhanced Transformer with Rotary Position Embedding." Encodes relative positions in self-attention by rotating queries and keys.
+
+   [RoPE: Rotary Position Embedding ↗](https://arxiv.org/pdf/2104.09864)
+
+6. **ALiBi (Attention with Linear Biases)**
+
+   Press et al. Adds distance-proportional biases to attention scores; enables length extrapolation.
+
+   [ALiBi: Attention with Linear Biases ↗](https://arxiv.org/pdf/2108.12409)
+
+7. **Causal LMs without positional encodings**
+
+   Haviv et al., "Transformer Language Models without Positional Encodings Still Learn Positional Information," Findings of EMNLP 2022. Shows that causal LMs with no positional encoding remain competitive and learn an implicit sense of position, likely through the causal mask.
+
+   [arXiv:2203.16634 ↗](https://arxiv.org/abs/2203.16634)
 
   `,
+  },
+
+  sinusoidal_pos_notes: {
+    title: "Sinusoidal Positional Encoding",
+    md: `
+**Fixed sin/cos position vectors, computed by a formula instead of learned.**
+
+The original Transformer (Vaswani et al., 2017) adds these vectors to the token embeddings, the same way GPT-2 adds its [learned positional embeddings](#info:embedding_pos). Nothing about them is trained.
+
+## The formula
+
+Group the $d$ dimensions into pairs. Pair $i$ gets its own frequency $\\omega_i$:
+
+$$
+PE(pos, 2i) = \\sin(\\omega_i \\cdot pos), \\qquad PE(pos, 2i+1) = \\cos(\\omega_i \\cdot pos), \\qquad \\omega_i = \\frac{1}{10000^{2i/d}}
+$$
+
+- At $i = 0$, $\\omega = 1$: the fastest pair.
+- As $i$ grows, $\\omega$ shrinks and the pair turns more slowly. The slowest pair has a wavelength of about $10000 \\cdot 2\\pi$.
+
+## Intuition: a clock with many hands
+
+Each pair $(\\sin, \\cos)$ is one **hand** on a circle. Each step in position turns hand $i$ by $\\omega_i$ radians.
+
+- **Fast hands** (like a second hand) change a lot from one position to the next, so they tell neighbors apart.
+- **Slow hands** (like an hour hand) only move noticeably over many positions, so they tell near from far.
+
+Reading all the hands together pins down the position, just as the second, minute and hour hands together give the exact time.
+
+## Example with $d = 4$
+
+Two hands: $\\omega_0 = 1$ (fast) and $\\omega_1 = 1/10000^{2/4} = 1/100$ (slow).
+
+\`\`\`text
+         fast: sin,  cos      slow: sin,  cos
+pos 0  [  0.000,  1.000,         0.000, 1.000 ]
+pos 1  [  0.841,  0.540,         0.010, 1.000 ]
+pos 2  [  0.909, -0.416,         0.020, 1.000 ]
+pos 3  [  0.141, -0.990,         0.030, 1.000 ]
+\`\`\`
+
+- The fast hand changes a lot at every step, so neighboring positions are easy to tell apart.
+- The slow hand barely moves; it takes on the order of a hundred steps to turn noticeably. It says roughly which stretch of the sequence you are in.
+
+## Key property: shifting by $k$ is a fixed rotation
+
+For each pair:
+
+$$
+\\begin{bmatrix} \\sin(\\omega(p+k)) \\\\ \\cos(\\omega(p+k)) \\end{bmatrix}
+=
+\\begin{bmatrix} \\cos \\omega k & \\sin \\omega k \\\\ -\\sin \\omega k & \\cos \\omega k \\end{bmatrix}
+\\begin{bmatrix} \\sin(\\omega p) \\\\ \\cos(\\omega p) \\end{bmatrix}
+$$
+
+The matrix depends only on $k$, not on $p$. So "look $k$ positions back" is the **same linear map at every position**. The paper gives this as its reason for the design: $PE_{pos+k}$ is a linear function of $PE_{pos}$, which should make it easy for attention to work with relative positions.
+
+> GPT-2's learned table ends up with a similar shape: neighboring positions are close, and the vectors trace smooth loops at several speeds. The difference is that GPT-2 has to learn this from data, while sinusoidal encoding builds it in.
+
+## Compared with GPT-2's learned embeddings
+
+- **Parameters:** sinusoidal has none; GPT-2's table has $1024 \\times 768$.
+- **Beyond the training length:** the formula gives a vector for any position; GPT-2's table has no row past 1023.
+- **Structure:** sinusoidal is designed (hands at many speeds); GPT-2's is learned and ends up with similar smooth loops.
+- **Results:** Vaswani et al. also tried learned positional embeddings and found the two "produced nearly identical results."
+- **Extrapolation:** they chose sinusoids because they "may allow the model to extrapolate to sequence lengths longer than the ones encountered during training." In practice this works poorly: having a vector for an unseen position does not mean the model knows how to use it. The ALiBi paper measured this directly.
+
+## Recent developments
+
+**RoPE** (Rotary Position Embedding), used by most LLMs today, uses the same set of frequencies $\\omega_i$. The difference is that RoPE does not add a position vector to the input. Instead, inside every attention layer it **rotates** $q$ and $k$ by angles proportional to their positions, so $q \\cdot k$ depends only on the **relative distance** between the two positions.
+
+## References
+
+1. **Attention Is All You Need, §3.5**
+
+   Vaswani et al., 2017. Defines the sinusoidal encoding, compares it with learned embeddings, and explains the choice.
+
+   [arXiv:1706.03762 ↗](https://arxiv.org/abs/1706.03762)
+
+2. **ALiBi (Attention with Linear Biases)**
+
+   Press et al. Tests how well sinusoidal, rotary and other position methods extrapolate to longer sequences than seen in training.
+
+   [arXiv:2108.12409 ↗](https://arxiv.org/abs/2108.12409)
+
+3. **RoPE**
+
+   Su et al., "RoFormer: Enhanced Transformer with Rotary Position Embedding."
+
+   [arXiv:2104.09864 ↗](https://arxiv.org/abs/2104.09864)
+
+    `,
   },
 
   positional_embeddings_example_notes: {
