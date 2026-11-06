@@ -1,55 +1,54 @@
 import { ORIGINAL_INFO } from "../GPT2DecoderExplorer";
 
 const prevents_vanishing_exploding_md = `
-$$
-\\textbf{Two concrete toy examples that show why pre-LN keep gradients from vanishing/exploding in deep stack}\\\\[10pt]
-$$
+**Two concrete toy examples that show why pre-LN keeps gradients from vanishing/exploding in deep stacks.**
 
----
+## Example 1: "safe at init" path (identity highway)
 
-$$
-\\textbf{Example 1 — "Safe at init" path (identity highway)}\\\\[6pt]
-\\text{Setup (early training): attention weights are small, so the sublayer output is near zero: } \\\\[6pt]
-\\mathrm{attn}(\\mathrm{LN}(x)) \\approx 0.\\\\[6pt]
-\\bullet\\space\\text{Pre-LN block: } x_{l+1} = x_l + \\mathrm{attn}(\\mathrm{LN}(x_l)) \\approx x_l.\\\\[6pt]
-\\text{Backward: } \\dfrac{\\partial x_{l+1}}{\\partial x_l} \\approx I \\ \\Rightarrow\\ \\text{gradient passes nearly unchanged.}\\\\[6pt]
-\\bullet\\space\\text{Post-LN (contrast): } x_{l+1} = \\mathrm{LN}(x_l + \\mathrm{attn}(x_l)) \\approx \\mathrm{LN}(x_l),\\\\[6pt]
-\\text{so } \\dfrac{\\partial x_{l+1}}{\\partial x_l} \\approx J_{\\mathrm{LN}}(x_l)\\ \\text{and repeated products can shrink or grow gradients.}\\\\[10pt]
-$$
-
----
+Setup (early training): attention weights are small, so the sublayer output is near zero:
 
 $$
-\\textbf{Example 2 — Jacobian picture with residual vs. no residual}\\\\[6pt]
-\\text{Consider one block as a function } F(x) = x + f(\\mathrm{LN}(x)).\\ \\ \\\\[6pt]
-\\bullet\\space\\textbf{Jacobian (pre-LN):}\\\\[6pt]
-J_F(x) = I + J_f(\\mathrm{LN}(x))\\,J_{\\mathrm{LN}}(x).\\\\[6pt]
-\\text{If }\\|J_f\\|\\ \\text{is small and }J_{\\mathrm{LN}}\\ \\text{is bounded, then } J_F \\approx I + \\epsilon\\ \\text{with small }\\epsilon.\\\\[6pt]
-\\text{Across }L\\text{ layers: } \\prod_{\\ell=1}^{L}(I+\\epsilon_\\ell)\\ \\text{stays near }I\\ \\Rightarrow\\ \\text{no vanishing/exploding.}\\\\[6pt]
-\\textbf{No residual: } \\\\[6pt]
-G(x) = f(\\mathrm{LN}(x)),\\ \\ J_G = J_f\\,J_{\\mathrm{LN}}.\\\\[6pt]
-\\text{Across depth: } \\prod_{\\ell=1}^{L} J_G(x_\\ell)\\ \\text{can vanish if }\\|J_G\\|<1\\ \\text{or explode if }\\|J_G\\|>1.\\\\[6pt]
-\\href{https://mathworld.wolfram.com/SpectralNorm.html}{\\|J_G\\|\\text{ Spectral norm}}.\\\\
+\\mathrm{attn}(\\mathrm{LN}(x)) \\approx 0
 $$
 
----
+- **Pre-LN block:** $x_{l+1} = x_l + \\mathrm{attn}(\\mathrm{LN}(x_l)) \\approx x_l$.
+
+  Backward: $\\dfrac{\\partial x_{l+1}}{\\partial x_l} \\approx I \\;\\Rightarrow\\;$ the gradient passes nearly unchanged.
+
+- **Post-LN (contrast):** $x_{l+1} = \\mathrm{LN}(x_l + \\mathrm{attn}(x_l)) \\approx \\mathrm{LN}(x_l)$,
+
+  so $\\dfrac{\\partial x_{l+1}}{\\partial x_l} \\approx J_{\\mathrm{LN}}(x_l)$, and repeated products can shrink or grow gradients.
+
+## Example 2: Jacobian picture with residual vs. no residual
+
+Consider one block as a function $F(x) = x + f(\\mathrm{LN}(x))$.
+
+### Jacobian (pre-LN)
 
 $$
-\\textbf{Why pre-LN helps more than post-LN}\\\\[6pt]
-\\bullet\\space\\text{Pre-LN: } x_{l+1}=x_l + f(\\mathrm{LN}(x_l))\\\\[6pt] 
-\\space\\space\\space\\text{keeps an identity path in both forward and backward.}\\\\[6pt]
-\\bullet\\space\\text{Post-LN: } x_{l+1}=\\mathrm{LN}(x_l+f(x_l))\\\\[6pt] 
-\\space\\space\\space\\text{Even the skip connection is passed through }J_{\\mathrm{LN}}\\ \\text{every layer, the identity gets scaled repeated,}\\\\
-\\space\\space\\space\\text{which can accumulate into vanishing/exploding.}\\\\[10pt]
+J_F(x) = I + J_f(\\mathrm{LN}(x))\\,J_{\\mathrm{LN}}(x)
 $$
 
----
+If $\\|J_f\\|$ is small and $J_{\\mathrm{LN}}$ is bounded, then $J_F \\approx I + \\epsilon$ with small $\\epsilon$. Across $L$ layers, $\\prod_{\\ell=1}^{L}(I+\\epsilon_\\ell)$ stays near $I$ $\\Rightarrow$ no vanishing/exploding.
+
+### No residual
 
 $$
-\\textbf{Bottom line}\\\\[6pt]
-\\text{Pre-LN residual attention provides an identity gradient highway and bounds the non-identity part, }\\\\
-\\text{preventing vanishing/exploding in deep stacks.}
+G(x) = f(\\mathrm{LN}(x)), \\qquad J_G = J_f\\,J_{\\mathrm{LN}}
 $$
+
+Across depth, $\\prod_{\\ell=1}^{L} J_G(x_\\ell)$ can vanish if $\\|J_G\\|<1$ or explode if $\\|J_G\\|>1$.
+
+Here $\\|J_G\\|$ is the [spectral norm ↗](https://mathworld.wolfram.com/SpectralNorm.html).
+
+## Why pre-LN helps more than post-LN
+
+- **Pre-LN:** $x_{l+1}=x_l + f(\\mathrm{LN}(x_l))$ keeps an identity path in both forward and backward.
+- **Post-LN:** $x_{l+1}=\\mathrm{LN}(x_l+f(x_l))$. Even the skip connection is passed through $J_{\\mathrm{LN}}$ every layer, so the identity gets scaled repeatedly, which can accumulate into vanishing/exploding.
+
+## Bottom line
+
+> Pre-LN residual attention provides an identity gradient highway and bounds the non-identity part, preventing vanishing/exploding in deep stacks.
     `;
 
 export const INFO = {
@@ -57,21 +56,21 @@ export const INFO = {
   input_data_notes: {
     title: "Input Data (Text)",
     md: `
-**What it is**
+## What it is
 
-- Raw text strings (documents, prompts) that will be tokenized before entering the model.
+Raw text strings (documents, prompts) that will be tokenized before entering the model.
 
-**Common preprocessing**
+## Common preprocessing
 
 - Normalize whitespace/newlines if needed.
-- Decide on max sequence length (T) and segmentation strategy (e.g., sliding windows, paragraph chunks).
+- Decide on the max sequence length ($T$) and the segmentation strategy (e.g., sliding windows, paragraph chunks).
 - Split into train/val/test to avoid leakage.
 
-**Batching shapes**
+## Batching shapes
 
 - After tokenization, inputs are **token IDs**: $(B, T)$.
-- Optionally an attention mask: $(B, T)$ to mark padding (not typically used in GPT-2 causal-only training, but useful in general).
-    `,
+- Optionally an **attention mask**: $(B, T)$ to mark padding (not typically used in GPT-2 causal-only training, but useful in general).
+`,
   },
   
   tokenizer_notes: {
@@ -363,151 +362,126 @@ Each box is one chunk; ⎵ marks a space character.
   lossless_round_trip_notes: {
     title: "Lossless round-trip",
     md: `
+**"Lossless round-trip" means that if you encode text into token IDs and then decode those IDs back to text, you get exactly the same bytes you started with: nothing is altered or lost.**
+
+Formally:
+
 $$
-\\textbf{Lossless round-trip:}\\\\[4pt]
-\\text{"Lossless round-trip" means if you encode text into token IDs and then decode those IDs back to text,}\\\\[1pt]
-\\text{you get exactly the same bytes you started with—nothing is altered or lost.}\\\\[6pt]
-\\text{Formally: }\\; \\mathtt{decode(encode(s)) = s}.\\\\[10pt]
-\\textbf{Why true for GPT-2 (byte-level BPE):}\\\\[4pt]
-1)\\ \\text{It operates on raw bytes (no lowercasing/normalization/space stripping).}\\\\
-2)\\ \\text{Every byte sequence is representable.}\\\\
-3)\\ \\text{Decode exactly inverts encode.}\\\\[10pt]
+\\mathtt{decode}(\\mathtt{encode}(s)) = s
 $$
 
-    `,
+## Why it holds for GPT-2 (byte-level BPE)
+
+1. It operates on raw bytes (no lowercasing, normalization, or space stripping).
+2. Every byte sequence is representable.
+3. Decode exactly inverts encode.
+`,
   },
 
   mlp_fc_in_notes: {
     title: "MLP expansion: nn.Linear(n_embd, 4 * n_embd)",
     md: `
-**What this layer does**
+## What this layer does
 
-- Projects each token's hidden vector from size $n\\_embd$ up to a larger **feed-forward** size $4 * n\\_embd$.
-- This is the first linear in the Transformer block's MLP (a.k.a. FFN):
+- Projects each token's hidden vector from size $n\\_embd$ up to a larger **feed-forward** size $4 \\times n\\_embd$.
+- This is the first linear layer in the Transformer block's MLP (a.k.a. FFN):
+
   $$
-  h' = \\phi(\\underbrace{W_1 h + b_1}_{\\text{this layer}}), \\quad \\
-  y = W_2 h' + b_2
+  h' = \\phi(\\underbrace{W_1 h + b_1}_{\\text{this layer}}), \\quad y = W_2 h' + b_2
   $$
 
-**Why 4X? (common design in Transformers)**
+## Why 4x? (a common design in Transformers)
 
 - The MLP is the main place where non-linearity and per-token mixing capacity live.
 - Using a wider hidden dimension increases expressive power at modest depth.
-- Empirically, 4x is a strong trade-off between quality and compute/memory for GPT-2 style models. Larger ratios (e.g., 8x) can improve quality but cost more; smaller (2x) may underfit.
+- Empirically, 4x is a strong trade-off between quality and compute/memory for GPT-2 style models. Larger ratios (e.g., 8x) can improve quality but cost more; smaller ones (2x) may underfit.
 
-**Shapes**
+## Shapes
 
-$$
-\\boxed{\\begin{array}{l}
-- \\text{Input per token}: h \\in \\mathbb{R}^{n\\_embd} \\\\[6pt]
-- \\text{After this layer}: h_1 = W_1 h + b_1 \\in \\mathbb{R}^{4 \\times n\\_embd} \\\\[6pt]
-- \\text{After activation (GELU): same shape} (4 \\times n\\_embd) \\\\[6pt]
-- \\text{Second linear maps back}: (4 \\times n\\_embd) \\to (n\\_embd)
-\\end{array}}
-$$
+- **Input per token:** $h \\in \\mathbb{R}^{n\\_embd}$
+- **After this layer:** $h_1 = W_1 h + b_1 \\in \\mathbb{R}^{4 n\\_embd}$
+- **After activation (GELU):** same shape, $(4 \\times n\\_embd)$
+- **Second linear maps back:** $(4 \\times n\\_embd) \\to (n\\_embd)$
 
+## Parameter count (this layer only)
 
-**Parameter count (this layer only)**
+- **Weights:** $4 \\times n\\_embd \\times n\\_embd = 4 \\times n\\_embd^2$
+- **Bias:** $4 \\times n\\_embd$
+- **Total:** $\\sim 4 \\times n\\_embd^2 + 4 \\times n\\_embd$
 
-$$
-\\boxed{\\begin{array}{l}
-- \\text{Weights}: 4 \\times n\\_embd \\times n\\_embd = 4 \\times n\\_embd^2 \\\\[6pt]
-- \\text{Bias}: 4 \\times n\\_embd \\\\[6pt]
-- \\text{Total}: ~4 \\times n\\_embd^2 + 4 \\times n\\_embd
-\\end{array}}
-$$
+## Alternatives / notes
 
-
-**Alternatives / notes**
-
-- Some variants use ratios other than 4, gated linear units (GEGLU/SwishGLU), or different activations; the idea is similar: widen, nonlinearity, project back.
-- In Pre-LN GPT-2 blocks, this comes after LayerNorm (ln2) and runs after the attention sublayer, inside its own residual branch. (Running attention and MLP in parallel is a later variant, e.g. GPT-J / PaLM.)
-    `,
+- Some variants use ratios other than 4, gated linear units (GEGLU/SwiGLU), or different activations; the idea is similar: widen, apply a nonlinearity, project back.
+- In Pre-LN GPT-2 blocks, this comes after LayerNorm (\`ln2\`) and runs after the attention sublayer, inside its own residual branch. (Running attention and MLP in parallel is a later variant, e.g. GPT-J / PaLM.)
+`,
   },
   mlp_fc_out_notes: {
     title: "MLP projection back: nn.Linear(4 * n_embd, n_embd)",
     md: `
-**What this layer does**
+## What this layer does
 
-- Projects features back from $4 * n\\_embd$ to $n\\_embd$ so the residual add aligns with the block input.
+- Projects features back from $4 \\times n\\_embd$ to $n\\_embd$ so the residual add aligns with the block input.
 - FFN pattern recap:
+
   $$
   h' = \\phi(W_1 h + b_1), \\quad y = \\underbrace{W_2 h' + b_2}_{\\text{this layer}}
   $$
 
-&nbsp;
+## Why project back?
 
-**Why project back?**
+Residual connections need matching dimensions; compressing to $n\\_embd$ keeps compute stable across layers.
 
-- Residual connections need matching dimensions; compressing to $n\\_embd$ keeps compute stable across layers.
+## Shapes
 
-&nbsp;
+- **Input:** $h' \\in \\mathbb{R}^{4 n\\_embd}$
+- **Output:** $y \\in \\mathbb{R}^{n\\_embd}$
 
-**Shapes**
+## Parameter count (this layer only)
 
-$$
-\\boxed{\\begin{array}{l}
-- \\text{Input}: h' \\in \\mathbb{R}^{4 \\times n\\_embd} \\\\[6pt]
-- \\text{Output}: y \\in \\mathbb{R}^{n\\_embd}
-\\end{array}}
-$$
-
-**Parameter count (this layer only)**
-
-$$
-\\boxed{\\begin{array}{l}
-- \\text{Weights}: n\\_embd \\times (4 \\times n\\_embd) = 4 \\times n\\_embd^2 \\\\[6pt]
-- \\text{Bias}: n\\_embd \\\\[6pt]
-- \\text{Total}: ~4 \\times n\\_embd^2 + n\\_embd
-\\end{array}}
-$$
-
-    `,
+- **Weights:** $n\\_embd \\times (4 \\times n\\_embd) = 4 \\times n\\_embd^2$
+- **Bias:** $n\\_embd$
+- **Total:** $\\sim 4 \\times n\\_embd^2 + n\\_embd$
+`,
   },
 
   attn_residual_notes: {
     title: "Residual connection x = x + self.attn(self.ln1(x))",
     md: `
-$$
-\\textbf{This line is the pre-norm residual attention block. It does three things in one:}\\\\[8pt]
-\\textbf{1. Normalize before attention (pre-LN).}\\\\[6pt]
-\\mathtt{self.ln1(x)}\\ \\text{applies LayerNorm to each token's features so the attention sees a well-conditioned input}\\\\
-\\text{(zero-mean, unit-variance per token). This stabilizes training.}\\\\[8pt]
-\\textbf{2. Compute a context-dependent update.}\\\\[6pt]
-\\mathtt{self.attn(...)}\\ \\text{(masked multi-head self-attention) looks at other tokens and returns an update with}\\\\
-\\text{the same shape as } x\\ \\text{ (}B, T, C\\text{). You can think of it as a learned correction }\\Delta x\\ \\text{telling each token what to borrow from its context.}\\\\[8pt]
-\\textbf{3. Residual (skip) connection.}\\\\[6pt]
-\\mathtt{x = x + (...)}\\ \\text{adds that update onto the original stream. The residual path:}\\\\[6pt]
-\\text{(i) gives a gradient highway (there's an identity path, so gradients flow even if the attention sublayer is poorly scaled early in training)}\\\\[6pt]
-\\text{(ii) lets the block learn a small perturbation around identity (if the attention output is near zero, the block behaves like a no-op),}\\\\
-\\text{which makes deep stacks much easier to optimize.}\\\\[10pt]
-$$
+**This line is the pre-norm residual attention block. It does three things in one.**
 
----
+## 1. Normalize before attention (pre-LN)
 
-$$
-\\textbf{Why GPT-2 uses pre-LN specifically (}x + \\mathrm{Attn}(\\mathrm{LN}(x))\\textbf{) instead of post-LN (}\\mathrm{LN}(x + \\mathrm{Attn}(x))\\textbf{):}\\\\[6pt]
-\\text{Pre-LN keeps the residual path's \\href{#info:gradient_notes}{\\text{gradient}} close to 1, which \\href{#info:prevents_vanishing_exploding_notes}{\\text{prevents vanishing/exploding}} and enables training many layers more reliably.}\\\\[6pt]
-\\text{Attention also receives a normalized input, which helps its softmax and projections operate in a stable range.}\\\\[10pt]
-$$
+\`self.ln1(x)\` applies LayerNorm to each token's features so the attention sees a well-conditioned input (zero-mean, unit-variance per token). This stabilizes training.
 
----
+## 2. Compute a context-dependent update
 
-$$
-\\textbf{Shape check (so the add works):}\\\\[6pt]
-x:\\ (B, T, C)\\\\[6pt]
-\\mathtt{self.ln1(x)}:\\ (B, T, C)\\\\[6pt]
-\\mathtt{self.attn(...)}:\\ (B, T, C)\\\\[6pt]
-\\text{Sum is elementwise, returning } (B, T, C).\\\\[10pt]
-$$
+\`self.attn(...)\` (masked multi-head self-attention) looks at other tokens and returns an update with the same shape as $x$, $(B, T, C)$. You can think of it as a learned correction $\\Delta x$ telling each token what to borrow from its context.
 
----
+## 3. Residual (skip) connection
 
-$$
-\\textbf{Big picture:}\\ \\text{the line implements "take your current token representations, normalize them, compute a context-aware}\\\\
-\\text{adjustment via attention, and add that adjustment back"---a stabilized, residual refinement step.}
-$$
-    `,
+\`x = x + (...)\` adds that update onto the original stream. The residual path:
+
+1. gives a **gradient highway**: there's an identity path, so gradients flow even if the attention sublayer is poorly scaled early in training;
+2. lets the block learn a **small perturbation around identity**: if the attention output is near zero, the block behaves like a no-op, which makes deep stacks much easier to optimize.
+
+## Why GPT-2 uses pre-LN
+
+GPT-2 uses pre-LN, $x + \\mathrm{Attn}(\\mathrm{LN}(x))$, instead of post-LN, $\\mathrm{LN}(x + \\mathrm{Attn}(x))$:
+
+- Pre-LN keeps the residual path's [gradient](#info:gradient_notes) close to 1, which [prevents vanishing/exploding](#info:prevents_vanishing_exploding_notes) and enables training many layers more reliably.
+- Attention also receives a normalized input, which helps its softmax and projections operate in a stable range.
+
+## Shape check (so the add works)
+
+\`\`\`text
+x                 (B, T, C)
+self.ln1(x)       (B, T, C)
+self.attn(...)    (B, T, C)
+sum (elementwise) (B, T, C)
+\`\`\`
+
+> **Big picture:** the line implements "take your current token representations, normalize them, compute a context-aware adjustment via attention, and add that adjustment back": a stabilized, residual refinement step.
+`,
   },
 
   prevents_vanishing_exploding_notes: {
@@ -523,34 +497,71 @@ $$
   gradient_notes: {
     title: "Gradient",
     md: `
+**Here's a tiny 2-D numeric example that shows how the gradient is multiplied by each layer's Jacobian (matrix) in backprop.**
+
+## Setup
+
+Let
+
 $$
-\\boxed{\\begin{array}{l} 
-\\textbf{Here's a tiny 2-D numeric example that shows how the gradient is multiplied by each layer's Jacobian (matrix) in backprop.}\\\\[12pt] 
-\\textbf{Setup}\\\\[4pt] 
-\\text{Let }\\\\ W_1 = \\begin{bmatrix}1.0 & 0.5\\\\ -0.2 & 1.2\\end{bmatrix},\\quad W_2 = \\begin{bmatrix}0.8 & -0.3\\\\ 0.4 & 1.1\\end{bmatrix},\\quad x = \\begin{bmatrix}1\\\\ -2\\end{bmatrix}.\\\\[12pt] 
-\\textbf{Forward pass}\\\\[4pt] 
-z \\,=\\, W_1 x \\;=\\; \\begin{bmatrix}1.0 & 0.5\\\\ -0.2 & 1.2\\end{bmatrix} \\begin{bmatrix}1\\\\ -2\\end{bmatrix} \\;=\\; \\begin{bmatrix}1.0 + 0.5(-2)\\\\ -0.2 + 1.2(-2)\\end{bmatrix} \\;=\\; \\begin{bmatrix}0.0\\\\ -2.6\\end{bmatrix}.\\\\[12pt] 
-y \\,=\\, W_2 z \\;=\\; \\begin{bmatrix}0.8 & -0.3\\\\ 0.4 & 1.1\\end{bmatrix} \\begin{bmatrix}0.0\\\\ -2.6\\end{bmatrix} \\;=\\; \\begin{bmatrix}0.8\\cdot 0.0 + (-0.3)(-2.6)\\\\ 0.4\\cdot 0.0 + 1.1(-2.6)\\end{bmatrix} \\;=\\; \\begin{bmatrix}0.78\\\\ -2.86\\end{bmatrix}.\\\\[12pt] 
-L \\,=\\, \\tfrac{1}{2}\\,\\|y\\|^2 \\,=\\, \\tfrac{1}{2}\\big(0.78^2 + (-2.86)^2\\big) \\,=\\, \\tfrac{1}{2}(0.6084 + 8.1796) \\,=\\, 4.394.\\\\[12pt] 
-\\textbf{Backprop (chain rule = Jacobian multiplications)}\\\\[4pt] 
-\\text{Since } L = \\tfrac{1}{2}\\|y\\|^2,\\quad \\dfrac{\\partial L}{\\partial y} = y = \\begin{bmatrix}0.78\\\\ -2.86\\end{bmatrix}.\\\\[12pt] 
-\\dfrac{\\partial L}{\\partial x} \\,=\\, \\Big(\\dfrac{\\partial y}{\\partial x}\\Big)^{\\!\\top}\\,\\dfrac{\\partial L}{\\partial y} \\,=\\, (W_2 W_1)^{\\!\\top} y \\,=\\, W_1^{\\top} W_2^{\\top} y.\\\\[12pt] 
-\\text{Step 1: multiply by } W_2^{\\top}:\\\\[6pt] 
-W_2^{\\top} = \\begin{bmatrix}0.8 & 0.4\\\\ -0.3 & 1.1\\end{bmatrix},\\quad g_1 = W_2^{\\top}\\,\\dfrac{\\partial L}{\\partial y} \\,=\\, \\begin{bmatrix}0.8 & 0.4\\\\ -0.3 & 1.1\\end{bmatrix} \\begin{bmatrix}0.78\\\\ -2.86\\end{bmatrix} \\,=\\, \\begin{bmatrix}0.8\\cdot 0.78 + 0.4(-2.86)\\\\ -0.3\\cdot 0.78 + 1.1(-2.86)\\end{bmatrix} \\,=\\, \\begin{bmatrix}-0.52\\\\ -3.38\\end{bmatrix}.\\\\[12pt] 
-\\text{Step 2: multiply by } W_1^{\\top}:\\\\[6pt] 
-W_1^{\\top} = \\begin{bmatrix}1.0 & -0.2\\\\ 0.5 & 1.2\\end{bmatrix},\\quad \\dfrac{\\partial L}{\\partial x} \\,=\\, W_1^{\\top} g_1 \\,=\\, \\begin{bmatrix}1.0 & -0.2\\\\ 0.5 & 1.2\\end{bmatrix} \\begin{bmatrix}-0.52\\\\ -3.38\\end{bmatrix} \\,=\\, \\begin{bmatrix}1.0(-0.52) + (-0.2)(-3.38)\\\\ 0.5(-0.52) + 1.2(-3.38)\\end{bmatrix} \\,=\\, \\begin{bmatrix}0.156\\\\ -4.316\\end{bmatrix}.\\\\[12pt] 
-\\textbf{Check (single combined Jacobian)}\\\\[4pt] 
-W_2 W_1 \\,=\\, \\begin{bmatrix}0.86 & 0.04\\\\ 0.18 & 1.52\\end{bmatrix},\\quad (W_2 W_1)^{\\top} y \\,=\\, \\begin{bmatrix}0.86 & 0.18\\\\ 0.04 & 1.52\\end{bmatrix} \\begin{bmatrix}0.78\\\\ -2.86\\end{bmatrix} \\,=\\, \\begin{bmatrix}0.86\\cdot 0.78 + 0.18(-2.86)\\\\ 0.04\\cdot 0.78 + 1.52(-2.86)\\end{bmatrix} \\,=\\, \\begin{bmatrix}0.156\\\\ -4.316\\end{bmatrix}.\\\\[12pt] 
-\\textbf{What this shows}\\\\[4pt] 
-\\text{1. Backprop takes the upstream gradient and left-multiplies by each layer's Jacobian transpose in reverse order.}\\\\ 
-\\text{2. In deep stacks, this becomes a product of many matrices; that product can shrink or grow rapidly—vanishing/exploding gradients.}\\\\ 
-\\text{3. Residual/identity paths keep each factor near identity, keeping the overall product well-behaved.} \\\\
-\\text{4. NOTE : For } \\mathtt{𝑦=𝑊𝑥+𝑏}, \\text{the Jacobian w.r.t. 𝑥 is exactly } \\mathtt{𝐽=∂𝑦/∂𝑥=𝑊}.
-\\text{In backprop you then multiply the upstream gradient by } \\mathtt{𝐽^⊤=𝑊^⊤}. \\\\
-\\text{Outside of this special case, no—the Jacobian is not just } \\mathtt{𝑊^⊤}.
-\\end{array}}
+W_1 = \\begin{bmatrix}1.0 & 0.5\\\\ -0.2 & 1.2\\end{bmatrix},\\quad W_2 = \\begin{bmatrix}0.8 & -0.3\\\\ 0.4 & 1.1\\end{bmatrix},\\quad x = \\begin{bmatrix}1\\\\ -2\\end{bmatrix}
 $$
-    `
+
+## Forward pass
+
+$$
+z = W_1 x = \\begin{bmatrix}1.0 & 0.5\\\\ -0.2 & 1.2\\end{bmatrix} \\begin{bmatrix}1\\\\ -2\\end{bmatrix} = \\begin{bmatrix}1.0 + 0.5(-2)\\\\ -0.2 + 1.2(-2)\\end{bmatrix} = \\begin{bmatrix}0.0\\\\ -2.6\\end{bmatrix}
+$$
+
+$$
+y = W_2 z = \\begin{bmatrix}0.8 & -0.3\\\\ 0.4 & 1.1\\end{bmatrix} \\begin{bmatrix}0.0\\\\ -2.6\\end{bmatrix} = \\begin{bmatrix}0.8\\cdot 0.0 + (-0.3)(-2.6)\\\\ 0.4\\cdot 0.0 + 1.1(-2.6)\\end{bmatrix} = \\begin{bmatrix}0.78\\\\ -2.86\\end{bmatrix}
+$$
+
+$$
+L = \\tfrac{1}{2}\\|y\\|^2 = \\tfrac{1}{2}\\big(0.78^2 + (-2.86)^2\\big) = \\tfrac{1}{2}(0.6084 + 8.1796) = 4.394
+$$
+
+## Backprop (chain rule = Jacobian multiplications)
+
+Since $L = \\tfrac{1}{2}\\|y\\|^2$,
+
+$$
+\\frac{\\partial L}{\\partial y} = y = \\begin{bmatrix}0.78\\\\ -2.86\\end{bmatrix}
+$$
+
+$$
+\\frac{\\partial L}{\\partial x} = \\Big(\\frac{\\partial y}{\\partial x}\\Big)^{\\!\\top}\\frac{\\partial L}{\\partial y} = (W_2 W_1)^{\\top} y = W_1^{\\top} W_2^{\\top} y
+$$
+
+### Step 1: multiply by $W_2^\\top$
+
+$$
+W_2^{\\top} = \\begin{bmatrix}0.8 & 0.4\\\\ -0.3 & 1.1\\end{bmatrix} \\\\[6pt]
+g_1 = W_2^{\\top}\\frac{\\partial L}{\\partial y} = \\begin{bmatrix}0.8 & 0.4\\\\ -0.3 & 1.1\\end{bmatrix} \\begin{bmatrix}0.78\\\\ -2.86\\end{bmatrix} = \\begin{bmatrix}0.8\\cdot 0.78 + 0.4(-2.86)\\\\ -0.3\\cdot 0.78 + 1.1(-2.86)\\end{bmatrix} = \\begin{bmatrix}-0.52\\\\ -3.38\\end{bmatrix}
+$$
+
+### Step 2: multiply by $W_1^\\top$
+
+$$
+W_1^{\\top} = \\begin{bmatrix}1.0 & -0.2\\\\ 0.5 & 1.2\\end{bmatrix} \\\\[6pt]
+\\frac{\\partial L}{\\partial x} = W_1^{\\top} g_1 = \\begin{bmatrix}1.0 & -0.2\\\\ 0.5 & 1.2\\end{bmatrix} \\begin{bmatrix}-0.52\\\\ -3.38\\end{bmatrix} = \\begin{bmatrix}1.0(-0.52) + (-0.2)(-3.38)\\\\ 0.5(-0.52) + 1.2(-3.38)\\end{bmatrix} = \\begin{bmatrix}0.156\\\\ -4.316\\end{bmatrix}
+$$
+
+## Check (single combined Jacobian)
+
+$$
+W_2 W_1 = \\begin{bmatrix}0.86 & 0.04\\\\ 0.18 & 1.52\\end{bmatrix} \\\\[6pt]
+(W_2 W_1)^{\\top} y = \\begin{bmatrix}0.86 & 0.18\\\\ 0.04 & 1.52\\end{bmatrix} \\begin{bmatrix}0.78\\\\ -2.86\\end{bmatrix} = \\begin{bmatrix}0.86\\cdot 0.78 + 0.18(-2.86)\\\\ 0.04\\cdot 0.78 + 1.52(-2.86)\\end{bmatrix} = \\begin{bmatrix}0.156\\\\ -4.316\\end{bmatrix}
+$$
+
+## What this shows
+
+1. Backprop takes the upstream gradient and left-multiplies it by each layer's Jacobian transpose, in reverse order.
+2. In deep stacks, this becomes a product of many matrices; that product can shrink or grow rapidly: vanishing/exploding gradients.
+3. Residual/identity paths keep each factor near identity, keeping the overall product well-behaved.
+
+> **Note:** for $y = Wx + b$, the Jacobian with respect to $x$ is exactly $J = \\partial y / \\partial x = W$. In backprop you then multiply the upstream gradient by $J^\\top = W^\\top$. Outside of this special case, no: the Jacobian is not just $W$.
+`
   },
 
   gpt2_merge_ranks_notes: {
@@ -610,64 +621,61 @@ GPT-2 is byte-level. Space is part of the bytes and many tokens encode "space+wo
   attention_linear_notes: {
     title: "Attention linear",
     md: `
-$\\textbf{What it is:}\\\\[4pt]$
-$$\\mathtt{self.c\\_attn = nn.Linear(n\\_embd,\\ 3 * n\\_embd,\\ bias=True)}$$ is a single fused projection that computes $\\textbf{Q, K, V}$ in one matmul.
-Equivalent to stacking three $\\mathtt{Linear(n\\_embd, n\\_embd)}$ layers:
+## What it is
+
+\`self.c_attn = nn.Linear(n_embd, 3 * n_embd, bias=True)\` is a single fused projection that computes **Q, K, V** in one matmul. It is equivalent to stacking three \`Linear(n_embd, n_embd)\` layers:
 
 $$
 W_{qkv} = \\begin{bmatrix} W_Q \\\\ W_K \\\\ W_V \\end{bmatrix},\\quad
-b_{qkv} = \\begin{bmatrix} b_Q \\\\ b_K \\\\ b_V \\end{bmatrix}.\\\\[20pt]
+b_{qkv} = \\begin{bmatrix} b_Q \\\\ b_K \\\\ b_V \\end{bmatrix}
 $$
 
-$\\textbf{Parameter shapes:}\\\\[4pt]$
-$$
-\\text{Weight: } (3\\times n\\_{\\text{embd}},\\ n\\_{\\text{embd}}),\\quad
-\\text{Bias: } (3\\times n\\_{\\text{embd}}).\\\\[12pt]
-$$
+## Parameter shapes
 
-$\\textbf{What it does to the tensor:}\\\\[4pt]$
-$$
-\\text{Input } x \\in \\mathbb{R}^{B\\times T\\times n\\_{\\text{embd}}}.\\\\[4pt]
-\\mathtt{qkv = c\\_attn(x)}\\ \\Rightarrow\\ qkv \\in \\mathbb{R}^{B\\times T\\times 3\\times n\\_{\\text{embd}}}.\\\\[4pt]
-\\mathtt{q,\\ k,\\ v = qkv.split(n\\_embd,\\ 2)}\\ \\Rightarrow\\ q,k,v \\in \\mathbb{R}^{B\\times T\\times n\\_{\\text{embd}}}.\\\\[4pt]
-\\text{Split q, k, and v into heads with } hs = n\\_{\\text{embd}}/n\\_{\\text{head}}\\\\[4pt]
-\\mathtt{view(B, T, n\\_head, hs).transpose(1, 2)}\\ \\Rightarrow\\ (B,\\ n\\_{\\text{head}},\\ T,\\ hs).\\\\[12pt]
-$$
+- **Weight:** $(3 \\times n\\_embd,\\ n\\_embd)$
+- **Bias:** $(3 \\times n\\_embd)$
 
-$\\textbf{Why fuse Q/K/V?}\\\\[4pt]$
-$$
-\\text{Fewer kernel launches / better cache use (one big GEMM vs. three separate linears). Results are identical to three separate linears.}\\\\[12pt]
-$$
+## What it does to the tensor
 
-$\\textbf{Parameter count:}\\\\[4pt]$
-$$
-\\text{Weights: } 3\\times n\\_{\\text{embd}}^2,\\quad \\text{Bias: } 3\\times n\\_{\\text{embd}}.\\\\
-\\text{Example } (n\\_{\\text{embd}}=768):\\ \\text{weights } 3\\cdot 768^2=1{,}769{,}472,\\ \\text{bias } 3\\cdot 768=2{,}304.\\\\[12pt]
-$$
+1. Input $x \\in \\mathbb{R}^{B \\times T \\times n\\_embd}$.
+2. \`qkv = c_attn(x)\` gives $qkv \\in \\mathbb{R}^{B \\times T \\times 3n\\_embd}$.
+3. \`q, k, v = qkv.split(n_embd, 2)\` gives $q, k, v \\in \\mathbb{R}^{B \\times T \\times n\\_embd}$.
+4. Split q, k and v into heads with $hs = n\\_embd / n\\_head$: \`view(B, T, n_head, hs).transpose(1, 2)\` gives $(B,\\ n\\_head,\\ T,\\ hs)$.
 
-$\\textbf{PyTorch default initialization:}\\\\[8pt]$
-$$\\text{By default in PyTorch, nn.Linear initializes weights with }\\textbf{Kaiming uniform}\\text{ and biases with a plain uniform with the same bound.}\\\\[6pt]$$
-$\\bullet\\ \\textbf{Weights: }\\text{PyTorch initializes Linear.weight with Kaiming (He) uniform:}\\\\[4pt]$
+## Why fuse Q/K/V?
 
-&nbsp;
+Fewer kernel launches and better cache use: one big GEMM instead of three separate linears. The results are identical to three separate linears.
+
+## Parameter count
+
+- **Weights:** $3 \\times n\\_embd^2$
+- **Bias:** $3 \\times n\\_embd$
+
+> Example ($n\\_embd = 768$): weights $3 \\cdot 768^2 = 1{,}769{,}472$, bias $3 \\cdot 768 = 2{,}304$.
+
+## PyTorch default initialization
+
+By default, PyTorch's \`nn.Linear\` initializes weights with **Kaiming uniform** and biases with a plain uniform with the same bound.
+
+### Weights
+
+PyTorch initializes \`Linear.weight\` with Kaiming (He) uniform:
 
 \`\`\`python
 init.kaiming_uniform_(self.weight, a=math.sqrt(5))
 \`\`\`
 
-&nbsp;
-
-Passing $\\text{a=math.sqrt(5)}$ is a PyTorch trick so that the resulting uniform range becomes $\\mathcal{U}(-\\tfrac{1}{\\sqrt{\\text{fan\\_in}}}, \\tfrac{1}{\\sqrt{\\text{fan\\_in}}})$,
-numerically the same range you'd get from a plain uniform with that bound. This was done for backward-compatibility when they refactored to use $\\mathtt{kaiming\\_uniform\\_}. \\href{https://discuss.pytorch.org/t/nn-linear-default-weight-initialisation-assumes-leaky-relu-activation/46712/2?utm_source=chatgpt.com}{\\texttt{Forum post}}$.
+Passing \`a=math.sqrt(5)\` is a PyTorch trick so that the resulting uniform range becomes $\\mathcal{U}\\!\\left(-\\tfrac{1}{\\sqrt{\\text{fan\\_in}}}, \\tfrac{1}{\\sqrt{\\text{fan\\_in}}}\\right)$, numerically the same range you'd get from a plain uniform with that bound. This was done for backward compatibility when they refactored to use \`kaiming_uniform_\` ([forum post ↗](https://discuss.pytorch.org/t/nn-linear-default-weight-initialisation-assumes-leaky-relu-activation/46712/2)).
 
 $$
-W_{ij} \\sim \\mathcal{U}\\!\\left(-\\tfrac{1}{\\sqrt{\\text{fan\\_in}}},\\ \\tfrac{1}{\\sqrt{\\text{fan\\_in}}}\\right),\\quad
-\\text{with } \\text{fan\\_in}=n\\_{\\text{embd}}.\\ \\text{(For } n\\_{\\text{embd}}=768:\\ \\approx\\pm 0.0361\\text{.)}\\\\[12pt]
+W_{ij} \\sim \\mathcal{U}\\!\\left(-\\tfrac{1}{\\sqrt{\\text{fan\\_in}}},\\ \\tfrac{1}{\\sqrt{\\text{fan\\_in}}}\\right), \\quad \\text{fan\\_in} = n\\_embd
 $$
 
-$\\bullet\\ \\textbf{Biases: }\\text{Bias is not Kaiming; it's sampled explicitly from a plain uniform with the same bound:}\\\\[4pt]$
+For $n\\_embd = 768$ the bound is $\\approx \\pm 0.0361$.
 
-&nbsp;
+### Biases
+
+The bias is not Kaiming; it's sampled explicitly from a plain uniform with the same bound:
 
 \`\`\`python
 fan_in, _ = _calculate_fan_in_and_fan_out(self.weight)
@@ -675,504 +683,483 @@ bound = 1 / sqrt(fan_in)
 init.uniform_(self.bias, -bound, bound)
 \`\`\`
 
-&nbsp;
-
 $$
-\\Rightarrow b_i \\sim \\mathcal{U}\\!\\left(-\\tfrac{1}{\\sqrt{\\text{fan\\_in}}},\\ \\tfrac{1}{\\sqrt{\\text{fan\\_in}}}\\right),\\\\
+\\Rightarrow b_i \\sim \\mathcal{U}\\!\\left(-\\tfrac{1}{\\sqrt{\\text{fan\\_in}}},\\ \\tfrac{1}{\\sqrt{\\text{fan\\_in}}}\\right)
 $$
 
-So: weights use Kaiming-uniform configured to yield the same range as a simple uniform, while biases use that simple uniform directly.
+> So: weights use Kaiming uniform configured to yield the same range as a simple uniform, while biases use that simple uniform directly.
 
-&nbsp;
+**Note:** many Transformer/GPT-2 implementations override this and use a normal init $\\mathcal{N}(0, 0.02^2)$ for linear layers and embeddings.
 
-**Note**: Many Transformer/GPT-2 implementations override this and use a normal init $\\mathcal{N}(0,0.02^{2})$
-for linear layers/embeddings. 
+## References
 
-&nbsp;
+1. **Kaiming initialization**
 
-$\\textbf{References:}\\\\[4pt]$
-$\\textbf{1. Kaiming initialization: }$
-introduces the initialization for rectifiers (ReLU/LeakyReLU) and derives the variance-preserving scheme.
-$\\href{https://arxiv.org/pdf/1502.01852.pdf}{\\texttt{He et al., 2015}} \\\\[4pt]$
+   Introduces the initialization for rectifiers (ReLU/LeakyReLU) and derives the variance-preserving scheme.
 
-$\\textbf{2. PyTorch defaults: }$
-See the PyTorch init code that points to the exact behavior.
-$\\href{https://github.com/pytorch/pytorch/blob/v2.8.0/torch/nn/modules/linear.py#L50}{\\texttt{PyTorch init docs}} \\\\[4pt]$
+   [He et al., 2015 ↗](https://arxiv.org/pdf/1502.01852.pdf)
 
-$\\textbf{3. GPT-2 / HF Transformers practice (overriding PyTorch defaults): }\\\\[4pt]$
-GPT-2 (HF Transformers): weight matrices initialized from a (truncated) Normal(0, 0.02) controlled by initializer_range=0.02 in the config. This is the widely used default when you instantiate GPT-2 from Transformers.
-$\\href{https://huggingface.co/docs/transformers/main/model_doc/gpt2?utm_source=chatgpt.com}{\\texttt{GPT-2 Configs}} \\\\[4pt]$
+2. **PyTorch defaults**
 
-You can also see this policy described in general Transformer init notes (HF/others): "weights ~ Normal(0, initializer_range) (often 0.02), biases 0; LayerNorm γ=1, β=0."
-$\\href{https://huggingface.co/transformers/v3.1.0/internal/modeling_utils.html?utm_source=chatgpt.com}{\\texttt{HF Transformers Modeling Utils}} \\\\[4pt]$
+   The PyTorch init code that shows the exact behavior.
 
+   [PyTorch init code ↗](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/nn/modules/linear.py#L50)
+
+3. **GPT-2 / HF Transformers practice (overriding PyTorch defaults)**
+
+   GPT-2 (HF Transformers): weight matrices are initialized from a (truncated) Normal(0, 0.02), controlled by \`initializer_range=0.02\` in the config. This is the widely used default when you instantiate GPT-2 from Transformers.
+
+   [GPT-2 Configs ↗](https://huggingface.co/docs/transformers/main/model_doc/gpt2)
+
+4. **General Transformer init policy**
+
+   The same policy is described in general Transformer init notes (HF and others): "weights ~ Normal(0, initializer_range) (often 0.02), biases 0; LayerNorm γ=1, β=0."
+
+   [HF Transformers Modeling Utils ↗](https://huggingface.co/transformers/v3.1.0/internal/modeling_utils.html)
 `,
   },
 
   attention_output_linear_notes: {
     title: "Attention output projection",
     md: `
-Intuitively, the projection layer increases expressivity, this layer learns a linear combination so information from
-different heads can interact before entering the residual. Without it, heads would stay in disjoint slices and couldn't
-"talk" before the next block.
+**The output projection lets information from different heads interact before it enters the residual stream.**
 
-&nbsp;
+## Intuition
 
-$\\text{On the high level, think of it as following}\\\\[2pt]$
-$$
-\\bullet\\ \\text{Q/K do routing (which tokens attend to which other tokens, within each head)}\\\\[2pt]
-\\bullet\\ \\text{V carries content}\\\\[2pt]
-\\bullet\\ \\text{Projection chooses where/how to write that content into the residual space (a learned basis change)}\\\\[2pt]
-\\text{It lets the model reweight heads, rotate features, and gate what survives to the next layer.}\\\\[10pt]
-$$
+The projection layer increases expressivity: it learns a linear combination so information from different heads can interact before entering the residual. Without it, heads would stay in disjoint slices and couldn't "talk" before the next block.
 
-$\\textbf{Parameter shapes}\\\\[4pt]$
-$$
-\\text{Weight: } (n\\_embd, n\\_embd),\\quad \\text{Bias: } (n\\_embd).\\\\[2pt]
-\\text{More strictly, the weight dimension is } (n\\_head * hs, n\\_embd). \\text{ But for GPT-2, they are often the same.}\\\\[4pt]
-$$
+At a high level, think of it as follows:
 
-$\\textbf{PyTorch default initialization:}\\\\[4pt]$
-Refer to the "PyTorch default initialization" section in the $\\href{#info:attention_linear_notes}{\\text{Attention linear notes}}$ for the details.
+- **Q/K do routing:** which tokens attend to which other tokens, within each head.
+- **V carries content.**
+- **The projection chooses where and how to write that content into the residual space** (a learned basis change).
 
-&nbsp;
+> It lets the model reweight heads, rotate features, and gate what survives to the next layer.
 
-The weight of this layer is also called the "residual-writing weights" because it is final projection matrix that writes the residual update to the original stream.
+## Parameter shapes
 
-&nbsp;
+- **Weight:** $(n\\_embd,\\ n\\_embd)$
+- **Bias:** $(n\\_embd)$
 
-Why I call this out: at initialization some implementations scale these residual-writing weights by $\\frac{1}{\\sqrt{N}}$ (or $\\frac{1}{\\sqrt{2N}}$) where N is the number of residual layers.
-so that the sum of $\\frac{1}{\\sqrt{N}}$ residual additions doesn't blow up in variance with depth. But this scaling technique is not universal anymore because:
+More strictly, the input dimension is $n\\_head \\cdot hs$ (the merged heads), so the \`nn.Linear\` weight, stored as (out, in), is $(n\\_embd,\\ n\\_head \\cdot hs)$. In GPT-2, $n\\_head \\cdot hs = n\\_embd$ (e.g. $12 \\times 64 = 768$), so the two are the same.
 
-&nbsp;
+## PyTorch default initialization
 
-$\\textbf{1. Pre-norm (often RMSNorm) stabilizes depth by design}\\\\[4pt]$
-In post-norm Transformers, the residual stream's variance can grow with depth, so 
-$\\frac{1}{\\sqrt{N}}$ helps keep it in range. Modern stacks use pre-norm/RMSNorm: each block first normalizes the stream, then applies the sublayer, then adds it back. That normalization pins the scale right before the residual add, so extra 
-$\\frac{1}{\\sqrt{N}}$ at init is largely redundant.
+See the "PyTorch default initialization" section in the [Attention linear notes](#info:attention_linear_notes) for the details.
 
-&nbsp;
+## Residual-writing weights
 
-$\\textbf{See a tiny numeric \\href{#info:post_norm_scaling_example_notes}{example} on why Post-norm needs this scaling but Pre-norm doesn't.}$
+The weight of this layer is also called the **residual-writing weights**, because it is the final projection matrix that writes the residual update to the original stream.
 
+Why I call this out: at initialization, some implementations scale these residual-writing weights by $\\frac{1}{\\sqrt{N}}$ (or $\\frac{1}{\\sqrt{2N}}$), where $N$ is the number of residual layers, so that the sum of $N$ residual additions doesn't blow up in variance with depth. Whether to use it varies between implementations.
+
+### Why pre-norm stacks like GPT-2 need it
+
+In a pre-norm block, $x \\leftarrow x + f(\\mathrm{LN}(x))$: LayerNorm normalizes only the sublayer's **input**. The residual stream itself is never normalized, so every block adds to it and its variance grows with the number of residual additions. Scaling the residual-writing weights by $\\frac{1}{\\sqrt{N}}$ keeps that sum in range. This is what the GPT-2 paper does: it scales the weights of residual layers at initialization by $\\frac{1}{\\sqrt{N}}$ to account for the accumulation on the residual path with depth.
+
+In a post-norm block, $x \\leftarrow \\mathrm{LN}(x + f(x))$, the stream is renormalized after every addition, so it cannot accumulate in the same way.
+
+> See a tiny numeric [example](#info:post_norm_scaling_example_notes) of residual scaling in a post-norm stack.
 `,
   },
 
   attn_dropout_notes: {
     title: "Attention dropout",
     md: `
-$$\\text{Attention dropout applies dropout to the attention matrix after softmax and masking, before the value mix:}\\\\[2pt]$$
-$$A=\\mathrm{softmax}(S+\\text{mask}),\\quad \\tilde A=\\mathrm{Dropout}_p(A),\\quad Y=\\tilde A\\,V.\\\\[2pt]$$
-$$\\text{In code: }\\mathtt{att = self.attn\\_drop(att)}\\ \\text{ where }\\mathtt{att}\\text{ is already softmaxed.}\\\\[8pt]$$
+**Attention dropout applies dropout to the attention matrix after softmax and masking, before the value mix.**
 
-$$\\textbf{Why it helps (intuition)}\\\\[2pt]$$
-$$\\text{- Think of attention as a graph from each query token to earlier tokens; dropout randomly removes some edges.}\\\\[2pt]$$
-$$\\text{- Prevents over-reliance on a single edge, nudging heads to find backup paths and generalize better.}\\\\[2pt]$$
-$$\\text{- Acts like gentle exploration: sometimes forcing the model to look elsewhere.}\\\\[8pt]$$
+$$
+A = \\mathrm{softmax}(S + \\text{mask}), \\quad \\tilde A = \\mathrm{Dropout}_p(A), \\quad Y = \\tilde A\\,V
+$$
 
-$$\\textbf{When it is active}\\\\[2pt]$$
-$$\\text{Training only: enabled in }\\mathtt{model.train()};\\\\[2pt]$$
-$$\\text{Disabled at inference: }\\mathtt{model.eval()}. \\\\[8pt]$$
+In code: \`att = self.attn_drop(att)\`, where \`att\` is already softmaxed.
 
-$$\\textbf{Shape}\\\\[2pt]$$
-$$\\mathtt{att}\\in\\mathbb{R}^{B\\times n\\_head\\times T\\times T}\\ \\longrightarrow\\ \\text{same shape after dropout.}\\\\[8pt]$$
+## Why it helps (intuition)
 
-$$\\textbf{Mechanics (inverted dropout)}\\\\[2pt]$$
-$$\\tilde A \\;=\\; \\frac{A\\odot M}{1-p},\\qquad M_{ij}\\sim\\mathrm{Bernoulli}(1-p).\\\\[2pt]$$
-$$\\text{This keeps the expected value unchanged:: }\\mathbb{E}[\\tilde A]=A\\\\[2pt]$$
-$$\\text{(row sums are not exactly 1 per sample, but the expectation matches).}\\\\[8pt]$$
+- Think of attention as a graph from each query token to earlier tokens; dropout randomly removes some edges.
+- It prevents over-reliance on a single edge, nudging heads to find backup paths and generalize better.
+- It acts like gentle exploration: sometimes forcing the model to look elsewhere.
 
-$$\\textbf{Practical notes}\\\\[2pt]$$
-$$\\text{- Apply after masking and softmax (never drop masked zeros).}\\\\[2pt]$$
-$$\\text{- Typical }p\\approx 0.1\\ \\text{(e.g., GPT-2 uses ~0.1) }\\\\[2pt]$$
-$$\\text{Smaller datasets may benefit from a larger p; huge models sometimes set it to 0 if other regularizers suffice..}\\\\[8pt]$$
+## When it is active
 
-$$\\textbf{One intuition example}\\\\[2pt]$$
+- **Training only:** enabled in \`model.train()\`.
+- **Disabled at inference:** \`model.eval()\`.
 
-$$\\bullet\\ \\text{Suppose a head usually puts most attention on "dogs" to decide the verb should be "were".}\\\\[2pt]$$
-$$\\bullet\\ \\text{With attention dropout, that strongest edge is sometimes zeroed during training.}\\\\[2pt]$$
-$$\\bullet\\ \\text{When that happens, the model must use other cues (plurality elsewhere, other heads) to solve the task correctly.}\\\\[2pt]$$
-$$\\bullet\\ \\text{Over time, this builds redundancy and avoids brittle shortcuts, making predictions more robust.}\\\\[4pt]$$
+## Shape
 
-    `,
+$\\text{att} \\in \\mathbb{R}^{B \\times n\\_head \\times T \\times T}$, with the same shape after dropout.
+
+## Mechanics (inverted dropout)
+
+$$
+\\tilde A = \\frac{A \\odot M}{1 - p}, \\qquad M_{ij} \\sim \\mathrm{Bernoulli}(1 - p)
+$$
+
+This keeps the expected value unchanged: $\\mathbb{E}[\\tilde A] = A$.
+
+> Row sums are not exactly 1 per sample, but the expectation matches.
+
+## Practical notes
+
+- Apply after masking and softmax (never drop masked zeros).
+- Typical $p \\approx 0.1$ (e.g., GPT-2 uses ~0.1).
+- Smaller datasets may benefit from a larger $p$; huge models sometimes set it to 0 if other regularizers suffice.
+
+## One intuition example
+
+- Suppose a head usually puts most attention on "dogs" to decide the verb should be "were".
+- With attention dropout, that strongest edge is sometimes zeroed during training.
+- When that happens, the model must use other cues (plurality elsewhere, other heads) to solve the task correctly.
+- Over time, this builds redundancy and avoids brittle shortcuts, making predictions more robust.
+`,
   },
 
   resid_dropout_notes: {
     title: "Residual dropout in Causal Self-Attention",
     md: `
-  $$\\textbf{Causal residual dropout (a.k.a. dropout on the attention branch's residual update)}\\\\[4pt]$$
-  Refer to the $$\\href{#info:mlp_dropout_notes}{\\text{MLP residual-dropout notes}}$$ for: what dropout is, why residual dropout is useful, train vs. eval behavior and example. 
-  Everything below focuses on what's specific to causal self-attention.
+**Causal residual dropout (a.k.a. dropout on the attention branch's residual update)**
 
-  &nbsp;
+See the [MLP residual-dropout notes](#info:mlp_dropout_notes) for what dropout is, why residual dropout is useful, train vs. eval behavior, and an example. Everything below focuses on what's specific to causal self-attention.
 
-  $$\\textbf{What it does}\\\\[4pt]$$
-  The Causal residual dropout is applied on the mixed feature vector after heads are concatenated and projected by $$\\mathtt{W_O}$$, right before the residual add.
-  At this point, all attention heads have been combined into a single update vector for each position.
-  
-  &nbsp;
+## What it does
 
-  $$\\textbf{Why it is useful}\\\\[4pt]$$
-  Heads can become spiky (e.g., lock onto one token path). Even if the attention pattern is spiky, the written features still pass through $$\\mathtt{W_O}$$
-  before being added to the original stream. Randomly muting parts of that write:
-  
-  $$
-  \\bullet \\; \\text{discourages dependence on a single head/channel's features}\\\\[2pt]
-  \\bullet \\; \\text{encourages redundant cues across heads,}
-  $$
+Causal residual dropout is applied to the mixed feature vector after the heads are concatenated and projected by \`W_O\`, right before the residual add. At this point, all attention heads have been combined into a single update vector for each position.
 
-  Think of $$\\mathtt{Q/K/V}$$ as the "read side" of the attention mechanism. Then $$\\mathtt{W_O}$$ is the "write side".
-  Attention dropout perturbs the "read side" pattern, while residual dropout regularizes and encourages more robust, distributedthe learned write directions
-  and reducing reliance on any single head/channel even if the read pattern is spiky.
-  `,
+## Why it is useful
+
+Heads can become spiky (e.g., lock onto one token path). Even if the attention pattern is spiky, the written features still pass through \`W_O\` before being added to the original stream. Randomly muting parts of that write:
+
+- discourages dependence on a single head/channel's features;
+- encourages redundant cues across heads.
+
+> Think of \`Q/K/V\` as the "read side" of the attention mechanism. Then \`W_O\` is the "write side". Attention dropout perturbs the read-side pattern, while residual dropout regularizes the learned write directions, encouraging more robust, distributed writes and reducing reliance on any single head/channel even if the read pattern is spiky.
+`,
   },
 
   mlp_residual_notes: {
     title: "MLP residual",
     md: `
-$$
-\\textbf{Code:}\\ \\mathtt{x = x + self.mlp(self.ln2(x))}\\\\[8pt]
-\\textbf{1. Normalize before attention (pre-LN).}\\\\[6pt]
-\\mathtt{self.ln2(x)}\\ \\text{applies LayerNorm per token (across embedding dimensions) so the MLP sees a well-conditioned input }\\\\
-\\text{(roughly zero-mean, unit-variance per token). This stabilizes training.}\\\\[8pt]
-$$
-$$
-\\textbf{2. Position-wise MLP transforms features.}\\\\[6pt]
-\\text{The feed-forward sublayer is applied independently at each time step (no token mixing). Typically:}\\\\[4pt]
-\\mathtt{x\\ \\to\\ \\mathrm{Linear}({n\\_embd}\\!\\to\\!4\\times {n\\_embd})\\ \\to\\ \\mathrm{GELU}\\ \\to\\ \\mathrm{Linear}(4\\times {n\\_embd}\\!\\to\\!{n\\_embd})\\ \\to\\ (\\mathrm{Dropout)}\\\\[4pt]
-\\text{This expand}\\to\\text{nonlinearity}\\to\\text{project back pattern builds rich, non-linear feature interactions per token.}\\\\[8pt]
-$$
-$$
-\\textbf{3. Residual (skip) connection.}\\\\[6pt]
-\\mathtt{x + (\\ldots)}\\ \\text{adds the MLP's output back to the original stream. Benefits:}\\\\[6pt]
-\\text{(i) Gradient highway: there is an identity path, helping \\href{#info:mlp_prevents_vanishing_exploding_notes}{\\text{prevent vanishing/exploding}} early in training.}\\\\[6pt]
-\\text{(ii) Small refinements: if the MLP output is near zero, the block behaves like a near-identity map.}\\\\[10pt]
-$$
-$$
-\\textbf{Shapes (so the add is valid):}\\\\[6pt]
-x:\\ (B, T, C)\\\\[6pt]
-\\mathtt{self.ln2(x)}:\\ (B, T, C)\\\\[6pt]
-\\mathtt{self.mlp(\\ldots)}:\\ (B, T, C)\\\\[6pt]
-\\text{Elementwise sum }\\Rightarrow\\ (B, T, C).\\\\[10pt]
-$$
-$$
-\\textbf{Big picture:}\\ \\text{normalize token features }\\to\\ \\text{compute a per-token non-linear update with the MLP }\\to\\ \\text{add that update back.} \\\\
-\\text{This is the pre-norm residual MLP block that improves stability and optimization in deep Transformers.}
-$$
+**Code:** \`x = x + self.mlp(self.ln2(x))\`
 
-    `,
+## 1. Normalize before the MLP (pre-LN)
+
+\`self.ln2(x)\` applies LayerNorm per token (across embedding dimensions) so the MLP sees a well-conditioned input (roughly zero-mean, unit-variance per token). This stabilizes training.
+
+## 2. Position-wise MLP transforms features
+
+The feed-forward sublayer is applied independently at each time step (no token mixing). Typically:
+
+\`\`\`text
+x → Linear(n_embd → 4×n_embd) → GELU → Linear(4×n_embd → n_embd) → (Dropout)
+\`\`\`
+
+This expand → nonlinearity → project back pattern builds rich, non-linear feature interactions per token.
+
+## 3. Residual (skip) connection
+
+\`x + (...)\` adds the MLP's output back to the original stream. Benefits:
+
+1. **Gradient highway:** there is an identity path, helping [prevent vanishing/exploding](#info:mlp_prevents_vanishing_exploding_notes) gradients early in training.
+2. **Small refinements:** if the MLP output is near zero, the block behaves like a near-identity map.
+
+## Shapes (so the add is valid)
+
+\`\`\`text
+x                 (B, T, C)
+self.ln2(x)       (B, T, C)
+self.mlp(...)     (B, T, C)
+elementwise sum   (B, T, C)
+\`\`\`
+
+> **Big picture:** normalize token features → compute a per-token non-linear update with the MLP → add that update back. This is the pre-norm residual MLP block that improves stability and optimization in deep Transformers.
+`,
   },
 
   highlevel_transformer_introduction_notes: {
     title: "High-level Transformer Analogy",
     md: `
-$$\\textbf{A high-level analogy of a GPT-2 transformer block.}\\\\[8pt]$$
+**A high-level analogy of a GPT-2 transformer block.**
 
-$$\\textbf{Tokens = people in a meeting.}\\\\[2pt]$$
+## Tokens = people in a meeting
+
 Each token is like a person holding their own notes (its current representation).
 
-&nbsp;
+## Attention = the conversation
 
-$$\\textbf{Attention = the conversation.}\\\\[2pt]$$
-Everyone briefly scans what others are saying and decides whose points matter for them. Each person builds a short
-"summary I need" by selectively listening.
+Everyone briefly scans what the others (those earlier in the sequence) are saying and decides whose points matter for them. Each person builds a short "summary I need" by selectively listening.
 
-Why it matters: this is how long-range connections form—facts from far away can instantly influence you.
+> **Why it matters:** this is how long-range connections form. Facts from far back in the text can instantly influence you.
 
-&nbsp;
+## MLP (feed-forward) = private thinking
 
-$$\\textbf{MLP (feed-forward) = private thinking.}\\\\[2pt]$$
 After listening, each person goes off for a moment of inner reasoning: "Given what I heard, how should I update my notes?"
 
-Why it matters: it lets each token transform and rephrase ideas, adding nonlinearity and capacity.
+> **Why it matters:** it lets each token transform and rephrase ideas, adding nonlinearity and capacity.
 
-&nbsp;
+## Two LayerNorms = the organizer's ground rules (applied twice)
 
-$$\\textbf{Two LayerNorms = the organizer's ground rules (applied twice).}\\\\[2pt]$$
-Before the conversation and before the private thinking, the organizer reminds everyone to keep comments calm and on-topic—
-no one's voice too loud, none too quiet.
+Before the conversation and before the private thinking, the organizer reminds everyone to keep comments calm and on-topic: no one's voice too loud, none too quiet.
 
-Why it matters: it keeps both phases stable and comparable so the block behaves predictably.
+> **Why it matters:** it keeps both phases stable and comparable, so the block behaves predictably.
 
-&nbsp;
-
-$$\\textbf{Residual connections = a running draft.}\\\\[2pt]$$
+## Residual connections = a running draft
 
 After each phase (conversation, then private thinking), you add your new insights to your previous notes rather than replacing them.
 
-Why it matters: you never lose what you already knew; updates are incremental and safe.
+> **Why it matters:** you never lose what you already knew; updates are incremental and safe.
 
-&nbsp;
+## Dropout = occasional silence to build resilience
 
-$$\\textbf{Dropout = occasional silence to build resilience.}\\\\[2pt]$$
 Sometimes random remarks are withheld during practice meetings.
 
-Why it matters: the group learns to make good decisions even if a few voices are missing, preventing overreliance on any single cue.
+> **Why it matters:** the group learns to make good decisions even if a few voices are missing, preventing overreliance on any single cue.
 
-&nbsp;
+## Putting it together
 
+Each block is a two-step cycle:
 
-$$\\textbf{Putting it together:}\\\\[2pt]$$
+1. **Communicate** (attention)
+2. **Compute** (MLP)
 
-Each block is a two-step cycle—communicate (attention) then compute (MLP)—with the organizer (LayerNorm) keeping order,
-a running draft (residual) preserving history, and practice with partial attendance (dropout) to ensure robustness.
-Stacking many such blocks lets tokens repeatedly share, rethink, and refine.
-
+The organizer (LayerNorm) keeps order, a running draft (residual) preserves history, and practice with partial attendance (dropout) ensures robustness. Stacking many such blocks lets tokens repeatedly share, rethink, and refine.
 `,
 },
 
   causal_analogy_notes: {
     title: "Causal Analogy",
     md: `
-$$
+[Causal Analogy](#info:causal_analogy_notes) · [Attention Inference Example](#info:attn_inference_example_notes)
 
-\\href{#info:causal_analogy_notes}{\\text{Causal Analogy}}\\quad\\href{#info:attn_inference_example_notes}{\\text{Attention Inference Example}}\\\\[8pt]
+**Below is an analogy that shows how the GPT-2 multi-head self-attention block works, to give you an intuitive understanding.**
 
-\\textbf{Below is an analogy to show how the GPT-2 Multi-Head Self Attention block works in order to give you an intuitive understanding.}\\\\[8pt]
-\\textbf{Setting:}\\
-\\text{A row of people, one per position } t \\text{ in the sequence. Each person holds notes } x_t \\text{ (corresponding to the embedding of the token at position t)}\\text{.}\\\\[10pt]
+## Setting
 
-\\textbf{1) Make three cards from your notes — } \\mathtt{c\\_attn(x) \\to q, k, v}\\\\[4pt]
-\\quad \\textbf{Query (}q\\textbf{): } \\text{what I'm looking for now (built by } W_q\\text{).}\\\\[4pt]
-\\quad \\textbf{Key (}k\\textbf{): } \\text{what I can offer (be matched on by key) (built by } W_k\\text{); an index used for matching only.}\\\\[4pt]
-\\quad \\textbf{Value (}v\\textbf{): } \\text{what I will share if you listen (built by } W_v\\text{); the actual content that gets copied/mixed into someone else's representation..}\\\\[4pt]
-\\quad \\textbf{Why separate Key vs Value?}~\\\\[4pt]
-\\text{Keys are for addressing (similarity search), Values are for content.}\\\\
-\\text{You choose \\emph{who} to listen to via } q\\!\\cdot\\!k \\text{ and copy what matters from those people via } v\\text{.}\\\\[10pt]
+A row of people, one per position $t$ in the sequence. Each person holds notes $x_t$ (corresponding to the embedding of the token at position $t$).
 
-\\textbf{2) Split into committees (heads) — reshape to } (B, n\\_{\\text{head}}, T, hs)\\\\[4pt]
-\\text{Each committee (head) is a parallel committee with its own } W_q, W_k, W_v \\text{ and looks at a different perspective (syntax, long-range cues, etc.).}\\\\[10pt]
+## 1. Make three cards from your notes: \`c_attn(x) → q, k, v\`
 
-\\textbf{3) Score who to listen to — } \\mathtt{att\\_logits = q @ k^\\top / \\sqrt{hs}}\\\\[4pt]
-\\text{Each person compares each query with everyone's keys to get compatibility scores; divide by } \\sqrt{hs} \\text{ to keep them numerically calm so softmax doesn't explode.}\\\\[10pt]
+- **Query ($q$):** what I'm looking for now (built by $W_q$).
+- **Key ($k$):** what I can offer, i.e. what I can be matched on (built by $W_k$); an index used for matching only.
+- **Value ($v$):** what I will share if you listen (built by $W_v$); the actual content that gets copied/mixed into someone else's representation.
 
-\\textbf{4) Causal rule (no looking ahead) — mask future positions to } -\\infty\\\\[4pt]
-\\text{This enforces the LM factorization } p(x_{1:T}) = \\prod_{t=1}^{T} p(x_t \\mid x_{\\le t-1}).\\\\[4pt]
-\\textbf{Why it exists:}\\\\[4pt]
-\\quad \\bullet~\\textbf{No leakage during training: } \\text{even though we compute all positions in parallel for speed, the mask guarantees position t never uses t + 1 ...}.\\\\[4pt]
-\\quad \\bullet~\\textbf{Matches generation: } \\text{at inference we generate left-to-right; causality during training makes the learned behavior consistent with how we use the model.}\\\\[4pt]
-\\quad \\bullet~\\textbf{Prevents cheating: } \\text{without masking, the model could peek at the answer (future tokens) and cheat.}\\\\[10pt]
+### Why separate Key vs Value?
 
-\\textbf{5) Turn scores into listening weights — } \\mathtt{att = softmax(att\\_logits,\\ dim=-1)}\\\\[4pt]
-\\text{Now each person has a probability distribution over allowed earlier positions: }\\textit{how much attention do I give to each source? Rows sum to 1 → interpretable mixing weights.}\\\\[10pt]
+Keys are for addressing (similarity search), Values are for content. You choose *who* to listen to via $q \\cdot k$ and copy what matters from those people via $v$.
 
-\\textbf{6) Build your personalized summary from Values — } \\mathtt{y = att @ v}\\\\[4pt]
-\\text{Mix others' Value vectors using your attention weights (e.g., } 0.6\\,v_3 + 0.3\\,v_7 + \\cdots \\text{).}\\\\[4pt]
-\\text{Remember: Keys help you choose; Values are what you take.}\\\\[10pt]
+## 2. Split into committees (heads): reshape to $(B, n\\_head, T, hs)$
 
-\\textbf{7) Practice with partial connections — } \\mathtt{attn\\_drop(att)}\\\\[4pt]
-\\text{Randomly drop some links during training to build robustness and avoid overreliance on one path.}\\\\[10pt]
+Each committee (head) works in parallel with its own $W_q, W_k, W_v$ and looks at a different perspective (syntax, long-range cues, etc.).
 
-\\textbf{8) Reassemble committees \\& standardize — merge heads, then } \\mathtt{proj(y)}\\\\[4pt]
-\\text{Stitch head outputs back to one vector per position, project to model width, and feed the residual stream cleanly.}\\\\[10pt]
+## 3. Score who to listen to: \`att_logits = q @ k^T / sqrt(hs)\`
 
-\\textbf{Big picture.}\\
-\\text{At each position } t\\text{: select earlier positions via Query-Key (addressing), copy useful content via Values,}\\\\[4pt]
-\\text{combine multiple perspectives (heads), and do it under a causal rule that matches left-to-right generation.} \\\\[4pt]
+Each person compares their query with everyone's keys to get compatibility scores; dividing by $\\sqrt{hs}$ keeps them numerically calm so softmax doesn't explode.
+
+## 4. Causal rule (no looking ahead): mask future positions to $-\\infty$
+
+This enforces the LM factorization
 
 $$
+p(x_{1:T}) = \\prod_{t=1}^{T} p(x_t \\mid x_{\\le t-1})
+$$
 
-    `,
+Why it exists:
+
+- **No leakage during training:** even though we compute all positions in parallel for speed, the mask guarantees position $t$ never uses $t+1, \\dots$.
+- **Matches generation:** at inference we generate left to right; causality during training makes the learned behavior consistent with how we use the model.
+- **Prevents cheating:** without masking, the model could peek at the answer (future tokens) and cheat.
+
+## 5. Turn scores into listening weights: \`att = softmax(att_logits, dim=-1)\`
+
+Now each person has a probability distribution over the allowed earlier positions: *how much attention do I give to each source?* Rows sum to 1, giving interpretable mixing weights.
+
+## 6. Practice with partial connections: \`attn_drop(att)\`
+
+Randomly drop some links during training to build robustness and avoid over-reliance on one path.
+
+## 7. Build your personalized summary from Values: \`y = att @ v\`
+
+Mix others' Value vectors using your attention weights (e.g., $0.6\\,v_3 + 0.3\\,v_7 + \\cdots$).
+
+> Remember: Keys help you choose; Values are what you take.
+
+## 8. Reassemble committees and standardize: merge heads, then \`proj(y)\`
+
+Stitch the head outputs back into one vector per position, project to model width, and feed the residual stream cleanly.
+
+## Big picture
+
+> At each position $t$: select earlier positions via Query-Key (addressing), copy useful content via Values, combine multiple perspectives (heads), and do it under a causal rule that matches left-to-right generation.
+`,
   },
 
   attn_inference_example_notes: {
     title: "Attention Inference Example",
     md: `
-  
-  $$
-  \\href{#info:causal_analogy_notes}{\\text{Causal Analogy}}\\quad\\href{#info:attn_inference_example_notes}{\\text{Attention Inference Example}}\\\\[8pt]
-  \\textbf{In the below example, we will show how a single attention head can infer the correct verb form (were vs was) from the context of the sentence.} \\\\[8pt]
-  \\textbf{Input Sentence: The\\ dogs\\ that\\ barked\\ loudly\\ were\\ tired.} \\\\[8pt]
-  \\text{We focus on predicting the token }\\mathtt{were}\\text{ (position 6) from the prefix }\\mathtt{The\\ dogs\\ that\\ barked\\ loudly}\\text{.} \\\\[4pt]
-  $$
-  
-  ---
-  
-  $$
-  \\textbf{What happens (one head, simplified)} \\\\[4pt]
-  
-  \\text{Goal: decide between }\\mathtt{were}\\text{ vs }\\mathtt{was}\\text{.} \\\\[4pt]
-  \\text{In order to do this, we need to know the true subject of the clause so we can infer the correct verb form.} \\\\[4pt]
-  \\text{In this example, the true subject is }\\mathtt{dogs}\\text{ (plural), even though there's an intervening clause "that barked loudly."} \\\\[4pt]
-  
-  \\textbf{Notes:}\\\\[4pt]
-  \\text{1. In real models, the model doesn't actually know it's a verb position. There are no POS tags or grammar rules baked in.}\\\\
-  \\text{Instead, the model learns from training to recognize contexts where a verb is likely next.}\\\\
-  \\text{The model has a hidden state } x_t \\text{ that's a function of}\\\\
-  \\bullet\\ \\text{buildt from all previous tokens and itself }\\\\
-  \\bullet\\ \\text{the positional embedding } p_t\\\\
-  \\bullet\\ \\text{many layers of self-attention and feed-forward networks}\\\\[4pt]
-  \\textit{The hidden state } x_t \\text{ encodes contextual features like "we're in a place where a verb typically follows a plural subject..."}\\\\
-  \\textit{but it could also encode other things such as "likely punctuation next". In this case, the model might predict a comma instead: "The dogs that barked loudly, …".}\\\\
-  \\textit{the hidden state could also encode things "Alternate continuations". In this case, the model might predict a different verb such as 'seemed' or 'are': "The dogs that barked loudly are tired."}\\\\[4pt]
-  \\textbf{but in this toy example, we focus on why the model predicts "were" instead of "was"}.
-  
-  \\\\[4pt]
+[Causal Analogy](#info:causal_analogy_notes) · [Attention Inference Example](#info:attn_inference_example_notes)
 
-  \\text{2. Assumption: This is an inference example, so we assume all model parameters are already trained: the projections }\\mathbf{W}_q,\\ \\mathbf{W}_k,\\ \\mathbf{W}_v\\ \\text{(and the output projection }\\mathbf{W}_o\\text{), the }\\mathtt{MLP}\\text{s, }\\mathtt{LayerNorm}\\text{s, embeddings, and the }\\mathtt{LM\\ head.}\\\\
-  \\text{At inference time these weights are fixed. The example's numbers are illustrative, but they reflect what trained parameters typically make happen at inference.}\\\\[4pt]
+**This example shows how a single attention head can infer the correct verb form (\`were\` vs \`was\`) from the context of the sentence.**
 
-  $$
-  
-  ---
-  
-  $$
-  \\textbf{Step A --- Values carry useful features} \\\\[4pt]
-  
-  \\text{Suppose this head's Value vectors include:} \\\\[4pt]
-  
-  \\bullet\\ \\text{pluralness (singular }-1\\,\\dots\\,+1\\text{ plural)}\\\\[4pt]
-  \\bullet\\ \\text{subjectness (is this token a good subject head?)} \\\\[4pt]
+Input sentence: **The dogs that barked loudly were tired.**
 
-  \\textbf{Notes: }\\text{This is a }\\textbf{simplification} \\text{. In real models, the Value vectors are }\\textbf{a high-dimensional learned representation - the head size. } \\text{(e.g. GPT-2 small has 768 dimensions and 12 heads, so head size is 64).}\\\\
-  \\text{So in real models it isn't literally a 2-number feature; we just projected the idea into two dimensions to illustrate what the head might encode.}\\\\[4pt]
-  
-  \\text{Toy values:} \\\\[4pt]
-  \\mathtt{The}:\\ \\mathbf{V}\\approx\\begin{bmatrix}0.0\\\\[2pt]0.0\\end{bmatrix} \\\\[4pt]
-  \\mathtt{dogs}:\\ \\mathbf{V}\\approx\\begin{bmatrix}+1.0\\\\[2pt]+0.9\\end{bmatrix}\\ \\leftarrow\\ \\text{plural noun, likely subject} \\\\[4pt]
-  \\mathtt{that}:\\ \\mathbf{V}\\approx\\begin{bmatrix}0.0\\\\[2pt]0.1\\end{bmatrix} \\\\[4pt]
-  \\mathtt{barked}:\\ \\mathbf{V}\\approx\\begin{bmatrix}0.0\\\\[2pt]0.0\\end{bmatrix} \\\\[4pt]
-  \\mathtt{loudly}:\\ \\mathbf{V}\\approx\\begin{bmatrix}0.0\\\\[2pt]0.0\\end{bmatrix} \\\\[4pt]
-  $$
+We focus on predicting the token \`were\` (position 6) from the prefix \`The dogs that barked loudly\`.
 
-  ---
+## What happens (one head, simplified)
 
-  $$
-  \\textbf{Step B --- Queries/Keys score who to listen to} \\\\[4pt]
-  \\text{The head computes the Query }\\mathbf{q}_5\\text{ to each Key }\\mathbf{k}_j\\ (j=1\\ldots5)\\text{.} \\\\[4pt]
-  \\text{Made-up attention logits (after the }1/\\sqrt{hs}\\text{ scale):} \\\\[4pt]
-  
-  \\bullet\\ \\text{to }\\mathtt{The}:\\ -0.5\\\\
-  \\bullet\\ \\text{to }\\mathtt{dogs}:\\ +2.57\\ \\leftarrow\\ \\text{strong match}\\\\
-  \\bullet\\ \\text{to }\\mathtt{that}:\\ +0.3\\\\
-  \\bullet\\ \\text{to }\\mathtt{barked}:\\ -0.2\\\\
-  \\bullet\\ \\text{to }\\mathtt{loudly}:\\ -0.1
-  
-  \\\\[4pt]
-  \\textbf{Notes: }\\text{The numerical values we listed are made up to show the pattern (e.g., subject getting the highest score). In the real model they come from those dot products with the trained }\\mathbf{W}_q,\\ \\mathbf{W}_k,\\ \\text{ plus masking.}\\\\[4pt]
-  
-  \\text{Then we apply softmax to get the attention weights (sum to 1):} \\\\[4pt]
-  
-  \\bullet\\ w(\\mathtt{The})=0.04,\\\\
-  \\bullet\\ w(\\mathtt{dogs})=0.78,\\\\
-  \\bullet\\ w(\\mathtt{that})=0.08,\\\\
-  \\bullet\\ w(\\mathtt{barked})=0.05,\\\\
-  \\bullet\\ w(\\mathtt{loudly})=0.05
-  
-  $$
+Goal: decide between \`were\` and \`was\`.
 
-  ---
-  
-  $$
-  \\textbf{Step C --- Mix Values with those weights (att @ v)} \\\\[4pt]
-  
-  \\text{Weighted average produces the head's output at position }5\\text{:} \\\\[4pt]
-  
-  \\mathbf{y}_5
-  =0.04\\cdot\\begin{bmatrix}0,0\\end{bmatrix}
-  +0.78\\cdot\\begin{bmatrix}+1.0,+0.9\\end{bmatrix}
-  +0.08\\cdot\\begin{bmatrix}0,0.1\\end{bmatrix}
-  +0.05\\cdot\\begin{bmatrix}0,0\\end{bmatrix}
-  +0.05\\cdot\\begin{bmatrix}0,0\\end{bmatrix}
-  \\\\[4pt]
+To do this, we need to know the true subject of the clause so we can infer the correct verb form. In this example, the true subject is \`dogs\` (plural), even though there's an intervening clause "that barked loudly."
 
-  \\mathbf{y}_5\\ \\approx\\ \\begin{bmatrix}+0.78,+0.71\\end{bmatrix}\\\\[4pt]
-  
-  \\textbf{Interpretation:} \\text{ position 5 now carries a strong plural + subject cue.} \\\\[4pt]
-  $$
+### Notes
 
-  ---
-  
-  $$
-  \\textbf{Step D --- Why this flips the logits the right way} \\\\[4pt]
-  
-  \\text{Think of the LM head as rows (one per vocab item) that dot with the final hidden vector.} \\\\[4pt]
-  
-  \\text{The rows for just the two verbs:} \\\\[4pt]
-  
-  \\bullet\\ \\operatorname{row}(\\mathtt{were})\\ \\approx\\ \\begin{bmatrix}+1.4,+0.5\\end{bmatrix}
-  \\quad
-  \\text{(likes plural \\& subject)}
-  
-  \\\\
+1. **The model doesn't actually know it's a verb position.** In real models there are no POS tags or grammar rules baked in. Instead, the model learns from training to recognize contexts where a verb is likely next. The model has a hidden state $x_t$ that is a function of:
 
-  \\bullet\\ \\operatorname{row}(\\mathtt{was})\\ \\approx\\ \\begin{bmatrix}-1.1,+0.2\\end{bmatrix}
-  \\quad
-  \\text{(penalizes plural)}
+   - all previous tokens and the token itself
+   - the positional embedding $p_t$
+   - many layers of self-attention and feed-forward networks
 
-  \\\\[4pt]
-  
-  \\text{Dot products from this head's contribution:} \\\\[4pt]
-  
-  \\bullet\\ \\operatorname{logit}(\\mathtt{were})\\approx 1.4\\cdot 0.78 + 0.5\\cdot 0.71 \\approx +1.45\\\\
-  \\bullet\\ \\operatorname{logit}(\\mathtt{was})\\approx (-1.1)\\cdot 0.78 + 0.2\\cdot 0.71 \\approx -0.72\\\\[4pt]
-  
-  \\text{After combining with other heads/layers and softmax over the vocab, }\\mathtt{were}\\text{ gets much higher probability than }\\mathtt{was}\\text{.}
-  $$
+   The hidden state $x_t$ encodes contextual features like "we're in a place where a verb typically follows a plural subject...", but it could also encode other things:
 
-  ---
-  
-  $$
-  \\textbf{Why }\\mathtt{dogs}\\text{ has high influence here} \\\\[4pt]
-  \\bullet\\ \\text{Syntactic role: It's the true subject of the clause containing the verb, even across "that barked loudly."}\\\\[4pt]
-  \\bullet\\ \\text{Training pressure: Across millions of examples, gradients push the parameters so that a verb's Query aligns strongly with the Key of its governing subject. That makes the attention weight on the subject high.}\\\\[4pt]
-  \\bullet\\ \\text{Value payload: The subject's Value carries exactly the features (plurality, subjectness) that help pick the correct verb form. If the model predicts the wrong form, gradients increase the }q\\cdot k\\text{ for the right subject and shape its }\\mathbf{V}\\text{ to be more informative.}\\\\[4pt]
-  $$
+   - **Likely punctuation next.** In this case, the model might predict a comma instead: "The dogs that barked loudly, …".
+   - **Alternate continuations.** In this case, the model might predict a different verb such as \`seemed\` or \`are\`: "The dogs that barked loudly are tired."
 
-  ---
+   But in this toy example, we focus on why the model predicts \`were\` instead of \`was\`.
 
-  $$
-  \\textbf{What if we flip to singular "dog" in the example: }\\\\[4pt]
-  \\text{With "}\\mathtt{dog}\\text{" (singular) instead of "}\\mathtt{dogs}\\text{" (plural), the same attention head that tracks subject--verb agreement will now pass singular evidence forward, so the LM head will score "}\\mathtt{was}\\text{" higher than "}\\mathtt{were}\\text{."}\\\\[4pt]
-  $$
+2. **Assumption: all parameters are already trained.** This is an inference example, so the projections $\\mathbf{W}_q, \\mathbf{W}_k, \\mathbf{W}_v$ (and the output projection $\\mathbf{W}_o$), the MLPs, LayerNorms, embeddings, and the LM head are all fixed. The example's numbers are illustrative, but they reflect what trained parameters typically make happen at inference.
 
-  $$
-  \\textbf{Here's the same toy walk-through you saw, just flipped to singular:}
+## Step A: Values carry useful features
 
-  \\textbf{Prefix: }\\text{"}\\mathtt{The\\ dog\\ that\\ barked\\ loudly}\\text{"}
-  $$
+Suppose this head's Value vectors include:
 
-  $$
-  \\textbf{A) Values carry features (toy features: }[\\text{pluralness},\\ \\text{subjectness}]\\text{):}\\\\[4pt]
-  \\bullet\\ \\mathtt{The}:\\ \\ \\mathbf{V}\\ \\approx\\ \\begin{bmatrix}0.0 & 0.0\\end{bmatrix}\\\\
-  \\bullet\\ \\mathtt{dog}:\\ \\ \\mathbf{V}\\ \\approx\\ \\begin{bmatrix}-1.0 & +0.9\\end{bmatrix}\\ \\leftarrow\\ \\text{singular noun, likely subject}\\\\
-  \\bullet\\ \\mathtt{that}:\\ \\ \\mathbf{V}\\ \\approx\\ \\begin{bmatrix}0.0 & 0.1\\end{bmatrix}\\\\
-  \\bullet\\ \\mathtt{barked}:\\ \\ \\mathbf{V}\\ \\approx\\ \\begin{bmatrix}0.0 & 0.0\\end{bmatrix}\\\\
-  \\bullet\\ \\mathtt{loudly}:\\ \\ \\mathbf{V}\\ \\approx\\ \\begin{bmatrix}0.0 & 0.0\\end{bmatrix}
-  $$
+- **pluralness** (singular $-1 \\,\\dots\\, +1$ plural)
+- **subjectness** (is this token a good subject head?)
+
+> This is a **simplification**. In real models, the Value vectors are **a high-dimensional learned representation of size head size** (e.g. GPT-2 small has 768 dimensions and 12 heads, so the head size is 64). So in real models it isn't literally a 2-number feature; we just projected the idea into two dimensions to illustrate what the head might encode.
+
+Toy values:
+
+- \`The\`: $\\mathbf{V} \\approx \\begin{bmatrix}0.0 \\\\ 0.0\\end{bmatrix}$
+- \`dogs\`: $\\mathbf{V} \\approx \\begin{bmatrix}+1.0 \\\\ +0.9\\end{bmatrix}$ ← plural noun, likely subject
+- \`that\`: $\\mathbf{V} \\approx \\begin{bmatrix}0.0 \\\\ 0.1\\end{bmatrix}$
+- \`barked\`: $\\mathbf{V} \\approx \\begin{bmatrix}0.0 \\\\ 0.0\\end{bmatrix}$
+- \`loudly\`: $\\mathbf{V} \\approx \\begin{bmatrix}0.0 \\\\ 0.0\\end{bmatrix}$
+
+## Step B: Queries and Keys score who to listen to
+
+The head compares the Query $\\mathbf{q}_5$ to each Key $\\mathbf{k}_j$ ($j = 1 \\ldots 5$). Made-up attention logits (after the $1/\\sqrt{hs}$ scale):
+
+- to \`The\`: $-0.5$
+- to \`dogs\`: $+2.57$ ← strong match
+- to \`that\`: $+0.3$
+- to \`barked\`: $-0.2$
+- to \`loudly\`: $-0.1$
+
+> The numerical values are made up to show the pattern (e.g., the subject getting the highest score). In the real model they come from the dot products with the trained $\\mathbf{W}_q, \\mathbf{W}_k$, plus masking.
+
+Then we apply softmax to get the attention weights (they sum to 1):
+
+- $w(\\mathtt{The}) = 0.04$
+- $w(\\mathtt{dogs}) = 0.78$
+- $w(\\mathtt{that}) = 0.08$
+- $w(\\mathtt{barked}) = 0.05$
+- $w(\\mathtt{loudly}) = 0.05$
+
+## Step C: Mix Values with those weights (\`att @ v\`)
+
+The weighted average produces the head's output at position 5:
+
+$$
+\\mathbf{y}_5
+= 0.04\\cdot\\begin{bmatrix}0, 0\\end{bmatrix}
++ 0.78\\cdot\\begin{bmatrix}+1.0, +0.9\\end{bmatrix}
++ 0.08\\cdot\\begin{bmatrix}0, 0.1\\end{bmatrix}
++ 0.05\\cdot\\begin{bmatrix}0, 0\\end{bmatrix}
++ 0.05\\cdot\\begin{bmatrix}0, 0\\end{bmatrix}
+\\\\[4pt]
+\\mathbf{y}_5 \\approx \\begin{bmatrix}+0.78, +0.71\\end{bmatrix}
+$$
+
+> **Interpretation:** position 5 now carries a strong plural + subject cue.
+
+## Step D: Why this flips the logits the right way
+
+Think of the LM head as rows (one per vocab item) that dot with the final hidden vector. The rows for just the two verbs:
+
+- $\\operatorname{row}(\\mathtt{were}) \\approx \\begin{bmatrix}+1.4, +0.5\\end{bmatrix}$ (likes plural & subject)
+- $\\operatorname{row}(\\mathtt{was}) \\approx \\begin{bmatrix}-1.1, +0.2\\end{bmatrix}$ (penalizes plural)
+
+Dot products from this head's contribution:
+
+$$
+\\operatorname{logit}(\\mathtt{were}) \\approx 1.4\\cdot 0.78 + 0.5\\cdot 0.71 \\approx +1.45 \\\\[4pt]
+\\operatorname{logit}(\\mathtt{was}) \\approx (-1.1)\\cdot 0.78 + 0.2\\cdot 0.71 \\approx -0.72
+$$
+
+After combining with other heads/layers and softmax over the vocab, \`were\` gets much higher probability than \`was\`.
+
+## Why \`dogs\` has high influence here
+
+- **Syntactic role:** it's the true subject of the clause containing the verb, even across "that barked loudly."
+- **Training pressure:** across millions of examples, gradients push the parameters so that a verb's Query aligns strongly with the Key of its governing subject. That makes the attention weight on the subject high.
+- **Value payload:** the subject's Value carries exactly the features (plurality, subjectness) that help pick the correct verb form. If the model predicts the wrong form, gradients increase $q \\cdot k$ for the right subject and shape its $\\mathbf{V}$ to be more informative.
+
+## What if we flip to singular \`dog\`?
+
+With \`dog\` (singular) instead of \`dogs\` (plural), the same attention head that tracks subject–verb agreement will now pass singular evidence forward, so the LM head will score \`was\` higher than \`were\`.
+
+Here's the same toy walk-through, just flipped to singular. Prefix: \`The dog that barked loudly\`.
+
+### A) Values carry features
+
+Toy features: [pluralness, subjectness].
+
+- \`The\`: $\\mathbf{V} \\approx \\begin{bmatrix}0.0 & 0.0\\end{bmatrix}$
+- \`dog\`: $\\mathbf{V} \\approx \\begin{bmatrix}-1.0 & +0.9\\end{bmatrix}$ ← singular noun, likely subject
+- \`that\`: $\\mathbf{V} \\approx \\begin{bmatrix}0.0 & 0.1\\end{bmatrix}$
+- \`barked\`: $\\mathbf{V} \\approx \\begin{bmatrix}0.0 & 0.0\\end{bmatrix}$
+- \`loudly\`: $\\mathbf{V} \\approx \\begin{bmatrix}0.0 & 0.0\\end{bmatrix}$
+
+### B) Queries and Keys decide who to listen to
+
+Position 5's query (for the next-token slot) compares against the keys of positions 1 to 5. As before, it strongly matches the subject:
+
+- to \`The\`: $-0.5$
+- to \`dog\`: $+2.57$ ← strong match
+- to \`that\`: $+0.3$
+- to \`barked\`: $-0.2$
+- to \`loudly\`: $-0.1$
+
+Softmax → attention weights:
+
+$$
+w(\\mathtt{The})=0.04,\\ \\ w(\\mathtt{dog})=0.78,\\ \\ w(\\mathtt{that})=0.08,\\ \\ w(\\mathtt{barked})=0.05,\\ \\ w(\\mathtt{loudly})=0.05
+$$
+
+### C) Mix values with those weights (\`att @ v\`)
+
+$$
+\\mathbf{y} \\approx 0.78\\cdot\\begin{bmatrix}-1.0, +0.9\\end{bmatrix} + 0.08\\cdot\\begin{bmatrix}0.0, 0.1\\end{bmatrix} \\approx \\boxed{\\begin{bmatrix}-0.78, +0.71\\end{bmatrix}}
+$$
+
+> **Interpretation:** strong singular signal plus subject cue at position 5.
+
+### D) LM head rows (toy) and resulting logits
+
+Think of each vocab token as a row that dots with the hidden vector.
+
+- $\\operatorname{row}(\\mathtt{were}) \\approx \\begin{bmatrix}+1.4 & +0.5\\end{bmatrix}$ (likes plural & subject)
 
   $$
-  \\textbf{B) Queries/Keys decide who to listen to (for the next-token slot):}\\\\[4pt]
-  \\text{Position 5's query compares against keys of position 1 to 5. As before, it strongly matches the subject:}\\\\[4pt]
-  \\bullet\\ \\text{to }\\mathtt{The}: -0.5\\\\
-  \\bullet\\ \\text{to }\\mathtt{dog}: +2.57\\ \\leftarrow\\ \\text{"Strong match"}\\\\
-  \\bullet\\ \\text{to }\\mathtt{that}: +0.3\\\\
-  \\bullet\\ \\text{to }\\mathtt{barked}: -0.2\\\\
-  \\bullet\\ \\text{to }\\mathtt{loudly}: -0.1\\\\[4pt]
-  \\text{Softmax }\\to\\ \\text{attention weights: }\\quad
-  w(\\mathtt{The})=0.04,\\ \\ w(\\mathtt{dog})=0.78,\\ \\ w(\\mathtt{that})=0.08,\\ \\ w(\\mathtt{barked})=0.05,\\ \\ w(\\mathtt{loudly})=0.05
+  \\operatorname{logit}(\\mathtt{were}) \\approx 1.4\\cdot(-0.78) + 0.5\\cdot 0.71 \\approx -0.74
   $$
 
-  $$
-  \\textbf{C) Mix values with those weights (att @ v):}\\\\[4pt]
-  \\mathbf{y}\\ \\approx\\ 0.78\\,\\cdot\\,\\begin{bmatrix}-1.0, +0.9\\end{bmatrix}\\ +\\ 0.08\\,\\cdot\\,\\begin{bmatrix}0.0, 0.1\\end{bmatrix}\\ \\approx\\ \\boxed{\\begin{bmatrix}-0.78, +0.71\\end{bmatrix}}\\\\[4pt]
-  \\text{Interpretation: strong singular signal plus subject cue at position 5.}
-  $$
+- $\\operatorname{row}(\\mathtt{was}) \\approx \\begin{bmatrix}-1.1 & +0.2\\end{bmatrix}$ (penalizes plural, okay with subject)
 
   $$
-  \\textbf{D) LM head rows (toy) and resulting logits:}\\\\[4pt]
-  \\text{Think of each vocab token as a row that dots with the hidden vector.}\\\\[4pt]
-  \\bullet\\ \\operatorname{row}(\\mathtt{were})\\ \\approx\\ \\begin{bmatrix}+1.4 & +0.5\\end{bmatrix}\\quad(\\text{likes plural \\& subject})\\\\
-  \\operatorname{logit}(\\mathtt{were})\\approx 1.4\\cdot(-0.78) + 0.5\\cdot 0.71 \\approx -0.73\\\\
-  \\bullet\\ \\operatorname{row}(\\mathtt{was})\\ \\approx\\ \\begin{bmatrix}-1.1 & +0.2\\end{bmatrix}\\quad(\\text{penalizes plural, okay with subject})\\\\
-  \\operatorname{logit}(\\mathtt{was})\\approx (-1.1)\\cdot(-0.78) + 0.2\\cdot 0.71 \\approx +1.00
+  \\operatorname{logit}(\\mathtt{was}) \\approx (-1.1)\\cdot(-0.78) + 0.2\\cdot 0.71 \\approx +1.00
   $$
 
-  $$
-  \\text{So }\\operatorname{logit}(\\mathtt{was}) > \\operatorname{logit}(\\mathtt{were})\\text{. After combining all heads/layers and softmax over the full vocab, the model strongly prefers "}\\mathtt{was}\\text{" in the singular-subject context.}
-
-  $$
-  `,
+> So $\\operatorname{logit}(\\mathtt{was}) > \\operatorname{logit}(\\mathtt{were})$. After combining all heads/layers and softmax over the full vocab, the model strongly prefers \`was\` in the singular-subject context.
+`,
   },
 
   gpt2_notes: {
@@ -1485,73 +1472,86 @@ The matrix depends only on $k$, not on $p$. So "look $k$ positions back" is the 
   positional_embeddings_example_notes: {
     title: "Positional Embeddings Example",
     md: `
-  $$\\textbf{Setup (no positions):}\\\\[4pt]$$
+**A tiny 2-D example: without positions, swapping two tokens only permutes the attention scores; with positions, the scores themselves change.**
 
-  Let token embeddings be 2-D vectors: $$e(A) = \\begin{bmatrix}1,0\\end{bmatrix}, e(B) = \\begin{bmatrix}0,1\\end{bmatrix}.$$
+## Setup (no positions)
 
-  &nbsp;
+Let the token embeddings be 2-D vectors:
 
-  Use identity projections so $$Q=X,\\ K=X,\\ \\text{scores } S = QK^\\top = XX^\\top.$$
+$$
+e(A) = \\begin{bmatrix}1, 0\\end{bmatrix}, \\quad e(B) = \\begin{bmatrix}0, 1\\end{bmatrix}
+$$
 
-  $$
-  \\text{Sequence } [A, B]\\Rightarrow X=\\begin{bmatrix}1&0\\\\0&1\\end{bmatrix}\\\\[4pt]
-  \\text{Score S } = XX^\\top = \\begin{bmatrix}1&0\\\\0&1\\end{bmatrix}.\\\\[4pt]
-  \\text{Sequence }[B, A] \\text{ just permutes rows of } X.\\\\[4pt]
-  \\text{According to what we said in "\\href{#info:embedding_pos}{\\text{Positional Embedding notes}}". Scores S' = }PSP^{\\top}.\\\\[4pt]
-  \\text{So, it's same numbers as S, just rows/cols swapped. Self-attention can't tell AB vs BA—only a permutation.}
-  $$
+Use identity projections, so
 
-  $$\\textbf{Add positional embeddings:}$$
+$$
+Q = X, \\quad K = X, \\quad S = QK^\\top = XX^\\top
+$$
 
-  &nbsp;
+For the sequence $[A, B]$:
 
-  Let position vectors be $$p_0 = \\begin{bmatrix}1,1\\end{bmatrix}, p_1 = \\begin{bmatrix}-1,1\\end{bmatrix}.\\\\[4pt]$$
-  We feed $$\\mathtt{h}_t = e(token_t) + p_t.$$
+$$
+X = \\begin{bmatrix}1 & 0\\\\0 & 1\\end{bmatrix}, \\qquad S = XX^\\top = \\begin{bmatrix}1 & 0\\\\0 & 1\\end{bmatrix}
+$$
 
-  $$
-  \\bullet\\ \\text{Sequence [A, B] (A at pos 0, B at pos 1):}\\\\[4pt]
-  \\mathtt{h}_0 == \\begin{bmatrix}1,0\\end{bmatrix} + \\begin{bmatrix}1,1\\end{bmatrix} = \\begin{bmatrix}2,1\\end{bmatrix}\\\\[4pt]
-  \\mathtt{h}_1 == \\begin{bmatrix}0,1\\end{bmatrix} + \\begin{bmatrix}-1,1\\end{bmatrix} = \\begin{bmatrix}-1,2\\end{bmatrix}\\\\[4pt]
-  \\mathtt{h} == \\begin{bmatrix}2&1\\\\-1&2\\end{bmatrix}\\\\[4pt]
-  \\text{Score S = }\\mathtt{h}\\mathtt{h}^\\top = \\begin{bmatrix}2&1\\\\-1&2\\end{bmatrix}\\begin{bmatrix}2&-1\\\\1&2\\end{bmatrix} = \\begin{bmatrix}5&0\\\\0&5\\end{bmatrix}.
-  $$
+The sequence $[B, A]$ just permutes the rows of $X$. As shown in the [positional embedding notes](#info:embedding_pos), the scores become $S' = PSP^\\top$.
 
-  $$
-  \\bullet\\ \\text{Sequence [B, A] (B at pos 0, A at pos 1):}\\\\[4pt]
-  \\mathtt{h}_0 == \\begin{bmatrix}0,1\\end{bmatrix} + \\begin{bmatrix}1,1\\end{bmatrix} = \\begin{bmatrix}1,2\\end{bmatrix}\\\\[4pt]
-  \\mathtt{h}_1 == \\begin{bmatrix}1,0\\end{bmatrix} + \\begin{bmatrix}-1,1\\end{bmatrix} = \\begin{bmatrix}0,1\\end{bmatrix}\\\\[4pt]
-  \\mathtt{h} == \\begin{bmatrix}1&2\\\\0&1\\end{bmatrix}\\\\[4pt]
-  \\text{Score S = }\\mathtt{h}\\mathtt{h}^\\top = \\begin{bmatrix}1&2\\\\0&1\\end{bmatrix}\\begin{bmatrix}1&0\\\\2&1\\end{bmatrix} = \\begin{bmatrix}5&2\\\\2&1\\end{bmatrix}.
-  $$
+> These are the same numbers as $S$, just with rows/columns swapped. Self-attention can't tell $AB$ from $BA$: it only sees a permutation.
 
-  Now $$S'$$ is not just a row/column permutation of $$S$$; the dot products changed in value.
-  Without positions, shuffling only permutes the attention matrix; with positions, the numbers themselves change, so the model becomes order-sensitive.
+## Add positional embeddings
 
-  `,
+Let the position vectors be
+
+$$
+p_0 = \\begin{bmatrix}1, 1\\end{bmatrix}, \\quad p_1 = \\begin{bmatrix}-1, 1\\end{bmatrix}
+$$
+
+We feed $h_t = e(\\text{token}_t) + p_t$.
+
+### Sequence $[A, B]$ ($A$ at position 0, $B$ at position 1)
+
+$$
+h_0 = \\begin{bmatrix}1, 0\\end{bmatrix} + \\begin{bmatrix}1, 1\\end{bmatrix} = \\begin{bmatrix}2, 1\\end{bmatrix} \\\\[4pt]
+h_1 = \\begin{bmatrix}0, 1\\end{bmatrix} + \\begin{bmatrix}-1, 1\\end{bmatrix} = \\begin{bmatrix}-1, 2\\end{bmatrix} \\\\[4pt]
+h = \\begin{bmatrix}2 & 1\\\\-1 & 2\\end{bmatrix} \\\\[4pt]
+S = hh^\\top = \\begin{bmatrix}2 & 1\\\\-1 & 2\\end{bmatrix}\\begin{bmatrix}2 & -1\\\\1 & 2\\end{bmatrix} = \\begin{bmatrix}5 & 0\\\\0 & 5\\end{bmatrix}
+$$
+
+### Sequence $[B, A]$ ($B$ at position 0, $A$ at position 1)
+
+$$
+h_0 = \\begin{bmatrix}0, 1\\end{bmatrix} + \\begin{bmatrix}1, 1\\end{bmatrix} = \\begin{bmatrix}1, 2\\end{bmatrix} \\\\[4pt]
+h_1 = \\begin{bmatrix}1, 0\\end{bmatrix} + \\begin{bmatrix}-1, 1\\end{bmatrix} = \\begin{bmatrix}0, 1\\end{bmatrix} \\\\[4pt]
+h = \\begin{bmatrix}1 & 2\\\\0 & 1\\end{bmatrix} \\\\[4pt]
+S' = hh^\\top = \\begin{bmatrix}1 & 2\\\\0 & 1\\end{bmatrix}\\begin{bmatrix}1 & 0\\\\2 & 1\\end{bmatrix} = \\begin{bmatrix}5 & 2\\\\2 & 1\\end{bmatrix}
+$$
+
+> Now $S'$ is not just a row/column permutation of $S$; the dot products changed in value. Without positions, shuffling only permutes the attention matrix; with positions, the numbers themselves change, so the model becomes order-sensitive.
+`,
   },
 
   layernorm: {
     title: "LayerNorm",
     md: `
-$\\textbf{nn.LayerNorm}$ — applies layer normalization over the last dimension of the input (the embedding dimension $n\\_embd$).
+**\`nn.LayerNorm\`** applies layer normalization over the last dimension of the input (the embedding dimension $n\\_embd$).
 
-Mathematically, given any input vector $h \\in \\mathbb{R}^{d}$, LayerNorm computes
+## The formula
+
+Given any input vector $h \\in \\mathbb{R}^{d}$, LayerNorm computes
+
 $$
-\\text{LN}(h) = \\gamma \\odot \\frac{h - \\mu(h)}{\\sigma(h) + \\epsilon} + \\beta
+\\text{LN}(h) = \\gamma \\odot \\frac{h - \\mu(h)}{\\sqrt{\\sigma^2(h) + \\epsilon}} + \\beta
 $$
-where $\\mu,\\sigma$ are the mean and std over the last (feature) dimension, and $\\gamma \\in \\mathbb{R}^{d},\\beta \\in \\mathbb{R}^{d}$ are learned scale/shift.
 
-&nbsp;
+- $\\mu, \\sigma^2$ are the mean and variance over the last (feature) dimension.
+- $\\gamma, \\beta \\in \\mathbb{R}^{d}$ are a learned scale and shift.
+- $\\epsilon$ is a small constant for numerical safety ($10^{-5}$ by default in PyTorch).
 
-Here is sometimes called the "final layer norm", which applies to each token individually, across its embedding dimensions before the final projection layer (lm_head).
+> It applies to **each token individually**, across its embedding dimensions. GPT-2 uses it in three places: \`ln1\` and \`ln2\` inside every block, and the **final layer norm** \`ln_f\` before the output projection (\`lm_head\`).
 
-&nbsp;
+### Example
 
-$\\textbf{Example}$ ($\\gamma$ and $\\beta$ are ignored for simplicity).
-
-&nbsp;
-
-For a token embedding vector
+$\\gamma$ and $\\beta$ are ignored for simplicity. For a token embedding vector
 
 $$
 x = [5.0,\\; 4.5,\\; 6.2,\\; 4.8],
@@ -1560,1909 +1560,1766 @@ $$
 LayerNorm computes the mean and standard deviation over the 4 dimensions:
 
 $$
-\\mu = 5.125, \\quad \\sigma \\approx 0.64
+\\mu = 5.125, \\quad \\sigma \\approx 0.646
 $$
 
 and normalizes each element:
 
 $$
-\\hat{x}_i = \\frac{x_i - \\mu}{\\sigma + \\epsilon}.
+\\hat{x}_i = \\frac{x_i - \\mu}{\\sqrt{\\sigma^2 + \\epsilon}}
 $$
 
-So the normalized output becomes approximately
+So the normalized output is approximately
 
 $$
-\\hat{x} = [-0.20,\\; -0.98,\\; 1.68,\\; -0.49].
+\\hat{x} = [-0.19,\\; -0.97,\\; 1.66,\\; -0.50].
 $$
 
-&nbsp;
+## Why it's used in GPT-style models
 
----
+### 1. Stabilizes training by controlling magnitude
 
-&nbsp;
+After $x \\rightarrow \\hat{x} = \\frac{x - \\mu}{\\sigma}$, the softmax in attention sees $\\frac{QK^\\top}{\\sqrt{d}}$ on a stable scale, reducing exploding logits and saturated softmax. The MLP nonlinearity also operates in a stable range.
 
-$$\\textbf{Why It's Used in GPT-Style Models}\\\\[4pt]$$
+[Why? A tiny numeric example](#info:stabilize_training_notes)
 
-&nbsp;
+### 2. Improves gradient flow
 
-$$\\textbf{1. Stabilizes training by controlling magnitude}\\\\[2pt]$$  
-After $x \\rightarrow \\hat{x} = \\frac{x - \\mu}{\\sigma}$, the softmax in attention sees $\\frac{QK^\\top}{\\sqrt{d}}$ on a stable scale,
-reducing exploding logits and saturated softmax; MLP nonlinearity also operate in a stable range.
+The Jacobian around normalized activations is better conditioned (roughly scaled by $\\frac{1}{\\sigma}$), which curbs exploding/vanishing gradients and reduces sensitivity to the learning-rate choice.
 
-&nbsp;
+[Why? A tiny numeric example](#info:improves_gradient_flow_notes)
 
-$\\href{#info:stabilize_training_notes}{\\text{Why is it? A tiny numeric example}}$
+### 3. Provides scale invariance
 
-&nbsp;
+Rescaling upstream weights changes $\\mu$ and $\\sigma$ in the same proportion, so the normalized activations barely change. The model learns "directional" features, while LayerNorm's $\\gamma$ and $\\beta$ reintroduce any useful scale/shift.
 
-$$\\textbf{2. Improves gradient flow}\\\\[4pt]$$  
-The Jacobian around normalized activations is better conditioned (roughly scaled by 
-$\\frac{1}{\\sigma}$
-), which curbs exploding/vanishing gradients and reduces sensitivity to learning-rate choice.
+**Quick numeric example.** Let $x = [2, -1, 1]$ and scale it by $c = 10$ to $x' = [20, -10, 10]$.
 
-&nbsp;
+- **Without LN:** $x'$ is 10× larger → Q/K dot products and logits become ~10× larger → likely softmax saturation.
+- **With LN:** $\\hat{x}' = \\hat{x}$. The forward behavior after LN is the same, and backprop through LN also accounts for $\\frac{1}{\\sigma}$, so gradients aren't inflated by the scale.
 
-$\\href{#info:improves_gradient_flow_notes}{\\text{Why is it? A tiny numeric example}}$
+## Summary: three angles on stability
 
-&nbsp;
+The three points are related but not the same; each tackles stability from a different angle.
 
-$$\\textbf{3. Provides scale invariance}\\\\[4pt]$$  
-rescaling upstream weights changes $\\mu$ and $\\sigma$ similarly, so the normalized activations barely change.
-the model learns "directional" features while LayerNorm's $\\gamma$ and $\\beta$ reintroduce any useful scale/shift
+1. **Forward magnitude control (avoids softmax saturation).** LN standardizes each token's vector so dot products/logits don't blow up ⇒ softmax stays out of saturation ⇒ its Jacobian $\\mathrm{diag}(p) - pp^\\top$ doesn't collapse to zero, so gradients keep flowing through it. It targets the numerical size of forward activations after LN.
 
-&nbsp;
+2. **Gradient flow conditioning (LN's Jacobian).** In backprop, LN applies a specific linear map. With $g$ the gradient arriving at the normalized output $\\hat{y}$:
 
-$\\text{Quick numeric example:}$
+   $$
+   \\nabla_{x} L = \\frac{1}{\\sigma} \\left( g - \\mu(g)\\mathbf{1} - \\hat{y}\\,\\mu(g \\odot \\hat{y}) \\right)
+   $$
 
-Let $x = \\begin{bmatrix}2, -1, 1\\end{bmatrix}$ scale it by $c = 10$ to $x' = \\begin{bmatrix}20, -10, 10\\end{bmatrix}$.
+   The $\\frac{1}{\\sigma}$ scales the gradient and the two subtracted terms project out components, directly shaping gradients and reducing exploding/vanishing. It targets the local conditioning of gradients at LN during backprop, independent of upstream rescaling. Intuitively, whatever gradient arrives at LN, it is reshaped into a well-conditioned, scale-controlled signal before being sent further back.
 
-$\\bullet\\ $ Without LN: x' is 10x larger -> Q/K dot products and logis become ~10x larger -> likely softmax saturation.
+3. **Scale invariance (decouples direction from scale).** Upstream scaling doesn't affect LN's output, since $\\mu$ and $\\sigma$ scale accordingly. It targets invariance to arbitrary rescaling from earlier layers.
 
-$\\bullet\\ $ With LN: $\\hat{x}' = \\hat{x}$. Forward behavior after LN is the same, backprop through LN also accounts for $\\frac{1}{\\sigma}$, 
-so gradients aren't inflated by the scale.
+## Pre-norm vs post-norm
 
-&nbsp;
+GPT-2 uses **pre-norm**, unlike the **post-norm** of the original Transformer paper. The difference is only where LayerNorm sits relative to the residual add.
 
-$\\textbf{Summary:}$
-
-The above three points are related, but not the same. Think of the three points as tackling stability from three different angles:
-
-&nbsp;
-
-$\\textbf{1. Forward magnitude control (to avoid softmax saturation):}$
-LN standardizes each token's vector so dot products/logits don't blow up $\\Rightarrow$ softmax stays in a small range
-$\\Rightarrow \\triangledown_z = p - y$ doesn't vanish. 
-It targets the numerical size of forward activations after LN.
-
-&nbsp;
-
-$\\textbf{2. Gradient flow conditioning (LN's Jacobian):}$
-In backprop, LN applies a specific linear map:
-$$
-  \\triangledown_{x} L = \\frac{1}{\\sigma} (g - \\mu(g)\\mathbf{1} - \\hat{y}\\mu(g\\odot \\hat{y}))
-$$
-The $\\frac{1}{\\sigma}$ scales and the two projections directly shape gradients, reducing exploding/vanishing.
-It targets the local conditioning of gradients at LN during back prop - independent of upstream rescaling and even out any upstreaming component magnitudes. 
-Intuitively, no matter what gradient arrives at LN, it reshapes it into a well conditioned, scale-controlled signal before sending it further back.
-
-&nbsp;
-
-$\\textbf{3. Scale invariance (decouples direction from scale):}$
-Upstream scaling won't affect LN's output since $\\mu$ and $\\sigma$ scale accordingly.
-It targets the invariance to arbitrary rescaling from earlier layers.
-
-&nbsp;
-
----
-
-&nbsp;
-
-$\\textbf{4. More notes:}$
-
-&nbsp;
-
-$\\textbf{1.}$ The layer norm used in GPT-2 is also called Pre-norm, which is different from the Post-norm used in the original paper.
-Pre-norm vs post-norm is just about where you put LayerNorm relative to the residual add in the Transformer block.
-
-&nbsp;
-
-$\\textbf{The two layouts:}\\\\[4pt]$
-
-$\\textbf{Post-norm (original paper):}$
+**Post-norm (original paper):** LN normalizes after the residual addition.
 
 $$
-SA: x_1 = LN(x + MHA(x))\\\\[4pt]
-FFN: y = LN(x_1 + FFN(x_1))
+\\text{SA: } x_1 = \\text{LN}(x + \\text{MHA}(x)) \\\\[4pt]
+\\text{FFN: } y = \\text{LN}(x_1 + \\text{FFN}(x_1))
 $$
 
-Here LN normalizes after residual addition.
-
-&nbsp;
-
-$\\textbf{Pre-norm (widely used now for deep stacks includingGPT-2):}$
+**Pre-norm (GPT-2, and widely used now for deep stacks):** LN comes before each sublayer.
 
 $$
-SA: x_1 = x + MHA(LN(x))\\\\[4pt]
-FFN: y = x_1 + FFN(LN(x_1))
+\\text{SA: } x_1 = x + \\text{MHA}(\\text{LN}(x)) \\\\[4pt]
+\\text{FFN: } y = x_1 + \\text{FFN}(\\text{LN}(x_1))
 $$
 
-Here LN is before each sublayer.
+> The main reason pre-norm is widely used is that the residual gives gradients an identity path: $\\frac{\\partial y}{\\partial x} = I + \\dots$ This makes deep stacks train stably.
 
-&nbsp;
+See a [tiny numeric example](#info:post_norm_gradient_example_notes) that illustrates the issue with post-norm.
 
-The main reason Pre-norm is widely used now is that there is an identity path for gradients through the residual: 
-$\\frac{\\partial y}{\\partial x} = I + ...$. This makes deep stacks train stably.
+## Recent developments: RMSNorm
 
-&nbsp;
+Among recent open-weight LLMs, **RMSNorm** is the default more often than LayerNorm. Examples:
 
-**See a tiny numeric $\\href{#info:post_norm_gradient_example_notes}{example}$ to illustrate the issue of Post-norm.**
+- **Llama 2:** the paper says "we … apply pre-normalization using RMSNorm" (§2.2, Training Details). [Llama 2 paper ↗](https://ar5iv.labs.arxiv.org/html/2307.09288)
+- **Llama 3:** Meta's official model code defines and uses \`RMSNorm\`. [meta-llama/llama3 model.py ↗](https://github.com/meta-llama/llama3/blob/main/llama/model.py)
+- **Mistral 7B:** Hugging Face's Mistral model code defines and uses \`MistralRMSNorm\`. [modeling_mistral.py ↗](https://github.com/huggingface/transformers/blob/main/src/transformers/models/mistral/modeling_mistral.py)
+- **Mixtral:** Hugging Face's Mixtral implementation (derived from the Mistral codebase) uses RMSNorm. [modeling_mixtral.py ↗](https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py)
+- **Qwen:** model cards list the architecture as "transformers with RoPE, SwiGLU, RMSNorm …" (e.g. Qwen2.5-1.5B). [Qwen2.5-1.5B ↗](https://huggingface.co/Qwen/Qwen2.5-1.5B)
+- **Gemma:** Hugging Face's Gemma docs describe the model as using GeGLU activations and RMSNorm. [Gemma docs ↗](https://huggingface.co/docs/transformers/en/model_doc/gemma)
 
-&nbsp;
+See a [tiny numeric example](#info:rmsnorm_gradient_example_notes) of how RMSNorm works.
 
-$\\textbf{2.}$ Amone recent open weight LLMs, RMSNorm is the default more often than LayerNorm. Examples that explicitly use RMSNorm include:
+## References
 
-&nbsp;
+1. **Layer Normalization (2016)**
 
-$\\textbf{LLaMA(v2)}:$ 
-The paper explicitly says: "we … apply pre-normalization using RMSNorm …" (Sec. 2.2 Training Details).
-$\\href{https://ar5iv.labs.arxiv.org/html/2307.09288}{\\texttt{LLaMA(v2)}}\\\\[4pt]$
+   Ba, Kiros, Hinton. Defines LN, contrasts it with BatchNorm, and motivates per-example normalization.
 
-$\\textbf{LLaMA(v3)}:$
-Meta's implementation and community annotated walkthroughs of the official code note RMSNorm in the stack (implementation detail consistent with Llama 2).
-$\\href{https://ttumiel.com/blog/LLaMA3/?utm_source=chatgpt.com}{\\texttt{Tom Tumiel}}$
+   [Layer Normalization ↗](https://arxiv.org/pdf/1607.06450)
 
-$\\textbf{Mistral 7B}:$
-Hugging Face's official Mistral model code defines and uses MistralRMSNorm.
-$\\href{https://github.com/huggingface/transformers/blob/main/src/transformers/models/mistral/modeling_mistral.py?utm_source=chatgpt.com}{\\texttt{GitHub}}$
+2. **GPT-2 technical report: where LN sits in GPT-2 (pre-LN)**
 
-$\\textbf{Mixtral}:$
-HF's Mixtral implementation (derived from Mistral codebase) uses RMSNorm; more broadly, normalization surveys/papers state "RMSNorm is used by many LLMs such as Llama and Mistral."
-$\\href{https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py?utm_source=chatgpt.com}{\\texttt{GitHub}}$
+   Radford et al. note that LN is moved to the input of each sub-block and that a final LN is added.
 
-$\\textbf{Qwen}:$
-model cards list the architecture as "Transformers with RoPE, SwiGLU, RMSNorm …" (example: Qwen 2.5-1.5B).
-$\\href{https://huggingface.co/Qwen/Qwen2.5-1.5B?utm_source=chatgpt.com}{\\texttt{Hugging Face}}$
+   [GPT-2 Technical Report ↗](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf)
 
-$\\textbf{Gemma/Gemma2}:$
-HF's official Gemma docs describe the model as using SwiGLU and RMSNorm layer normalization.
-$\\href{https://huggingface.co/docs/transformers/en/model_doc/gemma?utm_source=chatgpt.com}{\\texttt{Hugging Face}}$
+3. **PyTorch API: the exact math and arguments used in practice**
 
-&nbsp;
+   \`torch.nn.LayerNorm(normalized_shape, eps, elementwise_affine, …)\`. Useful for implementation details and the $\\epsilon$ you'll see in configs.
 
-**See a tiny numeric $\\href{#info:rmsnorm_gradient_example_notes}{example}$ to illustrate how RMSNorm works.**
+   [torch.nn.LayerNorm ↗](https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html)
 
-&nbsp;
+4. **Pre-LN vs post-LN analysis (why GPT-2 uses pre-LN)**
 
----
+   Xiong et al., "On Layer Normalization in the Transformer Architecture." Theoretical and empirical comparison; shows pre-LN stabilizes training (often without warm-up).
 
-&nbsp;
+   [On Layer Normalization in the Transformer Architecture ↗](https://arxiv.org/pdf/2002.04745)
 
-$$\\textbf{References:}\\\\[4pt]$$
-$$\\textbf{1. Original paper — Layer Normalization (2016).}$$
-Ba, Kiros, Hinton. Defines LN, contrasts with BatchNorm, and motivates per-example normalization.
-$$\\href{https://arxiv.org/pdf/1607.06450}{\\texttt{Layer Normalization}}$$
+5. **RMSNorm**
 
-$$\\textbf{2. GPT-2 technical report — where LN sits in GPT-2 (Pre-LN).}$$
-Radford et al. note LN is moved to the input of each sub-block (pre-activation) and add a final LN.
-$$\\href{https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf?utm_source=chatgpt.com}{\\texttt{GPT-2 Technical Report}}$$
+   Zhang & Sennrich introduce RMSNorm, a lighter alternative (no centering) with similar quality and speed gains. A useful contrast to LN.
 
-$$\\textbf{3. PyTorch API — exact math \\& args used in practice.}$$
-$\\mathtt{torch.nn.LayerNorm(normalized\\_shape, \\epsilon, elementwise\\_affine, …)}$—helpful for implementation details and the 
-$\\epsilon$ stabilization you'll see in configs.
-$$\\href{https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html}{\\texttt{torch.nn.LayerNorm}}$$
-
-$$\\textbf{4. Pre-LN vs Post-LN analysis (why GPT-2 uses Pre-LN).}$$
-Xiong et al., On Layer Normalization in the Transformer Architecture—theoretical & empirical comparison; shows Pre-LN stabilizes training (often no warm-up).
-$$\\href{https://arxiv.org/pdf/2002.04745}{\\texttt{On Layer Normalization in the Transformer Architecture}}$$
-
-$$\\textbf{5. RMSNorm}$$
-Zhang & Sennrich introduce RMSNorm, a lighter alternative (no centering) with similar quality and speed gains—useful contrast to LN.
-$$\\href{https://arxiv.org/pdf/1910.07467}{\\texttt{RMSNorm}}$$
+   [RMSNorm ↗](https://arxiv.org/pdf/1910.07467)
 `,
   },
 
   stabilize_training_notes: {
     title: "Stabilize Training Example",
     md: `
-  Here's a tiny numeric example to show why LayerNorm stabilizes training by controlling magnitude (so attention logits don't blow up and softmax doesn't saturate).
+**A tiny numeric example of why LayerNorm stabilizes training by controlling magnitude, so attention logits don't blow up and softmax doesn't saturate.**
 
-  &nbsp;
+## Setup
 
-  $\\textbf{Setup (2 tokens, d=3, use identity projections so Q = X, K = X, scale by 1/sqrt(d))}$
+Two tokens, $d = 3$. Use identity projections, so $Q = X$ and $K = X$, and scale scores by $1/\\sqrt{d}$.
 
-  Raw embeddings:
+Raw embeddings:
 
-  $$
-  e_1 = \\begin{bmatrix}10 & -5 & 7\\end{bmatrix}, e_2 = \\begin{bmatrix}-8 & 12 & -4\\end{bmatrix}
-  $$
+$$
+e_1 = \\begin{bmatrix}10 & -5 & 7\\end{bmatrix}, \\quad e_2 = \\begin{bmatrix}-8 & 12 & -4\\end{bmatrix}
+$$
 
-  $\\textbf{1) Without LayerNorm:}$
+## 1. Without LayerNorm
 
-  Scores for token 1 attending to {1,2}:
+Scores for token 1 attending to $\\{1, 2\\}$:
 
-  $$
-  \\bullet\\ s_{11} = \\frac{e_1 \\cdot e_1}{\\sqrt{3}} = \\frac{10 \\cdot 10 + (-5) \\cdot (-5) + 7 \\cdot 7}{\\sqrt{3}} = \\frac{100 + 25 + 49}{\\sqrt{3}} = \\frac{174}{\\sqrt{3}} \\approx 100.46\\\\[4pt]
-  \\bullet\\ s_{12} = \\frac{e_1 \\cdot e_2}{\\sqrt{3}} = \\frac{10 \\cdot (-8) + (-5) \\cdot 12 + 7 \\cdot (-4)}{\\sqrt{3}} = \\frac{-80 - 60 - 28}{\\sqrt{3}} = \\frac{-168}{\\sqrt{3}} \\approx -96.99
-  $$
+$$
+\\begin{aligned}
+s_{11} &= \\frac{e_1 \\cdot e_1}{\\sqrt{3}} = \\frac{10 \\cdot 10 + (-5) \\cdot (-5) + 7 \\cdot 7}{\\sqrt{3}} = \\frac{100 + 25 + 49}{\\sqrt{3}} = \\frac{174}{\\sqrt{3}} \\approx 100.46 \\\\[4pt]
+s_{12} &= \\frac{e_1 \\cdot e_2}{\\sqrt{3}} = \\frac{10 \\cdot (-8) + (-5) \\cdot 12 + 7 \\cdot (-4)}{\\sqrt{3}} = \\frac{-80 - 60 - 28}{\\sqrt{3}} = \\frac{-168}{\\sqrt{3}} \\approx -96.99
+\\end{aligned}
+$$
 
-  Softmax over [100.46, -96.99] $\\Rightarrow \\approx$ [1.00, 0.00], totally saturated which will lead to vanishing gradients.
-  (Why? Step by Step explanation [here](#info:stabilize_training_no_layernorm_backprop_notes))
+Softmax over $[100.46, -96.99]$ $\\Rightarrow \\approx [1.00, 0.00]$: **totally saturated**, which leads to vanishing gradients.
 
-  &nbsp;
+[Why? A step-by-step explanation](#info:stabilize_training_no_layernorm_backprop_notes)
 
-  $\\textbf{2) With LayerNorm:}$
+## 2. With LayerNorm
 
-  Normalize each token (numbers rounded):
+Normalize each token (numbers rounded):
 
-  $$
-  \\bullet\\ \\text{For } e_1: mean = 4, std \\approx 6.4807 \\\\[4pt]
-  \\hat{e}_1 = \\begin{bmatrix}0.9258, -1.3887, 0.4630\\end{bmatrix}\\\\[4pt]
-  \\bullet\\ \\text{For } e_2: mean = 0, std \\approx 8.6403 \\\\[4pt]
-  \\hat{e}_2 = \\begin{bmatrix}-0.9258, 1.3887, -0.4630\\end{bmatrix}
-  $$
+- For $e_1$: mean $= 4$, std $\\approx 6.4807$, so $\\hat{e}_1 = \\begin{bmatrix}0.9258, -1.3887, 0.4629\\end{bmatrix}$.
+- For $e_2$: mean $= 0$, std $\\approx 8.6410$, so $\\hat{e}_2 = \\begin{bmatrix}-0.9258, 1.3887, -0.4629\\end{bmatrix}$.
 
-  Scores for token 1 attending to {1,2}:
+Scores for token 1 attending to $\\{1, 2\\}$:
 
-  $$
-  \\bullet\\ s_{11} = \\frac{\\hat{e}_1 \\cdot \\hat{e}_1}{\\sqrt{3}} = \\frac{0.9258 \\cdot 0.9258 + (-1.3887) \\cdot (-1.3887) + 0.4630 \\cdot 0.4630}{\\sqrt{3}} \\approx 1.732\\\\[4pt]
-  \\bullet\\ s_{12} = \\frac{\\hat{e}_1 \\cdot \\hat{e}_2}{\\sqrt{3}} = \\frac{0.9258 \\cdot (-0.9258) + (-1.3887) \\cdot 1.3887 + 0.4630 \\cdot (-0.4630)}{\\sqrt{3}} \\approx -1.732
-  $$
-  
-  Softmax over [1.732, -1.732] $\\Rightarrow \\approx$ [0.9696, 0.0304], not saturated which will not lead to vanishing gradients.
-  
-  &nbsp;
+$$
+\\begin{aligned}
+s_{11} &= \\frac{\\hat{e}_1 \\cdot \\hat{e}_1}{\\sqrt{3}} = \\frac{0.9258 \\cdot 0.9258 + (-1.3887) \\cdot (-1.3887) + 0.4629 \\cdot 0.4629}{\\sqrt{3}} \\approx 1.732 \\\\[4pt]
+s_{12} &= \\frac{\\hat{e}_1 \\cdot \\hat{e}_2}{\\sqrt{3}} = \\frac{0.9258 \\cdot (-0.9258) + (-1.3887) \\cdot 1.3887 + 0.4629 \\cdot (-0.4629)}{\\sqrt{3}} \\approx -1.732
+\\end{aligned}
+$$
 
-  $\\textbf{Bottom line:}\\\\[4pt]$
-  LN standardizes activations so during forward pass, downstream dot-products/logits are in a reasonable numeric range → softmax avoids saturation → probabilities remain sensitive to changes.
-  `,
+Softmax over $[1.732, -1.732]$ $\\Rightarrow \\approx [0.9696, 0.0304]$: **not saturated**, so it doesn't lead to vanishing gradients.
+
+## Bottom line
+
+> LN standardizes activations, so during the forward pass downstream dot products/logits stay in a reasonable numeric range → softmax avoids saturation → probabilities remain sensitive to changes.
+`,
   },
 
   stabilize_training_no_layernorm_backprop_notes: {
     title: "Why satuated softmax leads to vanishing gradients",
     md: `
-  
-  $\\textbf{1. Softmax from logits to probabilities:}\\\\[4pt]$
+**Why a saturated softmax (the no-LayerNorm case) starves earlier layers of gradient, step by step.**
 
-  The logits from the example: $z=[100.46,-96.99]\\\\[4pt]$
+## 1. Softmax from logits to probabilities
 
-  We also have after softmax: $p \\approx [1.00, 0.00]$ up to an $\\epsilon$ of about $10^{-86}$.
-  
-  &nbsp;
+The logits from the example: $z = [100.46, -96.99]$.
 
-  $\\textbf{2. Cross-entropy loss and its gradient w.r.t logits:}\\\\[4pt]$
+After softmax: $p \\approx [1.00, 0.00]$, up to an $\\epsilon$ of about $10^{-86}$.
 
-  For a one-hot target $y$ (say the true class is 1: $y=[1,0]$), the cross-entropy loss is:
-  $$
-  L = -\\sum_i y_i \\log p_i = -log(p_1)
-  $$
-  
-  The gradient of the loss w.r.t logits is:
-  $$
-  \\frac{\\partial L}{\\partial z_i} = p_i - y_i
-  $$
-  
-  Read the mathematical proof $\\href{#info:gradient_loss_to_logits_proof_notes}{\\text{here}}$.
+## 2. Cross-entropy loss and its gradient w.r.t. the logits
 
-  &nbsp;
+For a one-hot target $y$ (say the true class is 1: $y = [1, 0]$), the cross-entropy loss is
 
-  Plugging in the values:
-  $$
-  \\bullet\\ P_1 \\approx 1 - 10^{-86}, y_1 = 1 \\Rightarrow \\frac{\\partial L}{\\partial z_1} \\approx (1 - 10^{-86}) - 1 = -10^{-86} \\\\[4pt]
-  \\bullet\\ P_2 \\approx 10^{-86}, y_2 = 0 \\Rightarrow \\frac{\\partial L}{\\partial z_2} \\approx 10^{-86} - 0 = 10^{-86}\\\\[4pt]
-  \\Rightarrow \\triangledown_z L = [-10^{-86}, 10^{-86}] \\; \\textbf{essentially zero in magnitude.}\\\\[4pt]
-  \\text{Intuition: when softmax is saturated and confidently correct, the loss surface is almost flat, so the gradient is near 0.}
-  $$
+$$
+L = -\\sum_i y_i \\log p_i = -\\log p_1
+$$
 
-  $\\textbf{3. Backprop to earlier layers becomes tiny:}\\\\[4pt]$
-  Suppose logits came from a linear layer: $z = Wh + b$ (where $h$ is the previous layer's activations). Then
-  $$
-  \\frac{\\partial L}{\\partial W} = (\\triangledown_z L)h^\\top \\\\[4pt]
-  \\frac{\\partial L}{\\partial h} = W^\\top (\\triangledown_z L) \\\\[4pt]
-  \\frac{\\partial L}{\\partial b} = \\triangledown_z L \\\\[4pt]
-  $$
-  Because $\\triangledown_z L$ has entries on the order of $10^{-86}$, all the weight gradients and the gradient flowing back into $h$ become $10^{-86}$ in magnitude.
-  That means earlier layers receive essentially no learning signal.
-  
-  &nbsp;
-  
-  $\\textbf{4. Some thoughts:}\\\\[4pt]$
-  $\\bullet\\ $ Early in training, we don't want logits so huge that softmax saturates, because we stop getting useful gradients to shape the representations.
-  
-  $\\bullet\\ $ If the model is $\\textbf{confident but wrong}$ (e.g, p $\\approx$ [0,1] while y = [1,0]), then $\\triangledown_z L \\approx$ [-1,1] - the network does 
-  get a strong corrective signal. Vanishing happens in the "confidently correct" case.
-  
-  $\\bullet\\ $ $\\href{#info:label_smoothing_notes}{\\text{Label smoothing}}$ keeps gradients from collapsing completely even when predictions are confident.
-  
-  &nbsp;
+The gradient of the loss w.r.t. the logits is
 
-  $\\textbf{5. References:}\\\\[4pt]$
-  `,
+$$
+\\frac{\\partial L}{\\partial z_i} = p_i - y_i
+$$
+
+Read the mathematical proof [here](#info:gradient_loss_to_logits_proof_notes).
+
+Plugging in the values:
+
+$$
+\\begin{aligned}
+p_1 &\\approx 1 - 10^{-86}, \\; y_1 = 1 &&\\Rightarrow \\frac{\\partial L}{\\partial z_1} \\approx (1 - 10^{-86}) - 1 = -10^{-86} \\\\[4pt]
+p_2 &\\approx 10^{-86}, \\; y_2 = 0 &&\\Rightarrow \\frac{\\partial L}{\\partial z_2} \\approx 10^{-86} - 0 = 10^{-86}
+\\end{aligned}
+$$
+
+$$
+\\Rightarrow \\nabla_z L = [-10^{-86}, 10^{-86}]
+$$
+
+This is **essentially zero in magnitude**.
+
+> Intuition: when softmax is saturated and confidently correct, the loss surface is almost flat, so the gradient is near 0.
+
+## 3. Backprop to earlier layers becomes tiny
+
+Suppose the logits came from a linear layer $z = Wh + b$, where $h$ is the previous layer's activations. Then
+
+$$
+\\frac{\\partial L}{\\partial W} = (\\nabla_z L)\\,h^\\top, \\qquad
+\\frac{\\partial L}{\\partial h} = W^\\top (\\nabla_z L), \\qquad
+\\frac{\\partial L}{\\partial b} = \\nabla_z L
+$$
+
+Because $\\nabla_z L$ has entries on the order of $10^{-86}$, all the weight gradients and the gradient flowing back into $h$ become $10^{-86}$ in magnitude. That means earlier layers receive essentially no learning signal.
+
+## 4. Some thoughts
+
+- Early in training, we don't want logits so huge that softmax saturates, because then we stop getting useful gradients to shape the representations.
+- If the model is **confident but wrong** (e.g. $p \\approx [0, 1]$ while $y = [1, 0]$), then $\\nabla_z L \\approx [-1, 1]$: the network does get a strong corrective signal. Vanishing happens in the "confidently correct" case.
+- [Label smoothing](#info:label_smoothing_notes) keeps gradients from collapsing completely even when predictions are confident.
+`,
   },
 
   label_smoothing_notes: {
     title: "Label Smoothing",
     md: `
-Label smoothing replaces the one-hot target with a soft target so the gradient 
-$\\triangledown_z L = p - y$
-never becomes exactly zero—even when the model is extremely confident.
+**Label smoothing replaces the one-hot target with a soft target, so the gradient $\\nabla_z L = p - y$ never becomes exactly zero, even when the model is extremely confident.**
 
-&nbsp;
+## Why one-hot targets collapse
 
-$\\bullet\\ $ Standard (one-hot) CE: if the model is right and saturated, 
+With standard (one-hot) cross-entropy, if the model is right and saturated:
+
 $$
-p \\approx [1,0, \\ldots] \\text{ and } y = [1,0, \\ldots] \\Rightarrow p - y \\approx [0,0, \\ldots] \\Rightarrow \\text{near-zero gradient (collapse).}
+p \\approx [1, 0, \\ldots] \\text{ and } y = [1, 0, \\ldots] \\Rightarrow p - y \\approx [0, 0, \\ldots]
 $$
 
-$\\bullet\\ $ With label smoothing $\\epsilon$: set the target to
+That is a near-zero gradient (collapse).
+
+## The smoothed target
+
+With label smoothing $\\epsilon$, set the target for the correct class $c$ and the other $C - 1$ classes to
+
 $$
-y_c^{LS} = 1 - \\epsilon,\\; \\;\\; y_{j\\neq c}^{LS} = \\frac{\\epsilon}{C-1} \\\\[4pt]
+y_c^{LS} = 1 - \\epsilon, \\qquad y_{j \\neq c}^{LS} = \\frac{\\epsilon}{C-1}
 $$
-Then, even if $p \\approx [1,0, \\ldots]$, we get
+
+Then, even if $p \\approx [1, 0, \\ldots]$, we get
+
 $$
-\\triangledown_z L = p - y^{LS} \\approx [\\epsilon, -\\frac{\\epsilon}{C-1}, \\ldots]
+\\nabla_z L = p - y^{LS} \\approx \\left[\\epsilon, -\\frac{\\epsilon}{C-1}, \\ldots\\right]
 $$
-which is non-zero. So logits still receive a useful updates. Intuitively, label smoothing reduces overconfidence by nudging the top logit 
-down a bit and pushing up the others slightly.
-This prevesnts complete gradient shutdown when the model is already confident, keeping training dynamics active and reducing brittle overfitting.
 
-$$\\textbf{Tiny example (C=3, $\\epsilon=0.1$):}\\\\[4pt]$$
-$\\bullet\\ $ Smoothed targeet: $y^{LS} = [0.9, 0.05, 0.05]\\\\[4pt]$
-$\\bullet\\ $ If $p = [0.999,0.0005,0.0005] (overconfident),\\\\[4pt]$.
-$\\triangledown_z L = [0.999 - 0.9, 0.0005 - 0.05, 0.0005 - 0.05] = [0.099, -0.0495, -0.0495] \\; \\text{non-zero, weights still get updated.}$
+which is non-zero, so the logits still receive useful updates.
 
-&nbsp;
+> Intuitively, label smoothing reduces overconfidence by nudging the top logit down a bit and pushing up the others slightly. This prevents complete gradient shutdown when the model is already confident, keeping training dynamics active and reducing brittle overfitting.
 
-$$\\textbf{References:}\\\\[4pt]$$
-$$\\textbf{1. Original paper:}$$
-Rethinking the Inception Architecture for Computer Vision (Inception-v3); introduces and motivates label smoothing as a regularizer
-$$\\href{https://arxiv.org/pdf/1512.00567}{\\texttt{Rethinking the Inception Architecture for Computer Vision}}$$
+## Tiny example ($C = 3$, $\\epsilon = 0.1$)
 
-$$\\textbf{2. Transformer training detail:}$$
-Attention Is All You Need—explicitly states they use label smoothing with 
-$\\epsilon=0.1$ and notes its effects.
-$$\\href{https://arxiv.org/pdf/1706.03762v2}{\\texttt{Attention Is All You Need}}$$
+- Smoothed target: $y^{LS} = [0.9, 0.05, 0.05]$.
+- If $p = [0.999, 0.0005, 0.0005]$ (overconfident), then
 
-$$\\textbf{3. Theory \\& empirical study:}$$
-When Does Label Smoothing Help? (Müller, Kornblith, Hinton, NeurIPS 2019) — effects on generalization, calibration, and why it can hurt distillation.
-$$\\href{https://arxiv.org/pdf/1906.02629}{\\texttt{When Does Label Smoothing Help?}}$$
+$$
+\\nabla_z L = [0.999 - 0.9,\\; 0.0005 - 0.05,\\; 0.0005 - 0.05] = [0.099, -0.0495, -0.0495]
+$$
 
-$$\\textbf{4. Related regularizer (confidence penalty) and connection to LS:}$$
-Pereyra et al., ICLR 2017 workshop—penalizing low-entropy outputs; shows relation to label smoothing via direction of KL divergence.
-$$\\href{https://arxiv.org/pdf/1701.06548}{\\texttt{Regularizing Neural Networks by Penalizing Confident Output Distributions}}$$
+This is non-zero, so the weights still get updated.
 
-$$\\textbf{5. Calibration context:}$$
-Guo et al., On Calibration of Modern Neural Networks (ICML 2017)—why model confidence is not calibrated and how label smoothing helps.
-$$\\href{https://arxiv.org/pdf/1706.04599}{\\texttt{On Calibration of Modern Neural Networks}}$$
+## References
 
+1. **Original paper**
+
+   Rethinking the Inception Architecture for Computer Vision (Inception-v3). Introduces and motivates label smoothing as a regularizer.
+
+   [Rethinking the Inception Architecture for Computer Vision ↗](https://arxiv.org/pdf/1512.00567)
+
+2. **Transformer training detail**
+
+   Attention Is All You Need. Explicitly states that they use label smoothing with $\\epsilon = 0.1$ and notes its effects.
+
+   [Attention Is All You Need ↗](https://arxiv.org/pdf/1706.03762v2)
+
+3. **Theory & empirical study**
+
+   When Does Label Smoothing Help? (Müller, Kornblith, Hinton, NeurIPS 2019). Effects on generalization, calibration, and why it can hurt distillation.
+
+   [When Does Label Smoothing Help? ↗](https://arxiv.org/pdf/1906.02629)
+
+4. **Related regularizer (confidence penalty) and its connection to LS**
+
+   Pereyra et al., ICLR 2017 workshop. Penalizes low-entropy outputs; shows the relation to label smoothing via the direction of the KL divergence.
+
+   [Regularizing Neural Networks by Penalizing Confident Output Distributions ↗](https://arxiv.org/pdf/1701.06548)
+
+5. **Calibration context**
+
+   Guo et al., On Calibration of Modern Neural Networks (ICML 2017). Why model confidence is not calibrated and how label smoothing helps.
+
+   [On Calibration of Modern Neural Networks ↗](https://arxiv.org/pdf/1706.04599)
 `,
   },
   
   gradient_loss_to_logits_proof_notes: {
     title: "Gradient of loss to logits",
     md: `
-  $\\textbf{Setup:}\\\\[4pt]$
-  $$
-  \\bullet\\ \\text{Logits: } z \\in \\mathbb{R}^C\\\\[4pt]
-  \\bullet\\ \\text{Softmax: } p_i = \\frac{e^{z_i}}{\\sum_{k=1}^C e^{z_k}}\\\\[4pt]
-  \\bullet\\ \\text{Target: } y \\text{(usually one-hot, but can be any distribution for label smoothing)}\\\\[4pt]
-  \\bullet\\ \\text{Cross-entropy loss: } L = -\\sum_{i=1}^C y_i \\log p_i
-  $$
+**Proof that the gradient of softmax cross-entropy w.r.t. the logits is $p - y$.**
 
-  $\\textbf{Proof:}\\\\[4pt]$
+## Setup
 
-  Use the identity
-  
-  $$
-  \\log p_i = z_i - \\log \\sum_{k=1}^C e^{z_k}
-  $$
+- Logits: $z \\in \\mathbb{R}^C$
+- Softmax: $p_i = \\dfrac{e^{z_i}}{\\sum_{k=1}^C e^{z_k}}$
+- Target: $y$ (usually one-hot, but it can be any distribution, e.g. for label smoothing)
+- Cross-entropy loss: $L = -\\sum_{i=1}^C y_i \\log p_i$
 
-  Plug it into the loss:
+## Proof
 
-  $$
-  L = -\\sum_{i=1}^C y_i \\log p_i = -\\sum_{i=1}^C y_i (z_i - \\log \\sum_{k=1}^C e^{z_k}) = -\\sum_{i=1}^C y_i z_i + \\sum_{i=1}^C y_i \\log \\sum_{k=1}^C e^{z_k}
-  $$
+Use the identity
 
-  Because $y$ is a probability distribution, $\\sum_{i=1}^C y_i = 1$, so
+$$
+\\log p_i = z_i - \\log \\sum_{k=1}^C e^{z_k}
+$$
 
-  $$
-  L = -\\sum_{i=1}^C y_i z_i + \\log \\sum_{k=1}^C e^{z_k}
-  $$
+Plug it into the loss:
 
-  Differentiate w.r.t $z_j$:
-  
-  $$
-  \\frac{\\partial L}{\\partial z_j} = -y_j + \\frac{e^{z_j}}{\\sum_{k=1}^C e^{z_k}} = p_j - y_j
-  $$
-  `,
+$$
+L = -\\sum_{i=1}^C y_i \\log p_i = -\\sum_{i=1}^C y_i \\left(z_i - \\log \\sum_{k=1}^C e^{z_k}\\right) = -\\sum_{i=1}^C y_i z_i + \\sum_{i=1}^C y_i \\log \\sum_{k=1}^C e^{z_k}
+$$
+
+Because $y$ is a probability distribution, $\\sum_{i=1}^C y_i = 1$, so
+
+$$
+L = -\\sum_{i=1}^C y_i z_i + \\log \\sum_{k=1}^C e^{z_k}
+$$
+
+Differentiate w.r.t. $z_j$:
+
+$$
+\\frac{\\partial L}{\\partial z_j} = -y_j + \\frac{e^{z_j}}{\\sum_{k=1}^C e^{z_k}} = p_j - y_j
+$$
+`,
   },
 
   improves_gradient_flow_notes: {
     title: "Improves gradient flow",
     md: `
-  Here is a tiny numeric example to compare the gradient w.r.t. the pre-LN activations with and without LN.
+**A tiny numeric example comparing the gradient w.r.t. the pre-LN activations with and without LN.**
 
-  &nbsp;
+## Setup
 
-  $\\textbf{Setup:}\\\\[4pt]$ a single token vector of size n = 3
-  $$
-  x = \\begin{bmatrix}10, -5, 7\\end{bmatrix}
-  $$
+A single token vector of size $n = 3$:
 
-  Mean and standard deviation:
-  $$
-  \\mu = \\frac{10 + (-5) + 7}{3} = 4, \\quad \\sigma = \\sqrt{\\frac{(10-4)^2 + (-5-4)^2 + (7-4)^2}{3}} = 6.4807
-  $$
+$$
+x = \\begin{bmatrix}10, -5, 7\\end{bmatrix}
+$$
 
-  To make the example simple, let a simple linear head follow with zero target:
-  
-  $W = diag(3, 1, 0.5)$ and $b = 0$. Use a squared loss to the zero target:
-  
-  $$
-  L = \\frac{1}{2} ||Wy + b - 0||^2
-  $$
+Mean and standard deviation:
 
-  where $y$ is eitehr the identity output without LN or the LN output.
+$$
+\\mu = \\frac{10 + (-5) + 7}{3} = 4, \\quad \\sigma = \\sqrt{\\frac{(10-4)^2 + (-5-4)^2 + (7-4)^2}{3}} = 6.4807
+$$
 
-  &nbsp;
-  
-  ---
-  
-  &nbsp;
+To keep the example simple, let a simple linear head follow, with $W = \\mathrm{diag}(3, 1, 0.5)$ and $b = 0$, and use a squared loss to a zero target:
 
-  $\\textbf{1) Without LN:}\\\\[4pt]$
-  Because there is no LN, so it's identity pass: $y = x$.
-  
-  $\\bullet\\ $ $\\text{Forward: } Wy = diag(3, 1, 0.5) \\cdot x = \\begin{bmatrix}30, -5, 3.5\\end{bmatrix}\\\\[4pt]$
-  $\\bullet\\ $ $\\text{Gradient w.r.t. y: } \\triangledown_y L = W^\\top (Wy) = W^2{y}\\\\[4pt]$
-  $\\bullet\\ $ $\\text{Since W is diagonal, } W^2 = diag(9, 1, 0.25)\\\\[4pt]$
-  $\\bullet\\ $ $\\text{Gradient w.r.t. input x (here y = x): } \\triangledown_x L = W^2{x} = \\begin{bmatrix}9*10, 1*(-5), 0.25*7\\end{bmatrix} = \\begin{bmatrix}90, -5, 1.75\\end{bmatrix}\\\\[4pt]$
+$$
+L = \\frac{1}{2} \\|Wy + b - 0\\|^2
+$$
 
-  This gradient is large and very uneven—dominated by the first coordinate. If upstream layers rescale 
-  $x$ by some factor $c$, the gradient scales by $c$ as well (learning rate becomes sensitive to scale).
+where $y$ is either the identity output (without LN) or the LN output.
 
-  &nbsp;
+## 1. Without LN
 
-  ---
+There is no LN, so it's an identity pass: $y = x$.
 
-  &nbsp;
+- **Forward:** $Wy = \\mathrm{diag}(3, 1, 0.5) \\cdot x = \\begin{bmatrix}30, -5, 3.5\\end{bmatrix}$
+- **Gradient w.r.t. $y$:** $\\nabla_y L = W^\\top (Wy) = W^2 y$
+- Since $W$ is diagonal, $W^2 = \\mathrm{diag}(9, 1, 0.25)$.
+- **Gradient w.r.t. the input $x$** (here $y = x$): $\\nabla_x L = W^2 x = \\begin{bmatrix}9 \\cdot 10, 1 \\cdot (-5), 0.25 \\cdot 7\\end{bmatrix} = \\begin{bmatrix}90, -5, 1.75\\end{bmatrix}$
 
-  $\\textbf{2. With LN (pre-LN, GPT-2 style):}\\\\[4pt]$
-  First compute the normalized vector:
-  $$
-  \\hat{y} = LN(x) = \\frac{x - \\mu}{\\sigma} \\approx \\begin{bmatrix}0.9258, -1.3887, 0.4630\\end{bmatrix}
-  $$
+This gradient is large and very uneven, dominated by the first coordinate. If upstream layers rescale $x$ by some factor $c$, the gradient scales by $c$ as well (the learning rate becomes sensitive to scale).
 
-  Forward:
-  $$
-  W\\hat{y} = diag(3, 1, 0.5)\\hat{y}. 
-  $$
+## 2. With LN (pre-LN, GPT-2 style)
 
-  Gradient w.r.t. $\\hat{y}$:
-  $$
-  g = \\triangledown_{\\hat{y}} L = W^\\top (W\\hat{y}) = W^2\\hat{y} = diag(9, 1, 0.25)\\hat{y} = \\begin{bmatrix}8.3322, -1.3887, 0.1158\\end{bmatrix}
-  $$
+First compute the normalized vector:
 
-  Now backprop through the LN. For LN over a vector (affine removed for simplicity), the closed form is:
-  $$
-  \\triangledown_{x} L = \\frac{1}{\\sigma} (g - \\mu(g)\\mathbf{1} - \\hat{y}\\mu(g\\odot \\hat{y}))
-  $$
+$$
+\\hat{y} = \\mathrm{LN}(x) = \\frac{x - \\mu}{\\sigma} \\approx \\begin{bmatrix}0.9258, -1.3887, 0.4629\\end{bmatrix}
+$$
 
-  where $\\mathbf{1}$ is a vector of all ones, $\\mu(g)$ is the mean of $g$ and $\\odot$ is the elementwise product.
+Forward:
 
-  Compute the two mean terms:
-  $$
-  \\mu(g) = \\frac{8.3322 + (-1.3887) + 0.1158}{3} \\approx 2.3532\\\\[4pt]
-  \\mu(g\\odot \\hat{y}) = \\frac{8.3322 \\cdot 0.9258 + (-1.3887) \\cdot (-1.3887) + 0.1158 \\cdot 0.4630}{3} = 3.2325
-  $$
+$$
+W\\hat{y} = \\mathrm{diag}(3, 1, 0.5)\\,\\hat{y}
+$$
 
-  Assemble together:
-  $$
-  g - \\mu(g)\\mathbf{1} \\approx \\begin{bmatrix}5.979, -3.7417, -2.2372\\end{bmatrix}\\\\[4pt]
-  \\hat{y}\\mu(g\\odot \\hat{y}) \\approx \\begin{bmatrix}2.990, -4.487, 1.497\\end{bmatrix}
-  $$
+Gradient w.r.t. $\\hat{y}$:
 
-  Subtract and scale by $\\frac{1}{\\sigma}$:
-  $$
-  \\triangledown_{x} L = \\frac{1}{6.4807} (\\begin{bmatrix}2.989, 0.7453, -3.7342\\end{bmatrix}) \\approx \\begin{bmatrix}0.461, 0.115, -0.576\\end{bmatrix}
-  $$
+$$
+g = \\nabla_{\\hat{y}} L = W^\\top (W\\hat{y}) = W^2\\hat{y} = \\mathrm{diag}(9, 1, 0.25)\\,\\hat{y} = \\begin{bmatrix}8.3324, -1.3887, 0.1157\\end{bmatrix}
+$$
 
-  Now the gradient is much more even—no single dimension dominates.
-  
-  `,
+Now backprop through the LN. For LN over a vector (affine removed for simplicity), the closed form is
+
+$$
+\\nabla_{x} L = \\frac{1}{\\sigma} \\left(g - \\mu(g)\\mathbf{1} - \\hat{y}\\,\\mu(g \\odot \\hat{y})\\right)
+$$
+
+where $\\mathbf{1}$ is a vector of all ones, $\\mu(g)$ is the mean of $g$, and $\\odot$ is the elementwise product.
+
+Compute the two mean terms:
+
+$$
+\\begin{aligned}
+\\mu(g) &= \\frac{8.3324 + (-1.3887) + 0.1157}{3} \\approx 2.3531 \\\\[4pt]
+\\mu(g \\odot \\hat{y}) &= \\frac{8.3324 \\cdot 0.9258 + (-1.3887) \\cdot (-1.3887) + 0.1157 \\cdot 0.4629}{3} = 3.2321
+\\end{aligned}
+$$
+
+Assemble:
+
+$$
+\\begin{aligned}
+g - \\mu(g)\\mathbf{1} &\\approx \\begin{bmatrix}5.9793, -3.7419, -2.2374\\end{bmatrix} \\\\[4pt]
+\\hat{y}\\,\\mu(g \\odot \\hat{y}) &\\approx \\begin{bmatrix}2.9924, -4.4886, 1.4962\\end{bmatrix}
+\\end{aligned}
+$$
+
+Subtract and scale by $\\frac{1}{\\sigma}$:
+
+$$
+\\nabla_{x} L = \\frac{1}{6.4807} \\begin{bmatrix}2.9869, 0.7467, -3.7336\\end{bmatrix} \\approx \\begin{bmatrix}0.461, 0.115, -0.576\\end{bmatrix}
+$$
+
+> Now the gradient is much more even: no single dimension dominates.
+`,
   },
 
   post_norm_gradient_example_notes: {
     title: "Post-norm gradient example",
     md: `
+**A single residual block in post-norm form, to illustrate the gradient issue with post-norm.**
 
-  We'll use a single residual block in $\\textbf{Post-norm}$ form to illustrate the issue.
+$$
+\\text{(post-norm)} \\quad z = x + f(x), \\quad y = \\mathrm{LN}(z)
+$$
 
-  $$
-  \\text{(post-norm) } \\mathtt{z = x + f(x), \\quad y = LN(z)} \\\\[4pt]
-  $$
+## Setup
 
-  For simplicity, we assume the following settings:
-  $$
-  \\bullet\\ \\text{hidden size m = 2, so LN normalizes across 2 features}\\\\[4pt]
-  \\bullet\\ \\text{input x = [1, -1] (mean = 0, variance = 1)}\\\\[4pt]
-  \\bullet\\ \\text{a simple residual f(x) = ax with a = 2 (amplifying the residual path by factor of 2)}
-  $$
+For simplicity, assume:
 
-  $\\textbf{Forward pass:}\\\\[4pt]$
-  $$
-  \\bullet\\ \\text{Residual add: } z = x + f(x) = x + 2x = 3x = [3, -3]\\\\[4pt]
-  \\bullet\\ \\text{LayerNorm over features:}\\\\[4pt]
-  \\ \\ \\ \\ \\bullet\\ mean \\ \\mu = (3 + (-3)) / 2 = 0\\\\[4pt]
-  \\ \\ \\ \\ \\bullet\\ variance \\ v = ((3 - 0)^2 + (-3 - 0)^2) / 2 = 9, std \\ \\sigma = 3\\\\[4pt]
-  \\ \\ \\ \\ \\bullet\\ y = LN(z) =(z - \\mu) / \\sigma = [3, -3]/3 = [1, -1].
-  $$
+- Hidden size $m = 2$, so LN normalizes across 2 features.
+- Input $x = [1, -1]$ (mean $= 0$, variance $= 1$).
+- A simple residual branch $f(x) = ax$ with $a = 2$ (amplifying the residual path by a factor of 2).
 
-  The forward pass is fine.
+## Forward pass
 
-  &nbsp;
+- Residual add: $z = x + f(x) = x + 2x = 3x = [3, -3]$
+- LayerNorm over features:
+  - mean $\\mu = (3 + (-3)) / 2 = 0$
+  - variance $v = ((3 - 0)^2 + (-3 - 0)^2) / 2 = 9$, std $\\sigma = 3$
+  - $y = \\mathrm{LN}(z) = (z - \\mu) / \\sigma = [3, -3]/3 = [1, -1]$
 
-  $\\textbf{Backward pass (the problem!):}\\\\[4pt]$
-  For LayerNorm (per-feature LN with m features), the Jacobian at the point is has the following closed form $\\href{#info:ln_jacobian_closed_form_proof_notes}{proof}$:
+The forward pass is fine.
 
-  $$
-  J = \\frac{\\partial y}{\\partial z} = \\frac{1}{\\sigma} (\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top),
-  $$
+## Backward pass (the problem!)
 
-  Where $\\mathbf{I}$ is the identity matrix of size m $\\times$ m. $\\mathbf{1}$ is the vector of all ones in $\\mathbb{R}^m$.
+For LayerNorm (per-feature LN with $m$ features), the Jacobian at this point has the following closed form ([proof](#info:ln_jacobian_closed_form_proof_notes)):
 
-  &nbsp;
+$$
+J = \\frac{\\partial y}{\\partial z} = \\frac{1}{\\sigma} \\left(\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top\\right)
+$$
 
-  Plug in the values:
+where $\\mathbf{I}$ is the $m \\times m$ identity matrix and $\\mathbf{1}$ is the all-ones vector in $\\mathbb{R}^m$.
 
-  Here $m = 2, \\sigma = 3, y = [1, -1]$.
-  $$
-  \\bullet\\ \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top = \\frac{1}{2} \\mathbf{1}\\mathbf{1}^\\top = \\begin{bmatrix}0.5 & 0.5\\\\0.5 & 0.5\\end{bmatrix}\\\\[4pt]
-  \\bullet\\ \\frac{1}{m} yy^\\top = \\frac{1}{2} \\frac{1}{2} yy^\\top = \\frac{1}{2} \\begin{bmatrix}1 & -1\\\\-1 & 1\\end{bmatrix} = \\begin{bmatrix}0.5 & -0.5\\\\-0.5 & 0.5\\end{bmatrix}\\\\[4pt]
-  \\bullet\\ \\mathbf{I} - \\frac{1}{2} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{2} \\frac{1}{2} yy^\\top = \\mathbf{I} - \\begin{bmatrix}0.5 & 0.5\\\\0.5 & 0.5\\end{bmatrix} - \\begin{bmatrix}0.5 & -0.5\\\\-0.5 & 0.5\\end{bmatrix} = \\begin{bmatrix}0 & 0\\\\0 & 0\\end{bmatrix}
-  $$
+Plug in the values $m = 2$, $\\sigma = 3$, $y = [1, -1]$:
 
-  Thus $J = \\frac{1}{\\sigma} \\times 0 = 0$.
+$$
+\\begin{aligned}
+\\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top &= \\frac{1}{2} \\mathbf{1}\\mathbf{1}^\\top = \\begin{bmatrix}0.5 & 0.5\\\\0.5 & 0.5\\end{bmatrix} \\\\[4pt]
+\\frac{1}{m} yy^\\top &= \\frac{1}{2} yy^\\top = \\frac{1}{2} \\begin{bmatrix}1 & -1\\\\-1 & 1\\end{bmatrix} = \\begin{bmatrix}0.5 & -0.5\\\\-0.5 & 0.5\\end{bmatrix} \\\\[4pt]
+\\mathbf{I} - \\frac{1}{2} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{2} yy^\\top &= \\mathbf{I} - \\begin{bmatrix}0.5 & 0.5\\\\0.5 & 0.5\\end{bmatrix} - \\begin{bmatrix}0.5 & -0.5\\\\-0.5 & 0.5\\end{bmatrix} = \\begin{bmatrix}0 & 0\\\\0 & 0\\end{bmatrix}
+\\end{aligned}
+$$
 
-  &nbsp;
+Thus $J = \\frac{1}{\\sigma} \\times 0 = 0$.
 
-  $\\textbf{Interpretation: }$ at this configuration, LayerNor's Jacobian is exactly zero. That means for any upstream gradient $\\triangledown_y L$,
-  the gradient propagated back to $z$ is
-  $$
-  \\triangledown_z L = J^\\top \\triangledown_y L = 0.
-  $$ 
-  So the gradient dies completely before it even reaches the residual add.
-  Also note the $\\frac{1}{\\sigma}$ in the Jacobian, with more layers, many such Jacobians chain up, so even when not exactly zero,
-  the repeated products of $\\frac{1}{\\sigma}$ can still shrink the gradient to near zero.
+## Interpretation
 
-  &nbsp;
+At this configuration, LayerNorm's Jacobian is exactly zero. That means for any upstream gradient $\\nabla_y L$, the gradient propagated back to $z$ is
 
-  $\\textbf{Caveat about this toy setup: }$ with $m = 2$ the LayerNorm output is always $\\pm[1, -1]$ (constant up to sign), so its Jacobian is zero for $\\textit{every}$ input, not only here.
-  The exact zero is an artifact of choosing $m = 2$. At realistic widths the Jacobian is not zero; the real issue is that the $\\frac{1}{\\sigma}$ factor
-  and the projection are applied to the whole stream at every layer, so their product across depth can shrink (or grow) the gradient.
+$$
+\\nabla_z L = J^\\top \\nabla_y L = 0
+$$
 
-  &nbsp;
+So the gradient dies completely before it even reaches the residual add.
 
-  In pre-norm, you'd compute $y = x + f(LN(x))$. The sublayer always sees unit-scale inputs, and the LN Jacobian is applied before the residual add.
-  So there's always a "gradient highway". Even if the residual branch's Jacobian goes to zero, the "gradient highway" still carries gradient through.
-  
-  `,
+Also note the $\\frac{1}{\\sigma}$ in the Jacobian: with more layers, many such Jacobians chain up, so even when they are not exactly zero, the repeated products of $\\frac{1}{\\sigma}$ can still shrink the gradient to near zero.
+
+> **Caveat about this toy setup:** with $m = 2$ the LayerNorm output is always $\\pm[1, -1]$ (constant up to sign), so its Jacobian is zero for *every* input, not only here. The exact zero is an artifact of choosing $m = 2$. At realistic widths the Jacobian is not zero; the real issue is that the $\\frac{1}{\\sigma}$ factor and the projection are applied to the whole stream at every layer, so their product across depth can shrink (or grow) the gradient.
+
+## Contrast with pre-norm
+
+In pre-norm, you'd compute $y = x + f(\\mathrm{LN}(x))$. The sublayer always sees unit-scale inputs, and the LN Jacobian is applied before the residual add. So there's always a "gradient highway": even if the residual branch's Jacobian goes to zero, the highway still carries gradient through.
+`,
   },
 
   rmsnorm_gradient_example_notes: {
     title: "RMSNorm gradient example",
     md: `
-  A tiny numeric example to illustrate how RMSNorm works.
+**A tiny numeric example to illustrate how RMSNorm works.**
 
-  &nbsp;
+## The formula
 
-  The formula of RMSNorm is:
-  
-  $$
-  RMSNorm(x) = \\gamma \\cdot \\frac{x}{\\sqrt{\\frac{1}{d} \\sum_{i}x_i^2 + \\epsilon}}
-  $$
+$$
+\\mathrm{RMSNorm}(x) = \\gamma \\cdot \\frac{x}{\\sqrt{\\frac{1}{d} \\sum_{i}x_i^2 + \\epsilon}}
+$$
 
-  where $\\gamma$ is a learnable scaling factor we'll talk about what it's used for later.
-  $\\epsilon$ is a small constant to avoid division by zero.
+- $\\gamma$ is a learnable scaling factor; we'll talk about what it's used for later.
+- $\\epsilon$ is a small constant to avoid division by zero.
 
-  &nbsp;
+## Setup
 
-  $\\textbf{Setup:}\\\\[4pt]$
-  $$
-  \\text{Given } x = \\begin{bmatrix}2, -1, 3, 0\\end{bmatrix}, \\gamma = [1.0, 0.5, 2.0, 1.5]
-  $$
-  So in this example, $d = 4$, we'll also ignore the $\\epsilon$ term for simplicity.
+$$
+x = \\begin{bmatrix}2, -1, 3, 0\\end{bmatrix}, \\quad \\gamma = [1.0, 0.5, 2.0, 1.5]
+$$
 
-  &nbsp;
+So in this example $d = 4$. We'll also ignore the $\\epsilon$ term for simplicity.
 
-  $\\textbf{Step 1 - compute the RMS):}\\\\[4pt]$
-  $$
-  RMS(x) = \\sqrt{\\frac{1}{d} \\sum_{i=1}^d x_i^2} = \\sqrt{\\frac{1}{4} (2^2 + (-1)^2 + 3^2 + 0^2)} = \\sqrt{\\frac{1}{4} (4 + 1 + 9 + 0)} = \\sqrt{\\frac{14}{4}} = \\sqrt{3.5} \\approx 1.8708
-  $$
+### Step 1: compute the RMS
 
-  $\\textbf{Step 2 - normalize by the RMS:}\\\\[4pt]$
-  $$
-  x = \\frac{x}{RMS(x)} = \\begin{bmatrix}2/1.8708, -1/1.8708, 3/1.8708, 0/1.8708\\end{bmatrix} = \\begin{bmatrix}1.0690, -0.5345, 1.6035, 0.0000\\end{bmatrix}
-  $$
+$$
+\\mathrm{RMS}(x) = \\sqrt{\\frac{1}{d} \\sum_{i=1}^d x_i^2} = \\sqrt{\\frac{1}{4} (2^2 + (-1)^2 + 3^2 + 0^2)} = \\sqrt{\\frac{1}{4} (4 + 1 + 9 + 0)} = \\sqrt{\\frac{14}{4}} = \\sqrt{3.5} \\approx 1.8708
+$$
 
-  $\\textbf{Step 3 - apply per-feature scaling:}\\\\[4pt]$
-  $$
-  y = \\begin{bmatrix}1.0690 \\cdot 1.0, -0.5345 \\cdot 0.5, 1.6035 \\cdot 2.0, 0.0000 \\cdot 1.5\\end{bmatrix} = \\begin{bmatrix}1.0690, -0.2673, 3.2070, 0.0000\\end{bmatrix}
-  $$
+### Step 2: normalize by the RMS
 
-  This is the RMSNorm output.
+$$
+x = \\frac{x}{\\mathrm{RMS}(x)} = \\begin{bmatrix}2/1.8708, -1/1.8708, 3/1.8708, 0/1.8708\\end{bmatrix} = \\begin{bmatrix}1.0690, -0.5345, 1.6036, 0.0000\\end{bmatrix}
+$$
 
-  &nbsp;
+### Step 3: apply per-feature scaling
 
-  ---
-  
-  &nbsp;
+$$
+y = \\begin{bmatrix}1.0690 \\cdot 1.0, -0.5345 \\cdot 0.5, 1.6036 \\cdot 2.0, 0.0000 \\cdot 1.5\\end{bmatrix} = \\begin{bmatrix}1.0690, -0.2673, 3.2071, 0.0000\\end{bmatrix}
+$$
 
-  $\\textbf{Why do we need scale factor } \\gamma: \\\\[4pt]$
-  Pure normalization fixes the output of RMS to $\\approx 1$, which is too restrictive and not ideal.
-  $\\gamma$ let the model learn and reshape that constraint per feature. Different features can be scaled
-  up/down as training discovers which directions are useful.
-  `,
+This is the RMSNorm output.
+
+## Why do we need the scale factor $\\gamma$?
+
+Pure normalization fixes the RMS of the output to $\\approx 1$, which is too restrictive and not ideal. $\\gamma$ lets the model learn and reshape that constraint per feature: different features can be scaled up or down as training discovers which directions are useful.
+`,
   },
 
   post_norm_scaling_example_notes: {
     title: "Post-norm scaling example",
     md: `
-  In this practice, we'll first see an example that under Post-normwithout scaling, the gradient vanishes with depth.
-  Then we'll add scaling and show that the gradient does not vanish with depth.
-  
-  &nbsp;
+**In this practice, we'll first see an example where, under post-norm without scaling, the gradient vanishes with depth. Then we'll add scaling and compare.**
 
-  $\\textbf{Setup (post-norm)}$
+## Setup (post-norm)
 
-  In order to make the example simple, we'll use a 2-D LayerNorm and a super simple residual branch tha simply 
-  $\\textbf{adds a fixed vector u}$ each layer so we can see the growth cleanly.
+To keep the example simple, we'll use a 2-D LayerNorm and a super simple residual branch that simply **adds a fixed vector $u$** at each layer, so we can see the growth cleanly.
 
-  &nbsp;
+For each layer $l$:
 
-  For each layer $l$:
-  $$
-  z_l = x_{l-1} + \\alpha u
-  $$
+$$
+z_l = x_{l-1} + \\alpha u
+$$
 
-  where
+where
 
-  $$
-  \\bullet \\ \\text{Feature dimension m = 2}\\\\[4pt]
-  \\bullet \\ \\text{Start with }x_0 = [0, 0]\\\\[4pt]
-  \\bullet \\ \\text{Fixed residual vector }u = [1, 0] - \\text{a fixed unit step on the first feature, just to keep arithmetic simple}.\\\\[4pt]
-  \\bullet \\ \\text{LayerNorm uses }\\gamma=1, \\beta=0 - \\text{no shift/scale}.\\\\[4pt]
-  \\bullet \\ \\text{Let }\\sigma(z) = \\sqrt{\\frac{z_1^2 + z_2^2}{2}} = ||z||/\\sqrt{2} - \\text{the L2 norm of z}.\\\\[4pt]
-  \\bullet \\ \\text{An informative assumption for the per-layer gradient attenuation through LN is }\\approx 1/\\sigma(z_l).\\\\[2pt]
-  \\text{(LN's Jacobian operator norm scales up to }\\approx 1/\\sigma(z_l)).
-  \\href{#info:ln_gradient_attenuation_upper_bound_proof_notes}{Why} \\\\[4pt]
-  $$
+- Feature dimension $m = 2$.
+- Start with $x_0 = [0, 0]$.
+- Fixed residual vector $u = [1, 0]$: a fixed unit step on the first feature, just to keep the arithmetic simple.
+- LayerNorm uses $\\gamma = 1$, $\\beta = 0$: no shift/scale.
+- Let $\\sigma(z) = \\sqrt{\\frac{(z_1 - \\mu)^2 + (z_2 - \\mu)^2}{2}}$ with $\\mu = \\frac{z_1 + z_2}{2}$: the standard deviation of $z$, as LayerNorm computes it.
+- An informative assumption: the per-layer gradient attenuation through LN is $\\approx 1/\\sigma(z_l)$ (LN's Jacobian operator norm scales up to $\\approx 1/\\sigma(z_l)$). [Why](#info:ln_gradient_attenuation_upper_bound_proof_notes) This is an upper bound: with $m = 2$ the actual LN Jacobian is exactly zero (see the [post-norm gradient example](#info:post_norm_gradient_example_notes)), so the products below track the bound, not the true gradient.
 
-  With this setup, we'll compare $\\textbf{no scaling }(\\alpha = 1)$ vs $\\textbf{depth scaling for N = 4 layers }(\\alpha = 1/\\sqrt{N} = 0.5)$.
-  
-  &nbsp;
+With this setup, we'll compare **no scaling** ($\\alpha = 1$) vs **depth scaling for $N = 4$ layers** ($\\alpha = 1/\\sqrt{N} = 0.5$).
 
-  $\\textbf{Case 1: no scaling } \\alpha = 1, N = 4:\\\\[4pt]$
+## Case 1: no scaling, $\\alpha = 1$, $N = 4$
 
-  Layer 1
-  $$
-  \\bullet \\ z_1 = x_0 + \\alpha u = [0, 0] + 1 \\times [1, 0] = [1, 0]\\\\[4pt]
-  \\bullet \\ \\mu_1 = (1 + 0)/2 = 0.5\\\\[4pt]
-  \\bullet \\ \\sigma_1 = \\sqrt{(1-0.5)^2 + (0-0.5)^2)/2} = 0.5\\\\[4pt]
-  \\bullet \\ x_1 = (z_1 - \\mu_1)/\\sigma_1 = [1, -1]
-  $$
+**Layer 1**
 
-  Layer 2
-  $$
-  \\bullet \\ z_2 = x_1 + \\alpha u = [1, -1] + 1 \\times [1, 0] = [2, -1]\\\\[4pt]
-  \\bullet \\ \\mu_2 = (2 + (-1))/2 = 0.5\\\\[4pt]
-  \\bullet \\ \\sigma_2 = \\sqrt{(2-0.5)^2 + (-1-0.5)^2)/2} = 1.5\\\\[4pt]
-  \\bullet \\ x_2 = (z_2 - \\mu_2)/\\sigma_2 = [1.5, -1.5]/1.5 = [1, -1]
-  $$
+$$
+\\begin{aligned}
+z_1 &= x_0 + \\alpha u = [0, 0] + 1 \\times [1, 0] = [1, 0] \\\\[4pt]
+\\mu_1 &= (1 + 0)/2 = 0.5 \\\\[4pt]
+\\sigma_1 &= \\sqrt{\\left((1-0.5)^2 + (0-0.5)^2\\right)/2} = 0.5 \\\\[4pt]
+x_1 &= (z_1 - \\mu_1)/\\sigma_1 = [1, -1]
+\\end{aligned}
+$$
 
-  Layer 3
-  $$
-  \\bullet \\ z_3 = x_2 + \\alpha u = [1, -1] + 1 \\times [1, 0] = [2, -1]\\\\[4pt]
-  \\bullet \\ \\mu_3 = (2 + (-1))/2 = 0.5\\\\[4pt]
-  \\bullet \\ \\sigma_3 = \\sqrt{(2-0.5)^2 + (-1-0.5)^2)/2} = 1.5\\\\[4pt]
-  \\bullet \\ x_3 = (z_3 - \\mu_3)/\\sigma_3 = [1.5, -1.5]/1.5 = [1, -1]
-  $$
+**Layer 2**
 
-  Layer 4
-  $$
-  \\bullet \\ z_4 = x_3 + \\alpha u = [1, -1] + 1 \\times [1, 0] = [2, -1]\\\\[4pt]
-  \\bullet \\ \\mu_4 = (2 + (-1))/2 = 0.5\\\\[4pt]
-  \\bullet \\ \\sigma_4 = \\sqrt{(2-0.5)^2 + (-1-0.5)^2)/2} = 1.5\\\\[4pt]
-  \\bullet \\ x_4 = (z_4 - \\mu_4)/\\sigma_4 = [1.5, -1.5]/1.5 = [1, -1]
-  $$
+$$
+\\begin{aligned}
+z_2 &= x_1 + \\alpha u = [1, -1] + 1 \\times [1, 0] = [2, -1] \\\\[4pt]
+\\mu_2 &= (2 + (-1))/2 = 0.5 \\\\[4pt]
+\\sigma_2 &= \\sqrt{\\left((2-0.5)^2 + (-1-0.5)^2\\right)/2} = 1.5 \\\\[4pt]
+x_2 &= (z_2 - \\mu_2)/\\sigma_2 = [1.5, -1.5]/1.5 = [1, -1]
+\\end{aligned}
+$$
 
-  Accumulate the per-layer factors:
-  $$
-  \\prod_{l=1}^4 \\frac{1}{\\sigma_l} = \\frac{1}{0.5} \\times \\frac{1}{1.5} \\times \\frac{1}{1.5} \\times \\frac{1}{1.5} \\approx 0.5926
-  $$
+**Layer 3**
 
-  Gradients get shrunk by about 40% by the four LNs and would keep shrinking with more layers.
-  
-  &nbsp;
+$$
+\\begin{aligned}
+z_3 &= x_2 + \\alpha u = [1, -1] + 1 \\times [1, 0] = [2, -1] \\\\[4pt]
+\\mu_3 &= (2 + (-1))/2 = 0.5 \\\\[4pt]
+\\sigma_3 &= \\sqrt{\\left((2-0.5)^2 + (-1-0.5)^2\\right)/2} = 1.5 \\\\[4pt]
+x_3 &= (z_3 - \\mu_3)/\\sigma_3 = [1.5, -1.5]/1.5 = [1, -1]
+\\end{aligned}
+$$
 
-  $\\textbf{Case 2: depth scaling } \\alpha = 0.5, N = 4:\\\\[4pt]$
+**Layer 4**
 
-  Layer 1
-  $$
-  \\bullet \\ z_1 = x_0 + \\alpha u = [0, 0] + 0.5 \\times [1, 0] = [0.5, 0]\\\\[4pt]
-  \\bullet \\ \\mu_1 = (0.5 + 0)/2 = 0.25\\\\[4pt]
-  \\bullet \\ \\sigma_1 = \\sqrt{(0.5-0.25)^2 + (0-0.25)^2)/2} = 0.25\\\\[4pt]
-  \\bullet \\ x_1 = (z_1 - \\mu_1)/\\sigma_1 = [0.25, -0.25]/0.25 = [1, -1]
-  $$
+$$
+\\begin{aligned}
+z_4 &= x_3 + \\alpha u = [1, -1] + 1 \\times [1, 0] = [2, -1] \\\\[4pt]
+\\mu_4 &= (2 + (-1))/2 = 0.5 \\\\[4pt]
+\\sigma_4 &= \\sqrt{\\left((2-0.5)^2 + (-1-0.5)^2\\right)/2} = 1.5 \\\\[4pt]
+x_4 &= (z_4 - \\mu_4)/\\sigma_4 = [1.5, -1.5]/1.5 = [1, -1]
+\\end{aligned}
+$$
 
-  Layer 2
-  $$
-  \\bullet \\ z_2 = x_1 + \\alpha u = [1, -1] + 0.5 \\times [1, 0] = [1.5, -1]\\\\[4pt]
-  \\bullet \\ \\mu_2 = (1.5 + (-1))/2 = 0.25\\\\[4pt]
-  \\bullet \\ \\sigma_2 = \\sqrt{(1.5-0.25)^2 + (-1-0.25)^2)/2} = 1.25\\\\[4pt]
-  \\bullet \\ x_2 = (z_2 - \\mu_2)/\\sigma_2 = [1.25, -1.25]/1.25 = [1, -1]
-  $$
+Accumulate the per-layer factors:
 
-  Layer 3
-  $$
-  \\bullet \\ z_3 = x_2 + \\alpha u = [1, -1] + 0.5 \\times [1, 0] = [1.5, -1]\\\\[4pt]
-  \\bullet \\ \\mu_3 = (1.5 + (-1))/2 = 0.25\\\\[4pt]
-  \\bullet \\ \\sigma_3 = \\sqrt{(1.5-0.25)^2 + (-1-0.25)^2)/2} = 1.25\\\\[4pt]
-  \\bullet \\ x_3 = (z_3 - \\mu_3)/\\sigma_3 = [1.25, -1.25]/1.25 = [1, -1]
-  $$
+$$
+\\prod_{l=1}^4 \\frac{1}{\\sigma_l} = \\frac{1}{0.5} \\times \\frac{1}{1.5} \\times \\frac{1}{1.5} \\times \\frac{1}{1.5} \\approx 0.5926
+$$
 
-  Layer 4
-  $$
-  \\bullet \\ z_4 = x_3 + \\alpha u = [1, -1] + 0.5 \\times [1, 0] = [1.5, -1]\\\\[4pt]
-  \\bullet \\ \\mu_4 = (1.5 + (-1))/2 = 0.25\\\\[4pt]
-  \\bullet \\ \\sigma_4 = \\sqrt{(1.5-0.25)^2 + (-1-0.25)^2)/2} = 1.25\\\\[4pt]
-  \\bullet \\ x_4 = (z_4 - \\mu_4)/\\sigma_4 = [1.25, -1.25]/1.25 = [1, -1]
-  $$
+Gradients get shrunk by about 40% by the four LNs, and would keep shrinking with more layers.
 
-  Accumulate the per-layer factors:
-  $$
-  \\prod_{l=1}^4 \\frac{1}{\\sigma_l} = \\frac{1}{0.25} \\times \\frac{1}{1.25} \\times \\frac{1}{1.25} \\times \\frac{1}{1.25} \\approx 2.05
-  $$
+## Case 2: depth scaling, $\\alpha = 0.5$, $N = 4$
 
-  Chained LNs keep the gradient at a stable level without vanishing.
-  `,
+**Layer 1**
+
+$$
+\\begin{aligned}
+z_1 &= x_0 + \\alpha u = [0, 0] + 0.5 \\times [1, 0] = [0.5, 0] \\\\[4pt]
+\\mu_1 &= (0.5 + 0)/2 = 0.25 \\\\[4pt]
+\\sigma_1 &= \\sqrt{\\left((0.5-0.25)^2 + (0-0.25)^2\\right)/2} = 0.25 \\\\[4pt]
+x_1 &= (z_1 - \\mu_1)/\\sigma_1 = [0.25, -0.25]/0.25 = [1, -1]
+\\end{aligned}
+$$
+
+**Layer 2**
+
+$$
+\\begin{aligned}
+z_2 &= x_1 + \\alpha u = [1, -1] + 0.5 \\times [1, 0] = [1.5, -1] \\\\[4pt]
+\\mu_2 &= (1.5 + (-1))/2 = 0.25 \\\\[4pt]
+\\sigma_2 &= \\sqrt{\\left((1.5-0.25)^2 + (-1-0.25)^2\\right)/2} = 1.25 \\\\[4pt]
+x_2 &= (z_2 - \\mu_2)/\\sigma_2 = [1.25, -1.25]/1.25 = [1, -1]
+\\end{aligned}
+$$
+
+**Layer 3**
+
+$$
+\\begin{aligned}
+z_3 &= x_2 + \\alpha u = [1, -1] + 0.5 \\times [1, 0] = [1.5, -1] \\\\[4pt]
+\\mu_3 &= (1.5 + (-1))/2 = 0.25 \\\\[4pt]
+\\sigma_3 &= \\sqrt{\\left((1.5-0.25)^2 + (-1-0.25)^2\\right)/2} = 1.25 \\\\[4pt]
+x_3 &= (z_3 - \\mu_3)/\\sigma_3 = [1.25, -1.25]/1.25 = [1, -1]
+\\end{aligned}
+$$
+
+**Layer 4**
+
+$$
+\\begin{aligned}
+z_4 &= x_3 + \\alpha u = [1, -1] + 0.5 \\times [1, 0] = [1.5, -1] \\\\[4pt]
+\\mu_4 &= (1.5 + (-1))/2 = 0.25 \\\\[4pt]
+\\sigma_4 &= \\sqrt{\\left((1.5-0.25)^2 + (-1-0.25)^2\\right)/2} = 1.25 \\\\[4pt]
+x_4 &= (z_4 - \\mu_4)/\\sigma_4 = [1.25, -1.25]/1.25 = [1, -1]
+\\end{aligned}
+$$
+
+Accumulate the per-layer factors:
+
+$$
+\\prod_{l=1}^4 \\frac{1}{\\sigma_l} = \\frac{1}{0.25} \\times \\frac{1}{1.25} \\times \\frac{1}{1.25} \\times \\frac{1}{1.25} \\approx 2.05
+$$
+
+> With scaling, $\\sigma_l$ stays smaller (1.25 instead of 1.5), so the product of bounds is larger (2.05 vs 0.59). The per-layer factor $1/1.25 = 0.8$ is still below 1, though, so with more layers the product would still shrink, just more slowly; the 2.05 comes mostly from layer 1 ($1/0.25 = 4$).
+`,
   },
 
   ln_jacobian_closed_form_proof_notes: {
     title: "LayerNorm Jacobian closed form proof",
     md: `
+**Let's prove the closed form of the Jacobian of LayerNorm:**
 
-  Let's prove the closed form of Jacobian of LayerNorm as follows:
+$$
+J = \\frac{\\partial y}{\\partial z} = \\frac{1}{\\sigma} \\left(\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top\\right), \\quad \\text{with } y = \\frac{z - \\mu}{\\sigma}
+$$
 
-  $$
-  J = \\frac{\\partial y}{\\partial z} = \\frac{1}{\\sigma} (\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top), \\text{ with } y = \\frac{z - \\mu}{\\sigma}
-  $$
+## Setup
 
-  $\\textbf{Setup:}\\\\[4pt]$
-  For a vector $z \\in \\mathbb{R}^m:\\\\[4pt]$
-  $$
-  \\bullet \\ \\mu = \\frac{1}{m} \\mathbf{1}^\\top z \\text{ (feature mean)}\\\\[4pt]
-  \\bullet \\ var = \\frac{1}{m} \\sum_{i} (z_i - \\mu)^2 = \\frac{1}{m} z^\\top z - \\mu^2\\\\[4pt]
-  \\bullet \\ \\sigma = \\sqrt{var} \\text{ (feature standard deviation, ignore } \\epsilon \\text{ for simplicity)}\\\\[4pt]
-  \\bullet \\ y = LN(z) = \\frac{z - \\mu}{\\sigma}
-  $$
+For a vector $z \\in \\mathbb{R}^m$:
 
-  We want the Jacobian $J = \\frac{\\partial y}{\\partial z}$.
+- $\\mu = \\frac{1}{m} \\mathbf{1}^\\top z$ (feature mean)
+- $\\mathrm{var} = \\frac{1}{m} \\sum_{i} (z_i - \\mu)^2 = \\frac{1}{m} z^\\top z - \\mu^2$
+- $\\sigma = \\sqrt{\\mathrm{var}}$ (feature standard deviation; ignore $\\epsilon$ for simplicity)
+- $y = \\mathrm{LN}(z) = \\frac{z - \\mu}{\\sigma}$
 
-  &nbsp;
+We want the Jacobian $J = \\frac{\\partial y}{\\partial z}$.
 
-  $\\textbf{First, let's derive some useful derivatives:}\\\\[4pt]$
+## Some useful derivatives
 
-  $\\text{1. Mean:}$
-  $$
-  \\frac{\\partial \\mu}{\\partial z} = \\frac{1}{m} \\mathbf{1}
-  $$
+### 1. Mean
 
-  $\\text{2. Std:}$
-  $$
-  \\frac{\\partial var}{\\partial z} = \\frac{2}{m} z - 2\\mu\\frac{\\partial \\mu}{\\partial z} = \\frac{2}{m} (z - \\mu \\textbf{1}),\\\\[4pt]
-  \\frac{\\partial \\sigma}{\\partial z} = \\frac{\\partial \\sigma}{\\partial var} \\times \\frac{\\partial var}{\\partial z} = \\frac{1}{2\\sigma} \\times \\frac{2}{m} (z - \\mu \\textbf{1}) = \\frac{1}{m} \\times \\frac{z - \\mu \\textbf{1}}{\\sigma} = \\frac{1}{m} \\times y
-  $$
+$$
+\\frac{\\partial \\mu}{\\partial z} = \\frac{1}{m} \\mathbf{1}
+$$
 
-  $\\text{3. Numerator }z - \\mu \\textbf{1}$:
-  $$
-  \\frac{\\partial (z - \\mu \\textbf{1})}{\\partial z} = \\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top
-  $$
+### 2. Std
 
-  $\\textbf{Chain rule for } y = \\frac{z - \\mu \\textbf{1}}{\\sigma}:$
-  $$
-  \\frac{\\partial y}{\\partial z} = \\frac{1}{\\sigma} \\times \\frac{\\partial (z - \\mu \\textbf{1})}{\\partial z} + (z - \\mu \\textbf{1}) \\times \\frac{\\partial (1/\\sigma)}{\\partial z}\\\\[4pt]
-  $$
+$$
+\\begin{aligned}
+\\frac{\\partial\\, \\mathrm{var}}{\\partial z} &= \\frac{2}{m} z - 2\\mu\\frac{\\partial \\mu}{\\partial z} = \\frac{2}{m} (z - \\mu \\mathbf{1}) \\\\[4pt]
+\\frac{\\partial \\sigma}{\\partial z} &= \\frac{\\partial \\sigma}{\\partial\\, \\mathrm{var}} \\times \\frac{\\partial\\, \\mathrm{var}}{\\partial z} = \\frac{1}{2\\sigma} \\times \\frac{2}{m} (z - \\mu \\mathbf{1}) = \\frac{1}{m} \\times \\frac{z - \\mu \\mathbf{1}}{\\sigma} = \\frac{1}{m} \\times y
+\\end{aligned}
+$$
 
-  Since $\\frac{\\partial (1/\\sigma)}{\\partial z} = -\\frac{1}{\\sigma^2} \\times \\frac{\\partial \\sigma}{\\partial z}$, we have
-  $$
-  \\frac{\\partial y}{\\partial z} = \\frac{1}{\\sigma}(\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top) - \\frac{z - \\mu \\textbf{1}}{\\sigma^2}(\\frac{1}{m} y)^\\top
-  $$
+### 3. Numerator $z - \\mu \\mathbf{1}$
 
-  Now plug in $z = y\\sigma + \\mu \\textbf{1}$:
-  $$
-  \\frac{\\partial y}{\\partial z} = \\frac{1}{\\sigma}(\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top) - \\frac{(y\\sigma + \\mu \\textbf{1}) - \\mu \\textbf{1}}{\\sigma^2}(\\frac{1}{m} y)^\\top = \\frac{1}{\\sigma}(\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top) - \\frac{y}{\\sigma}(\\frac{1}{m} y)^\\top = \\frac{1}{\\sigma}(\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top)
-  $$
+$$
+\\frac{\\partial (z - \\mu \\mathbf{1})}{\\partial z} = \\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top
+$$
 
-  That's exactly the formula we wanted to prove.
-  `,
+## Chain rule for $y = \\frac{z - \\mu \\mathbf{1}}{\\sigma}$
+
+$$
+\\frac{\\partial y}{\\partial z} = \\frac{1}{\\sigma} \\times \\frac{\\partial (z - \\mu \\mathbf{1})}{\\partial z} + (z - \\mu \\mathbf{1}) \\times \\frac{\\partial (1/\\sigma)}{\\partial z}
+$$
+
+Since $\\frac{\\partial (1/\\sigma)}{\\partial z} = -\\frac{1}{\\sigma^2} \\times \\frac{\\partial \\sigma}{\\partial z}$, we have
+
+$$
+\\frac{\\partial y}{\\partial z} = \\frac{1}{\\sigma}\\left(\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top\\right) - \\frac{z - \\mu \\mathbf{1}}{\\sigma^2}\\left(\\frac{1}{m} y\\right)^\\top
+$$
+
+Now plug in $z = y\\sigma + \\mu \\mathbf{1}$:
+
+$$
+\\begin{aligned}
+\\frac{\\partial y}{\\partial z} &= \\frac{1}{\\sigma}\\left(\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top\\right) - \\frac{(y\\sigma + \\mu \\mathbf{1}) - \\mu \\mathbf{1}}{\\sigma^2}\\left(\\frac{1}{m} y\\right)^\\top \\\\[4pt]
+&= \\frac{1}{\\sigma}\\left(\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top\\right) - \\frac{y}{\\sigma}\\left(\\frac{1}{m} y\\right)^\\top \\\\[4pt]
+&= \\frac{1}{\\sigma}\\left(\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top\\right)
+\\end{aligned}
+$$
+
+> That's exactly the formula we wanted to prove.
+`,
   },
 
   ln_gradient_attenuation_upper_bound_proof_notes: {
     title: "Proof of gradient attenuation upper bound",
     md: `
-  Let's prove the upper bound of the gradient attenuation of LayerNorm.
+**Let's prove the upper bound of the gradient attenuation of LayerNorm.**
 
-  &nbsp;
+## The Jacobian
 
-  As approved $\\href{#info:ln_jacobian_closed_form_proof_notes}{here}$, LayerNorm's Jacobian at a vector $z \\in \\mathbb{R}^m$ can be written as:
+As proved [here](#info:ln_jacobian_closed_form_proof_notes), LayerNorm's Jacobian at a vector $z \\in \\mathbb{R}^m$ can be written as
 
-  $$
-  J = \\frac{1}{\\sigma} (\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top)\\\\[4pt]
-  \\text{ with } y = \\frac{z - \\mu}{\\sigma}, \\mu = \\frac{1}{m} \\mathbf{1}^\\top z \\text{ and } \\sigma = \\sqrt{\\frac{1}{m} \\sum_{i=1}^m (z_i - \\mu)^2}\\\\[4pt]
-  $$
+$$
+J = \\frac{1}{\\sigma} \\left(\\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top\\right)
+$$
 
-  $\\bullet \\ $ The $1/\\sigma$ in front scales the Jacobian.$\\\\[4pt]$
-  $\\bullet \\ $ The matrix in parentheses,
+with
+
+$$
+y = \\frac{z - \\mu}{\\sigma}, \\quad \\mu = \\frac{1}{m} \\mathbf{1}^\\top z, \\quad \\sigma = \\sqrt{\\frac{1}{m} \\sum_{i=1}^m (z_i - \\mu)^2}
+$$
+
+- The $1/\\sigma$ in front scales the Jacobian.
+- The matrix in parentheses,
+
   $$
   P = \\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top
   $$
-  $P$ is an $\\textbf{orthogonal projection}$ onto the subspace orthogonal to both the all-ones vector $\\mathbf{1}$ and the vector $y$.
-  Orthogonal projection matrix has the property that its 2-norm (a.k.a. the spectral/operator norm) $\\leq 1$, so $||P||_2 \\leq 1$ (See the related $\\href{#info:orthogonal_projection_notes}{math}$ here).
 
-  &nbsp;
+  is an **orthogonal projection** onto the subspace orthogonal to both the all-ones vector $\\mathbf{1}$ and the vector $y$.
 
-  Hence, the 2-norm of the Jacobian is bounded by:
-  $$
-  ||J||_2 = \\frac{1}{\\sigma} ||P||_2 \\leq \\frac{1}{\\sigma}
-  $$
+An orthogonal projection matrix has the property that its 2-norm (a.k.a. the spectral/operator norm) is $\\leq 1$, so $\\|P\\|_2 \\leq 1$. (See the related [math](#info:orthogonal_projection_notes) here.)
 
-  Here we use the one important property of the 2-norm of a matrix:
-  The 2-norm of a matrix represents the largest factor by which the matrix can stretch a vector's Euclidean length, over any direction. 
-  Thus, $||J||_2$ is the directly upper-bounds $\\textbf{per-layer gradient attenuation/amplification}$.
-  `
+## The bound
+
+Hence, the 2-norm of the Jacobian is bounded by
+
+$$
+\\|J\\|_2 = \\frac{1}{\\sigma} \\|P\\|_2 \\leq \\frac{1}{\\sigma}
+$$
+
+Here we use one important property of the 2-norm of a matrix: it is the largest factor by which the matrix can stretch a vector's Euclidean length, over any direction.
+
+> Thus, $\\|J\\|_2$ directly upper-bounds the **per-layer gradient attenuation/amplification**.
+`
   },
 
   orthogonal_projection_notes: {
     title: "Orthogonal projection",
     md: `
-  The matrix we are interested in is
-  $$
-  \\ \\ \\ P = \\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top \\\\[4pt]
-  \\bullet \\ \\mathbf{I} = \\text{identity matrix of size } m \\times m.\\\\[4pt]
-  \\bullet \\ \\mathbf{1} = \\text{all-ones vector of size } m.\\\\[4pt]
-  \\bullet \\ y = \\text{the LayerNorm output (zero mean, and } \\frac{1}{m} y^\\top y = 1).\\\\[4pt]
-  $$
+The matrix we are interested in is
 
-  $\\textbf{Theorem:}$
-  If $P$ is [symmetric](#hover:orthogonal_projection_symmetric_notes) $(P^\\top = P)$ and [idempotent](#hover:orthogonal_projection_idempotent_notes) $(P^2 = P)$, then $P$ is an orthogonal projector to its range $Range(P)$ [Proof](#hover:orthogonal_projection_proof_notes).
-  
-  &nbsp;
-  
-  $\\textbf{A. Prove } P \\textbf{ is a orthogonal projector to the subspace that is orthogonal to both } \\mathbf{1} \\textbf{ and } y \\textbf{:}$
-  
-  &nbsp;
+$$
+P = \\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top
+$$
 
-  Under the LayerNorm conditions, we have
-  $$
-  \\mathbf{1}^\\top y = 0,\\  y^\\top y = m
-  $$
+- $\\mathbf{I}$ is the identity matrix of size $m \\times m$.
+- $\\mathbf{1}$ is the all-ones vector of size $m$.
+- $y$ is the LayerNorm output (zero mean, and $\\frac{1}{m} y^\\top y = 1$).
 
-  Let
-  $$
-  A = \\frac{1}{m}\\mathbf{1}\\mathbf{1}^\\top,\\ B = \\frac{1}{m} yy^\\top
-  $$
-  
-  Define the subspace $S$ as the subspace that is orthogonal to both $\\mathbf{1}$ and $y$.
-  $$
-  S = \\{v \\in \\mathbb{R}^m: \\mathbf{1}^\\top v = 0, y^\\top v = 0\\}
-  $$
-  
-  &nbsp;
+> **Theorem:** If $P$ is [symmetric](#hover:orthogonal_projection_symmetric_notes) ($P^\\top = P$) and [idempotent](#hover:orthogonal_projection_idempotent_notes) ($P^2 = P$), then $P$ is an orthogonal projector onto its range $Range(P)$. [Proof](#hover:orthogonal_projection_proof_notes)
 
-  We'll prove the following facts:
+## A. $P$ is the orthogonal projector onto the subspace orthogonal to both $\\mathbf{1}$ and $y$
 
-  &nbsp;
+Under the LayerNorm conditions, we have
 
-  $\\textbf{1). } P \\textbf{ project any } z \\textbf{ into } S$
+$$
+\\mathbf{1}^\\top y = 0, \\quad y^\\top y = m
+$$
 
-  &nbsp;
+Let
 
-  Take any vector $z$ and set $w = Pz$. We'll show $w$ is orthogonal to both $\\mathbf{1}$ and $y$.
-  $$
-  \\bullet \\ \\text{Orthogonal to } \\mathbf{1}:\\\\[4pt]
-  \\mathbf{1}^\\top w = \\mathbf{1}^\\top (I - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top)z = \\mathbf{1}^\\top z - \\frac{1}{m} \\underbrace{\\mathbf{1}^\\top \\mathbf{1}}_{=m} \\mathbf{1}^\\top z - \\frac{1}{m} \\underbrace{\\mathbf{1}^\\top y}_{=0} y^\\top z = 0 \\\\[4pt]
-  \\bullet \\ \\text{Orthogonal to } y:\\\\[4pt]
-  y^\\top w = y^\\top z - \\frac{1}{m} \\underbrace{y^\\top \\mathbf{1}}_{=0} \\mathbf{1}^\\top z - \\frac{1}{m} \\underbrace{y^\\top y}_{=m} y^\\top z = 0
-  $$
+$$
+A = \\frac{1}{m}\\mathbf{1}\\mathbf{1}^\\top, \\quad B = \\frac{1}{m} yy^\\top
+$$
 
-  Then $w = Pz \\in S$. So $Range(P) \\subseteq S$.
+Define $S$ as the subspace that is orthogonal to both $\\mathbf{1}$ and $y$:
 
-  &nbsp;
+$$
+S = \\{v \\in \\mathbb{R}^m : \\mathbf{1}^\\top v = 0, \\ y^\\top v = 0\\}
+$$
 
-  $\\textbf{2). } Pz = z \\text{ for any } z \\in S$
-  
-  &nbsp;
+We'll prove the following facts.
 
-  Take any $z \\in S$, we have $1^\\top z = 0$ and $y^\\top z = 0$. So
-  
-  $$
-  Pz = (I - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top)z \\\\[4pt]
-  = z - \\frac{1}{m} \\mathbf{1}(\\mathbf{1}^\\top z) - \\frac{1}{m} y(y^\\top z) \\\\[4pt]
-  = z - \\frac{1}{m} \\mathbf{1} \\cdot 0 - \\frac{1}{m} y \\cdot 0 \\\\[4pt]
-  = z \\\\[4pt]
-  $$
-  
-  $\\textbf{3). } P \\textbf{ is the orthogonal projector onto } S$
-  
-  &nbsp;
+### 1. $P$ projects any $z$ into $S$
 
-  From $\\textbf{1)}$ and $\\textbf{2)}$ we have:
+Take any vector $z$ and set $w = Pz$. We'll show $w$ is orthogonal to both $\\mathbf{1}$ and $y$.
 
-  &nbsp;
+**Orthogonal to $\\mathbf{1}$:**
 
-  $\\bullet \\ $ We showed $Range(P) \\subseteq S$ $\\textbf{from 1)}$ and $Pz = z$ for any $z \\in S \\textbf{ from 2)}$. Hence $Range(P) = S$ and $P$ acts as identity on $S$.
+$$
+\\mathbf{1}^\\top w = \\mathbf{1}^\\top \\left(I - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top\\right)z = \\mathbf{1}^\\top z - \\frac{1}{m} \\underbrace{\\mathbf{1}^\\top \\mathbf{1}}_{=m} \\mathbf{1}^\\top z - \\frac{1}{m} \\underbrace{\\mathbf{1}^\\top y}_{=0} y^\\top z = 0
+$$
 
-  &nbsp;
+**Orthogonal to $y$:**
 
-  $\\bullet \\ $ We also showed $P$ is symmetric and idempotent at beginning of this note.
+$$
+y^\\top w = y^\\top z - \\frac{1}{m} \\underbrace{y^\\top \\mathbf{1}}_{=0} \\mathbf{1}^\\top z - \\frac{1}{m} \\underbrace{y^\\top y}_{=m} y^\\top z = 0
+$$
 
-  &nbsp;
+Then $w = Pz \\in S$. So $Range(P) \\subseteq S$.
 
-  **According to the theorem, $P$ is the orthogonal projector onto its range $Range(P)$**
-  **and $Range(P) = S$, so $P$ is the orthogonal projector onto $S$.**
+### 2. $Pz = z$ for any $z \\in S$
 
-  &nbsp;
+Take any $z \\in S$. Then $\\mathbf{1}^\\top z = 0$ and $y^\\top z = 0$, so
 
-  ---
+$$
+\\begin{aligned}
+Pz &= \\left(I - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top\\right)z \\\\
+&= z - \\frac{1}{m} \\mathbf{1}(\\mathbf{1}^\\top z) - \\frac{1}{m} y(y^\\top z) \\\\
+&= z - \\frac{1}{m} \\mathbf{1} \\cdot 0 - \\frac{1}{m} y \\cdot 0 \\\\
+&= z
+\\end{aligned}
+$$
 
-  &nbsp;
-  
-  $\\textbf{B. Prove that the 2-norm of any orthogonal projection matrix}$ $P \\neq 0$ $\\textbf{ is 1.}$
+### 3. $P$ is the orthogonal projector onto $S$
 
-  &nbsp;
+From 1 and 2:
 
-  We'll prove that for an orthogonal projection matrix $P$ (i.e., $P^\\top = P$ and $P^2 = P$), the 2-norm satisfies
-  $$
-  ||P||_2 \\leq 1
-  $$
-  and in fact $||P||_2 = 1$ unless $P = 0$.
+- We showed $Range(P) \\subseteq S$ (from 1) and $Pz = z$ for any $z \\in S$ (from 2). Hence $Range(P) = S$ and $P$ acts as the identity on $S$.
+- We also showed $P$ is symmetric and idempotent at the beginning of this note.
 
-  &nbsp;
+> According to the theorem, $P$ is the orthogonal projector onto its range $Range(P)$, and $Range(P) = S$, so **$P$ is the orthogonal projector onto $S$**.
 
-  Here are the quick proof.
+## B. The 2-norm of any orthogonal projection matrix $P \\neq 0$ is 1
 
-  &nbsp;
+We'll prove that for an orthogonal projection matrix $P$ (i.e., $P^\\top = P$ and $P^2 = P$), the 2-norm satisfies
 
-  $\\textbf{Geometric (Pythagoras) proof}\\\\[4pt]$
-  Any vector $x$ decomposes uniquely as $x = u + s$ with $u \\in range(P)$ and $s \\in ker(P)$.
-  
-  Since $Px = u$,
+$$
+\\|P\\|_2 \\leq 1
+$$
 
-  $$
-  ||Px||_2^2 = ||u||_2^2 \\leq ||u||_2^2 + ||s||_2^2 = ||x||_2^2 \\Rightarrow ||Px||_2 \\leq ||x||_2 \\Rightarrow \\frac{||Px||_2}{||x||_2} \\leq 1
-  $$
+and in fact $\\|P\\|_2 = 1$ unless $P = 0$.
 
-  The definition of 2-norm is $||P||_2 = \\max_{x \\neq 0} \\frac{||Px||_2}{||x||_2}$, so $||P||_2 \\leq 1$.
+Here is a quick proof.
 
-  &nbsp;
+### Geometric (Pythagoras) proof
 
-  Actually, if $P \\neq 0$, pick $x \\in range(P)$, then $Px = x$, so $||Px||_2 = ||x||_2$, and we have $||P||_2 = 1$.
-  `,
+Any vector $x$ decomposes uniquely as $x = u + s$ with $u \\in range(P)$ and $s \\in ker(P)$.
+
+Since $Px = u$,
+
+$$
+\\|Px\\|_2^2 = \\|u\\|_2^2 \\leq \\|u\\|_2^2 + \\|s\\|_2^2 = \\|x\\|_2^2 \\Rightarrow \\|Px\\|_2 \\leq \\|x\\|_2 \\Rightarrow \\frac{\\|Px\\|_2}{\\|x\\|_2} \\leq 1
+$$
+
+The definition of the 2-norm is $\\|P\\|_2 = \\max_{x \\neq 0} \\frac{\\|Px\\|_2}{\\|x\\|_2}$, so $\\|P\\|_2 \\leq 1$.
+
+> In fact, if $P \\neq 0$, pick a nonzero $x \\in range(P)$. Then $Px = x$, so $\\|Px\\|_2 = \\|x\\|_2$, and we have $\\|P\\|_2 = 1$.
+`,
   },
 
   orthogonal_projection_idempotent_notes: {
     title: "Idempotent projection (hover)",
     md: `
-Prove $P$ is idempotent $P^2 = P$.
+**Prove $P$ is idempotent: $P^2 = P$.**
+
 $$
-P = \\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top \\\\[4pt]
+P = \\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top
 $$
 
 under the LayerNorm conditions
+
 $$
-\\mathbf{1}^\\top y = 0,\\  y^\\top y = m
+\\mathbf{1}^\\top y = 0, \\quad y^\\top y = m
 $$
 
 Let
+
 $$
-A = \\frac{1}{m}\\mathbf{1}\\mathbf{1}^\\top,\\ B = \\frac{1}{m} yy^\\top
+A = \\frac{1}{m}\\mathbf{1}\\mathbf{1}^\\top, \\quad B = \\frac{1}{m} yy^\\top
 $$
 
-We'll prove the following facts:
+We'll prove the following facts.
 
-&nbsp;
+### 1. $A$ and $B$ are idempotent
 
-$\\textbf{1. A and B are idempotnet}$
 $$
 A^2 = \\frac{1}{m^2}\\mathbf{1}(\\mathbf{1}^\\top\\mathbf{1})\\mathbf{1}^\\top = \\frac{1}{m^2}\\mathbf{1}(m)\\mathbf{1}^\\top = \\frac{1}{m}\\mathbf{1}\\mathbf{1}^\\top = A
 $$
-Similaryly, using $y^\\top y = m$, we have
+
+Similarly, using $y^\\top y = m$, we have
+
 $$
 B^2 = \\frac{1}{m^2}y(y^\\top y)y^\\top = \\frac{1}{m^2}y(m)y^\\top = \\frac{1}{m}yy^\\top = B
 $$
 
-&nbsp;
+### 2. $A$ and $B$ are orthogonal
 
-$\\textbf{2. A and B are orthogonal}$
+Using $\\mathbf{1}^\\top y = 0$:
+
 $$
-\\text{Using } \\mathbf{1}^\\top y = 0,\\\\[4pt]
-AB = \\frac{1}{m^2}\\mathbf{1}(\\mathbf{1}^\\top y)y^\\top = \\frac{1}{m^2}\\mathbf{1}(0)y^\\top = 0\\\\[4pt]
+AB = \\frac{1}{m^2}\\mathbf{1}(\\mathbf{1}^\\top y)y^\\top = \\frac{1}{m^2}\\mathbf{1}(0)y^\\top = 0 \\\\[4pt]
 BA = \\frac{1}{m^2}y(y^\\top\\mathbf{1})\\mathbf{1}^\\top = \\frac{1}{m^2}y(0)\\mathbf{1}^\\top = 0
 $$
 
-&nbsp;
+### 3. Expand $P^2$ and simplify
 
-$\\textbf{3. Expand } P^2 \\textbf{ and simplify:}$
 $$
-P^2 = (I - A - B)^2 \\\\[4pt]
-= I - 2A - 2B + A^2 + B^2 + AB + BA \\\\[4pt]
-= I - 2A - 2B + A + B + 0 + 0 \\ \\ \\text{(By facts 1 and 2)} \\\\[4pt]
-= I - A - B \\\\[4pt]
-= P
+\\begin{aligned}
+P^2 &= (I - A - B)^2 \\\\
+&= I - 2A - 2B + A^2 + B^2 + AB + BA \\\\
+&= I - 2A - 2B + A + B + 0 + 0 \\quad \\text{(by facts 1 and 2)} \\\\
+&= I - A - B \\\\
+&= P
+\\end{aligned}
 $$
 
-Hence $P^2 = P$
-    `,
+> Hence $P^2 = P$.
+`,
   },
 
   orthogonal_projection_symmetric_notes: {
     title: "Symmetric projection (hover)",
     md: `
-Prove $P$ is symmetric $P^\\top = P$.
+**Prove $P$ is symmetric: $P^\\top = P$.**
+
 $$
-\\ \\ \\ P = \\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top \\\\[4pt]
+P = \\mathbf{I} - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top
 $$
 
-Take the transpose term-by-term, using $(A+B)^\\top = A^\\top + B^\\top$, $(AB)^\\top = B^\\top A^\\top$ and $(cA)^\\top = cA^\\top$ for scalar $c$.
+Take the transpose term by term, using $(A+B)^\\top = A^\\top + B^\\top$, $(AB)^\\top = B^\\top A^\\top$ and $(cA)^\\top = cA^\\top$ for a scalar $c$.
 
-&nbsp;
+1. $I^\\top = I$ (the identity is symmetric).
+2. $(\\mathbf{1}\\mathbf{1}^\\top)^\\top = (\\mathbf{1}^\\top)^\\top \\mathbf{1}^\\top = \\mathbf{1}\\mathbf{1}^\\top$.
+3. $(yy^\\top)^\\top = (y^\\top)^\\top y^\\top = yy^\\top$.
 
-$\\textbf{1.}$ $I^\\top = I$ (theidentity is symmetric).
-
-&nbsp;
-
-$\\textbf{2.}$ $(\\mathbf{1}\\mathbf{1}^\\top)^\\top = (\\mathbf{1}^\\top)^\\top \\mathbf{1}^\\top = \\mathbf{1}\\mathbf{1}^\\top$.
-
-&nbsp;
-
-$\\textbf{3.}$ $(yy^\\top)^\\top = (y^\\top)^\\top y^\\top = yy^\\top$.
-
-&nbsp;
-
-Therefore,.
+Therefore,
 
 $$
 P^\\top = I^\\top - \\frac{1}{m} (\\mathbf{1}\\mathbf{1}^\\top)^\\top - \\frac{1}{m} (yy^\\top)^\\top = I - \\frac{1}{m} \\mathbf{1}\\mathbf{1}^\\top - \\frac{1}{m} yy^\\top = P
 $$
-
-
-    `,
+`,
   },
   orthogonal_projection_proof_notes: {
     title: "Symmetric + idempotent ⇒ orthogonal projector",
     md: `
+**Let's prove the theorem that a symmetric idempotent matrix is the orthogonal projector onto its range.**
 
-  Let's approve the theorem that a symmetric idempotent matrix is the orthogonal projector onto its range.
+- **Idempotent** ($P^2 = P$) alone $\\Rightarrow$ $P$ is a projection (onto $range(P)$ along $ker(P)$), but not necessarily orthogonal.
+- **Idempotent + symmetric** ($P^\\top = P$) $\\Rightarrow$ $P$ is the orthogonal projector onto its column space $S = Range(P)$.
 
-  &nbsp;
+## Proof
 
-  $\\bullet \\ $ Idempotent ($P^2 = P$) alone $\\Rightarrow P$ is a projection (onto $range(P)$ along $ker(P)$), but not necessarily orthogonal.
+### 1. Idempotent $\\Rightarrow$ projection
 
-  $\\bullet \\ $ Idempotnet + symmetric ($P^\\top = P$) $\\Rightarrow P$ is the orthogonal projector onto its column space $S = Range(P)$.
-  
-  &nbsp;
+For any $x$:
 
-  $\\textbf{Proof:}\\\\[4pt]$
-  $\\textbf{1. Idempoent} \\Rightarrow projection.\\\\[4pt]$
+- $Px \\in range(P)$.
+- $x - Px \\in ker(P)$, because $P(x - Px) = Px - P^2x = Px - Px = 0$.
 
-  For any $x$,$\\\\[4pt]$
+So every $x$ decomposes uniquely as $x = Px + (x - Px)$, with the first part in $range(P)$ and the second in $ker(P)$. That's exactly a projection.
 
-  $\\bullet \\ $ $Px \\in range(P).\\\\[4pt]$
-  $\\bullet \\ $ $x - Px \\in ker(P)$ because $P(x - Px) = Px - P^2x = Px - Px = 0.\\\\[4pt]$
-  So every $x$ decomposes uniquely as $x = Px + (x - Px)$ with the first part in $range(P)$ and the second in $ker(P)$. That's exactly a projection.
+### 2. Add symmetry $\\Rightarrow$ orthogonal projector
 
-  &nbsp;
+Let $S = range(P)$.
 
-  $\\textbf{2. Add symmetry} \\Rightarrow \\textbf{orthogonal projector}.\\\\[4pt]$
+Choose any vector $z \\in ker(P)$, so $Pz = 0$.
 
-  &nbsp;
+Choose any vector $y = Pw \\in S$. Then
 
-  Let $S = range(P)$. $\\\\[4pt]$ 
-  Choose any vector $z \\in ker(P)$, so $Pz = 0$. $\\\\[4pt]$
-  Choose any vector $y = Pw \\in S$, then
-  $$
-  y^\\top z = w^\\top P^\\top z = w^\\top P z = 0
-  $$
+$$
+y^\\top z = w^\\top P^\\top z = w^\\top P z = 0
+$$
 
-  So vector $z$ and $y$ are orthogonal, and because $z$ is chosen arbitrarily from $ker(P)$, $y$ is chosen arbitrarily from $S$.
-  Therefore, $ker(P) \\perp S$, i.e., $P$ is the orthogonal projector onto $S$.
+So $z$ and $y$ are orthogonal. Because $z$ is chosen arbitrarily from $ker(P)$ and $y$ is chosen arbitrarily from $S$:
 
-    `,
+> $ker(P) \\perp S$, i.e., $P$ is the orthogonal projector onto $S$.
+`,
   },
 
   optim_adamw_notes: {
     title: "torch.optim.AdamW",
     md: `
-$\\textbf{What it is}\\\\[4pt]$
+## What it is
 
-AdamW is the dominant optimizer in the current LLM pretraining. An optimizer is the decision making algorithm in pre-training. At each step the optimizer answers the question: 
-"Given the current parameters and the gradient, how should I update the parameters to reduce loss?", so
+AdamW is the dominant optimizer in current LLM pretraining. An optimizer is the decision-making algorithm in pretraining. At each step the optimizer answers the question: "Given the current parameters and the gradient, how should I update the parameters to reduce loss?" So:
 
-$\\bullet \\ $ The *gradient* tells us the local slope of the loss with respect to each parameters.
+- The **gradient** tells us the local slope of the loss with respect to each parameter.
+- The **optimizer** gives us the algorithm that turns the gradient into an update.
 
-&nbsp;
+## History of optimizers: from SGD to AdamW
 
-$\\bullet \\ $ The *optimizer* gives us the algorithm that turns the gradient into an update.
+From my learning experience, I find it's difficult to understand AdamW without understanding the history of optimizers. So below is a language-model-focused optimizer timeline with the key ideas, like who used each optimizer and why it changed. Click the links under each optimizer to see the details.
 
-&nbsp;
+### 2010–2013: Sparse features era (word vectors, classic NLP)
 
----
+- **[SGD](#info:sgd_notes)**: simple and fast; the original optimizer.
+- **[SGD with momentum](#info:sgd_momentum_notes)**: adds velocity to smooth updates.
+- **[Adagrad](#info:adagrad_notes)**: popular for sparse, high-variance gradients; helped early embeddings and logistic/softmax models. It adjusts the learning rate for each parameter during training and keeps adjusting it over time.
+- **[RMSProp](#info:rmsprop_notes)**: fixes Adagrad's vanishing step size; widely used in early RNN LMs.
 
-&nbsp;
+### 2014–2017: RNNs → early seq2seq
 
-$\\textbf{History of optimizers - From SGD to AdamW}\\\\[4pt]$
+- **[Adam](#info:adam_notes)**: becomes the default in NLP (RNN LMs, seq2seq with attention). Why: it combines momentum with RMSProp-style variance normalization, so it needs much less LR fiddling than SGD.
 
-From my learning experience, I find it's difficult to understand AdamW without understanding the history of optimizers.
-So below is a language model focused optimizer timeline with the key ideas like who used that and why it changed.
-Click the links under each optimizer to see the details.
+### 2017–2019: Transformer takeoff
 
-&nbsp;
+- **Adam + warmup standardizes**: a small linear warmup, then decay (often inverse-sqrt or cosine).
+- Post-norm → pre-norm transitions; Adam's adaptivity plus warmup stabilize deep stacks.
+- Weight decay starts to matter. BERT popularizes weight decay with Adam; the community converges on decoupled weight decay (AdamW) soon after, for predictability and better generalization.
 
-$\\textbf{2010-2013: Sparse features era (word vectors, classic NLP)}\\\\[4pt]$
-$\\bullet \\ $ **$\\href{#info:sgd_notes}{\\text{SGD}}$** - simple and fast; the original optimizer.
+### 2019–2021: Scaling up (T5, GPT-2/3, mT5)
 
-$\\bullet \\ $ **$\\href{#info:sgd_momentum_notes}{\\text{SGD with momentum}}$** - adds velocity to smooth updates.
+- **[AdamW](#info:adamw_notes)** becomes the go-to for big LMs (bf16, warmup + cosine, grad clipping, no decay on norm/bias).
+- **Adafactor** (memory-efficient, Adam-like) gains traction for T5/mT5-style models when optimizer-state RAM is tight (factored second moments).
 
-$\\bullet \\ $ **$\\href{#info:adagrad_notes}{\\text{Adagrad}}$** - popular for sparse, high-variance gradients; helped early embeddings & logistic/softmax models. It adjusts the learning rate for each parameter during training
-and keeps adjusting it over time.
+### 2022–2023: Scaling up further
 
-$\\bullet \\ $ **$\\href{#info:rmsprop_notes}{\\text{RMSProp}}$** - fix Adagrad's vanishing step size; widely used in early RNN LMs.
+- Pretraining is still AdamW (or Adafactor where memory is the limiter).
+- Finetuning: experiments with Lion, Adan, AdaBelief, Sophia, etc. show promise on some setups, but none broadly displaces AdamW for foundation-model pretraining.
+- Systems stacks adopt fused AdamW kernels (Apex, DeepSpeed, xFormers) for throughput.
 
-&nbsp;
+### 2024–today
 
-$\\textbf{2014-2017: RNNs → early seq2seq}\\\\[4pt]$
-$\\bullet \\ $ **$\\href{#info:adam_notes}{\\text{Adam}}$** - becomes default in NLP (RNN LMs, seq2seq with attention).
-Why: combines momentum + RMSProp-style variance normalization, much less LR fiddling than SGD.
-
-&nbsp;
-
-$\\textbf{2017-2019: Transformer takeoff}\\\\[4pt]$
-$\\bullet \\ $ **Adam + warmup standardizes**: small linear warmup then decay (often inverse-sqrt or cosine).
-
-$\\bullet \\ $ Post-norm → Pre-norm transitions; Adam's adaptivity + warmup stabilize deep stacks.
-
-$\\bullet \\ $ Weight decay starts to matter. BERT popularizes weight decay with Adam; the community converges on decoupled weight decay (AdamW) soon after for predictability and better generalization.
-
-&nbsp;
-
-$\\textbf{2019-2021: Scaling up (T5, GPT-2/3, mT5)}\\\\[4pt]$
-
-$\\bullet \\ $ **$\\href{#info:adamw_notes}{\\text{AdamW}}$** becomes the go-to for big LMs (bf16, warmup+cosine, grad-clip, exclude decay on norm/bias).
-
-$\\bullet \\ $ Adafactor (memory-efficient Adam-like) gains traction for T5/mT5-style models when optimizer-state RAM is tight (factored second moments).
-
-&nbsp;
-
-$\\textbf{2022-2023: Scaling up further}\\\\[4pt]$
-$\\bullet \\ $ Pretraining still: AdamW (or Adafactor where memory is the limiter).
-
-$\\bullet \\ $ Finetuning: experiments with Lion, Adan, AdaBelief, Sophia, etc. show promise on some setups, but none broadly displace AdamW for foundation-model pretraining.
-
-$\\bullet \\ $ Systems stacks adopt fused AdamW kernels (Apex, DeepSpeed, xFormers) for throughput.
-
-&nbsp;
-
-$\\textbf{2024-today}\\\\[4pt]$
-
-$\\bullet \\ $ AdamW remains the mainstream default for LLM pretraining and most full-parameter finetunes.
-
-$\\bullet \\ $ Adafactor remains a practical alternative when optimizer memory must be minimized.
-
-$\\bullet \\ $ Research optimizers appear regularly, but production LMs stick to the stable duo above, paired with: pre-norm/RMSNorm, bf16, linear warmup (≈0.5–3% steps), cosine decay, global-norm clipping, and no-decay on norm/bias.
-
-&nbsp;
-
----
-
-&nbsp;
-
-
+- AdamW remains the mainstream default for LLM pretraining and most full-parameter finetunes.
+- Adafactor remains a practical alternative when optimizer memory must be minimized.
+- Research optimizers appear regularly, but production LMs stick to the stable duo above, paired with: pre-norm/RMSNorm, bf16, linear warmup (≈0.5–3% of steps), cosine decay, global-norm clipping, and no decay on norm/bias.
 `,
   },
 
   sgd_notes: {
     title: "SGD (Stochastic Gradient Descent)",
     md: `
-$\\textbf{What it is}\\\\[4pt]$
+**The classic and simplest optimizer: it updates parameters in the negative gradient direction with a fixed learning rate.**
 
-The classic and simplest optimizer that updates parameters in the negative gradient direction with a fixed learning rate.
+## What it is
 
-$\\bullet \\ $ The **gradient** tells you which way the loss increases fastest.
+- The **gradient** tells you which way the loss increases fastest.
+- To go **downhill**, move **against** the gradient.
 
-$\\bullet \\ $ To go **downhill**, move **against** the gradient.
+Say we have parameters $\\theta$ and a loss $L(\\theta)$ we want to minimize. The update rule is:
 
-&nbsp;
-
-Say we have parameters $\\theta$ and loss $L(\\theta)$ we want to minimize.
-
-Update rule:
 $$
-\\theta \\leftarrow \\theta - \\eta \\triangledown_{\\theta} L(\\theta)
+\\theta \\leftarrow \\theta - \\eta \\nabla_{\\theta} L(\\theta)
 $$
 
-$\\bullet \\ \\eta$ is the **learning rate** (step size). Too big => overshoot. Too small => slow.
-$\\bullet \\ $ $\\triangledown_{\\theta} L(\\theta)$ is the gradient of the loss with respect to the parameters $\\theta$.
+- $\\eta$ is the **learning rate** (step size). Too big → overshoot. Too small → slow.
+- $\\nabla_{\\theta} L(\\theta)$ is the gradient of the loss with respect to the parameters $\\theta$.
 
-Think of it as you are walking downhill in fog. The gradient is your local down slope. The learning rate is how big a step you take.
-If you take a big step, you might miss the bottown. If you take a small step, you might take a long time to get to the bottom.
+> Think of it as walking downhill in fog. The gradient is your local downward slope; the learning rate is how big a step you take. Take a big step and you might miss the bottom. Take a small step and it might take a long time to get to the bottom.
 
-&nbsp;
+## Tiny numeric example
 
----
+### Setup
 
-&nbsp;
+- Model: $\\hat{y} = wx + b$
+- Loss: $L = \\frac{1}{2} (\\hat{y} - y)^2$, where $y$ is the target value
+- Data point: $x = 2$, $y = 5$
+- Init: $w = 1.0$, $b = 0.0$
+- Learning rate: $\\eta = 0.1$
 
-$\\textbf{Tiny numeric example:}\\\\[4pt]$
+### Step 1
 
-&nbsp;
+**Forward pass:**
 
-$\\textbf{Setup:}\\\\[4pt]$
-$\\text{Model: } \\hat{y} = wx + b\\\\[4pt]$
-$\\text{Loss: } L = \\frac{1}{2} (\\hat{y} - y)^2 \\ \\ \\ \\ \\textit{(y is the target value)}\\\\[4pt]$
-$\\text{Data point: } x = 2, y = 5\\\\[4pt]$
-$\\text{Init: } w = 1.0, b = 0.0\\\\[4pt]$
-$\\text{Learning rate: } \\eta = 0.1\\\\[4pt]$
+- $\\hat{y} = wx + b = 1.0 \\cdot 2 + 0.0 = 2$
+- Error $e = \\hat{y} - y = 2 - 5 = -3$
+- Loss $L = \\frac{1}{2} e^2 = \\frac{1}{2} (-3)^2 = 4.5$
 
-&nbsp;
+**Backprop:**
 
-$\\textbf{Step 1:}\\\\[4pt]$
-$\\text{Forward pass: }\\\\[4pt]$
-$\\bullet \\ \\hat{y} = wx + b = 1.0 \\cdot 2 + 0.0 = 2\\\\[4pt]$
-$\\bullet \\ \\text{Error } e = \\hat{y} - y = 2 - 5 = -3\\\\[4pt]$
-$\\bullet \\ \\text{Loss } L = \\frac{1}{2} e^2 = \\frac{1}{2} (-3)^2 = 4.5\\\\[8pt]$
+- $\\nabla_{\\hat{y}} L = \\hat{y} - y = e = -3$
+- $\\nabla_w L = \\nabla_{\\hat{y}} L \\cdot \\nabla_w \\hat{y} = e \\cdot x = -3 \\cdot 2 = -6$
+- $\\nabla_b L = \\nabla_{\\hat{y}} L \\cdot \\nabla_b \\hat{y} = e = -3$
 
-$\\text{Backprop: }\\\\[4pt]$
-$\\bullet \\ \\triangledown_{\\hat{y}} L = \\hat{y} - y = e = -3 \\\\[4pt]$
-$\\bullet \\ \\triangledown_w L = \\triangledown_{\\hat{y}} L \\cdot \\triangledown_w \\hat{y} = e \\cdot x = -3 \\cdot 2 = -6\\\\[4pt]$
-$\\bullet \\ \\triangledown_b L = \\triangledown_{\\hat{y}} L \\cdot \\triangledown_b \\hat{y} = e = -3\\\\[8pt]$
+**Optimizer update:**
 
-$\\text{Optimizer update: }\\\\[4pt]$
-$\\bullet \\ w \\leftarrow w - \\eta \\triangledown_w L = 1.0 - 0.1 \\cdot (-6) = 1.6\\\\[4pt]$
-$\\bullet \\ b \\leftarrow b - \\eta \\triangledown_b L = 0.0 - 0.1 \\cdot (-3) = 0.3\\\\[8pt]$
+- $w \\leftarrow w - \\eta \\nabla_w L = 1.0 - 0.1 \\cdot (-6) = 1.6$
+- $b \\leftarrow b - \\eta \\nabla_b L = 0.0 - 0.1 \\cdot (-3) = 0.3$
 
-$\\textbf{Step 2:}\\\\[4pt]$
-$\\text{Forward pass: }\\\\[4pt]$
-$\\bullet \\ \\hat{y} = wx + b = 1.6 \\cdot 2 + 0.3 = 3.5\\\\[4pt]$
-$\\bullet \\ \\text{Error } e = \\hat{y} - y = 3.5 - 5 = -1.5\\\\[4pt]$
-$\\bullet \\ \\text{Loss } L = \\frac{1}{2} e^2 = \\frac{1}{2} (-1.5)^2 = 1.125\\\\[8pt]$
+### Step 2
 
-$\\text{Backprop: }\\\\[4pt]$
-$\\bullet \\ \\triangledown_{\\hat{y}} L = e = -1.5 \\\\[4pt]$
-$\\bullet \\ \\triangledown_w L = e \\cdot x = -1.5 \\cdot 2 = -3\\\\[4pt]$
-$\\bullet \\ \\triangledown_b L = e = -1.5\\\\[8pt]$
+**Forward pass:**
 
-$\\text{Optimizer update: }\\\\[4pt]$
-$\\bullet \\ w = 1.6 - 0.1(-3) = 1.9\\\\[4pt]$
-$\\bullet \\ b = 0.3 - 0.1(-1.5) = 0.45\\\\[8pt]$
+- $\\hat{y} = wx + b = 1.6 \\cdot 2 + 0.3 = 3.5$
+- Error $e = \\hat{y} - y = 3.5 - 5 = -1.5$
+- Loss $L = \\frac{1}{2} e^2 = \\frac{1}{2} (-1.5)^2 = 1.125$
 
-$\\textbf{Step 3:}\\\\[4pt]$
-$\\text{Forward pass: }\\\\[4pt]$
-$\\bullet \\ \\hat{y} = wx + b = 1.9 \\cdot 2 + 0.45 = 4.25\\\\[4pt]$
-$\\bullet \\ \\text{Error } e = \\hat{y} - y = 4.25 - 5 = -0.75\\\\[4pt]$
-$\\bullet \\ \\text{Loss } L = \\frac{1}{2} e^2 = \\frac{1}{2} (-0.75)^2 = 0.28125\\\\[8pt]$
+**Backprop:**
 
-$\\text{Backprop: }\\\\[4pt]$
-$\\bullet \\ \\triangledown_{\\hat{y}} L = e = -0.75 \\\\[4pt]$
-$\\bullet \\ \\triangledown_w L = e \\cdot x = -0.75 \\cdot 2 = -1.5\\\\[4pt]$
-$\\bullet \\ \\triangledown_b L = e = -0.75\\\\[8pt]$
+- $\\nabla_{\\hat{y}} L = e = -1.5$
+- $\\nabla_w L = e \\cdot x = -1.5 \\cdot 2 = -3$
+- $\\nabla_b L = e = -1.5$
 
-$\\text{Optimizer update: }\\\\[4pt]$
-$\\bullet \\ w = 1.9 - 0.1(-1.5) = 2.05\\\\[4pt]$
-$\\bullet \\ b = 0.45 - 0.1(-0.75) = 0.525\\\\[8pt]$
+**Optimizer update:**
 
-You can see the loss decreasing at each step (4.5 -> 1.125 -> 0.28125). That's the optimizer using backprop's gradients to move $w, b$ toward better values.
+- $w = 1.6 - 0.1 \\cdot (-3) = 1.9$
+- $b = 0.3 - 0.1 \\cdot (-1.5) = 0.45$
+
+### Step 3
+
+**Forward pass:**
+
+- $\\hat{y} = wx + b = 1.9 \\cdot 2 + 0.45 = 4.25$
+- Error $e = \\hat{y} - y = 4.25 - 5 = -0.75$
+- Loss $L = \\frac{1}{2} e^2 = \\frac{1}{2} (-0.75)^2 = 0.28125$
+
+**Backprop:**
+
+- $\\nabla_{\\hat{y}} L = e = -0.75$
+- $\\nabla_w L = e \\cdot x = -0.75 \\cdot 2 = -1.5$
+- $\\nabla_b L = e = -0.75$
+
+**Optimizer update:**
+
+- $w = 1.9 - 0.1 \\cdot (-1.5) = 2.05$
+- $b = 0.45 - 0.1 \\cdot (-0.75) = 0.525$
+
+> You can see the loss decreasing at each step (4.5 → 1.125 → 0.28125). That's the optimizer using backprop's gradients to move $w, b$ toward better values.
 `,
   },
 
   sgd_momentum_notes: {
     title: "SGD with momentum",
     md: `
-$\\textbf{What it is}\\\\[4pt]$
+**Instead of stepping only with the current gradient, we keep a velocity: an exponential moving average (EMA) of past gradients.**
 
-Instead of stepping only with the current gradient, we keep a velocity (an exponential moving average of past gradients).
+## What it is
+
 The velocity smooths noise and accelerates motion in directions that stay consistently downhill.
 
-&nbsp;
-
-We use the common EMA form of gradients as below,
+We use the common EMA form:
 
 $$
 v \\leftarrow \\beta v + (1 - \\beta) g \\\\[4pt]
 \\theta \\leftarrow \\theta - \\eta v
 $$
 
-$\\bullet \\ g = \\triangledown_{\\theta} L $ is the current gradient.
+- $g = \\nabla_{\\theta} L$ is the current gradient.
+- $\\beta$ (e.g., 0.9) controls how much "memory" to keep.
+- $\\eta$ is the learning rate.
 
-$\\bullet \\ \\beta $ (e.g., 0.9) controls how much "memory" to keep.
+## Tiny numeric example
 
-$\\bullet \\ \\eta $ is the learning rates.
+### Setup
 
-&nbsp;
+We use the same setup as the numeric example in the [SGD notes](#info:sgd_notes).
 
----
+- Model: $\\hat{y} = wx + b$
+- Loss: $L = \\frac{1}{2} (\\hat{y} - y)^2$, where $y$ is the target value
+- Data point: $x = 2$, $y = 5$
+- Init: $w = 1.0$, $b = 0.0$, $v_w = v_b = 0$
+- Hyperparameters: learning rate $\\eta = 0.1$, momentum $\\beta = 0.9$
 
-&nbsp;
+Remember, the gradients of the loss with respect to $w$ and $b$ are:
 
-$\\textbf{Tiny numeric example:}\\\\[4pt]$
-
-$\\textbf{Setup:}\\\\[4pt]$
-$\\text{We use the same setup as the numeric example in SGD notes.}\\\\[4pt]$
-$\\text{Model: } \\hat{y} = wx + b\\\\[4pt]$
-$\\text{Loss: } L = \\frac{1}{2} (\\hat{y} - y)^2 \\ \\ \\ \\ \\textit{(y is the target value)}\\\\[4pt]$
-$\\text{Data point: } x = 2, y = 5\\\\[4pt]$
-$\\text{Init: } w = 1.0, b = 0.0, v_w = v_b = 0\\\\[4pt]$
-$\\text{Hyperparams: Learning rate: } \\eta = 0.1 \\text{, momentum } \\beta = 0.9 \\\\[4pt]$
-
-$\\text{Remember gradients of loss w.r.t. w and b are } 
 $$
-\\triangledown_w L = (\\hat{y} - y) \\cdot x = e \\cdot x \\\\[4pt]
-\\triangledown_b L = \\hat{y} - y = e \\\\[4pt]
+\\nabla_w L = (\\hat{y} - y) \\cdot x = e \\cdot x \\\\[4pt]
+\\nabla_b L = \\hat{y} - y = e
 $$
 
-$\\textbf{Step 1:}\\\\[4pt]$
-$\\text{Forward pass: } \\hat{y} = wx + b = 1.0 \\cdot 2 + 0.0 = 2\\\\[4pt]$
-$\\text{Error: } e = \\hat{y} - y = 2 - 5 = -3\\\\[4pt]$
-$\\text{Loss: } L = \\frac{1}{2} e^2 = \\frac{1}{2} (-3)^2 = 4.5\\\\[8pt]$
-$\\text{Gradients: } \\triangledown_w L = e \\cdot x = -3 \\cdot 2 = -6, \\triangledown_b L = e = -3\\\\[4pt]$
+### Step 1
 
-$\\text{Velocity: }\\\\[4pt]$
-$$
-\\bullet \\ v_w = \\beta \\cdot v_w + (1 - \\beta) \\cdot \\triangledown_w L = 0.9 \\cdot 0 + (1 - 0.9) \\cdot (-6) = -0.6\\\\[4pt]
-\\bullet \\ v_b = \\beta \\cdot v_b + (1 - \\beta) \\cdot \\triangledown_b L = 0.9 \\cdot 0 + (1 - 0.9) \\cdot (-3) = -0.3\\\\[4pt]
-$$
+- Forward pass: $\\hat{y} = wx + b = 1.0 \\cdot 2 + 0.0 = 2$
+- Error: $e = \\hat{y} - y = 2 - 5 = -3$
+- Loss: $L = \\frac{1}{2} e^2 = \\frac{1}{2} (-3)^2 = 4.5$
+- Gradients: $\\nabla_w L = e \\cdot x = -3 \\cdot 2 = -6$, $\\nabla_b L = e = -3$
 
-$\\text{Optimizer update: }\\\\[4pt]$
+**Velocity:**
+
 $$
-\\bullet \\ w \\leftarrow w - \\eta \\cdot v_w = 1.0 - 0.1 \\cdot (-0.6) = 1.06\\\\[4pt]
-\\bullet \\ b \\leftarrow b - \\eta \\cdot v_b = 0.0 - 0.1 \\cdot (-0.3) = 0.03\\\\[4pt]
+v_w = \\beta \\cdot v_w + (1 - \\beta) \\cdot \\nabla_w L = 0.9 \\cdot 0 + (1 - 0.9) \\cdot (-6) = -0.6 \\\\[4pt]
+v_b = \\beta \\cdot v_b + (1 - \\beta) \\cdot \\nabla_b L = 0.9 \\cdot 0 + (1 - 0.9) \\cdot (-3) = -0.3
 $$
 
-&nbsp;
+**Optimizer update:**
 
-$\\textbf{Step 2:}\\\\[4pt]$
-$\\text{Forward pass: } \\hat{y} = wx + b = 1.06 \\cdot 2 + 0.03 = 2.15\\\\[4pt]$
-$\\text{Error: } e = \\hat{y} - y = 2.15 - 5 = -2.85\\\\[4pt]$
-$\\text{Loss: } L = \\frac{1}{2} e^2 = \\frac{1}{2} (-2.85)^2 = 4.0613\\\\[8pt]$
-$\\text{Gradients: } \\triangledown_w L = e \\cdot x = -2.85 \\cdot 2 = -5.7, \\triangledown_b L = e = -2.85\\\\[4pt]$
-
-$\\text{Velocity: }\\\\[4pt]$
 $$
-\\bullet \\ v_w = \\beta \\cdot v_w + (1 - \\beta) \\cdot \\triangledown_w L = 0.9 \\cdot (-0.6) + (1 - 0.9) \\cdot (-5.7) = -0.54 + (-0.57) = -1.11\\\\[4pt]
-\\bullet \\ v_b = \\beta \\cdot v_b + (1 - \\beta) \\cdot \\triangledown_b L = 0.9 \\cdot (-0.3) + (1 - 0.9) \\cdot (-2.85) = -0.27 + (-0.285) = -0.555\\\\[4pt]
+w \\leftarrow w - \\eta \\cdot v_w = 1.0 - 0.1 \\cdot (-0.6) = 1.06 \\\\[4pt]
+b \\leftarrow b - \\eta \\cdot v_b = 0.0 - 0.1 \\cdot (-0.3) = 0.03
 $$
 
-$\\text{Optimizer update: }\\\\[4pt]$
-$$
-\\bullet \\ w \\leftarrow w - \\eta \\cdot v_w = 1.06 - 0.1 \\cdot (-1.11) = 1.171\\\\[4pt]
-\\bullet \\ b \\leftarrow b - \\eta \\cdot v_b = 0.03 - 0.1 \\cdot (-0.555) = 0.0855\\\\[4pt]
-$$
+### Step 2
 
-&nbsp;
+- Forward pass: $\\hat{y} = wx + b = 1.06 \\cdot 2 + 0.03 = 2.15$
+- Error: $e = \\hat{y} - y = 2.15 - 5 = -2.85$
+- Loss: $L = \\frac{1}{2} e^2 = \\frac{1}{2} (-2.85)^2 = 4.0613$
+- Gradients: $\\nabla_w L = e \\cdot x = -2.85 \\cdot 2 = -5.7$, $\\nabla_b L = e = -2.85$
 
-$\\textbf{Step 3:}\\\\[4pt]$
-$\\text{Forward pass: } \\hat{y} = wx + b = 1.171 \\cdot 2 + 0.0855 = 2.4275\\\\[4pt]$
-$\\text{Error: } e = \\hat{y} - y = 2.4275 - 5 = -2.5725\\\\[4pt]$
-$\\text{Loss: } L = \\frac{1}{2} e^2 = \\frac{1}{2} (-2.5725)^2 = 3.3088\\\\[8pt]$
-$\\text{Gradients: } \\triangledown_w L = e \\cdot x = -2.5725 \\cdot 2 = -5.145, \\triangledown_b L = e = -2.5725\\\\[4pt]$
+**Velocity:**
 
-$\\text{Velocity: }\\\\[4pt]$
 $$
-\\bullet \\ v_w = \\beta \\cdot v_w + (1 - \\beta) \\cdot \\triangledown_w L = 0.9 \\cdot (-1.11) + (1 - 0.9) \\cdot (-5.145) = -0.999 + (-0.5145) = -1.5135\\\\[4pt]
-\\bullet \\ v_b = \\beta \\cdot v_b + (1 - \\beta) \\cdot \\triangledown_b L = 0.9 \\cdot (-0.555) + (1 - 0.9) \\cdot (-2.5725) = -0.4995 + (-0.25725) = -0.75675\\\\[4pt]
+v_w = \\beta \\cdot v_w + (1 - \\beta) \\cdot \\nabla_w L = 0.9 \\cdot (-0.6) + (1 - 0.9) \\cdot (-5.7) = -0.54 + (-0.57) = -1.11 \\\\[4pt]
+v_b = \\beta \\cdot v_b + (1 - \\beta) \\cdot \\nabla_b L = 0.9 \\cdot (-0.3) + (1 - 0.9) \\cdot (-2.85) = -0.27 + (-0.285) = -0.555
 $$
 
-$\\text{Optimizer update: }\\\\[4pt]$
+**Optimizer update:**
+
 $$
-\\bullet \\ w \\leftarrow w - \\eta \\cdot v_w = 1.171 - 0.1 \\cdot (-1.5135) = 1.32235\\\\[4pt]
-\\bullet \\ b \\leftarrow b - \\eta \\cdot v_b = 0.0855 - 0.1 \\cdot (-0.75675) = 0.161175\\\\[4pt]
+w \\leftarrow w - \\eta \\cdot v_w = 1.06 - 0.1 \\cdot (-1.11) = 1.171 \\\\[4pt]
+b \\leftarrow b - \\eta \\cdot v_b = 0.03 - 0.1 \\cdot (-0.555) = 0.0855
 $$
 
-You can see the loss decreasing at each step (4.5 -> 4.0613 -> 3.3088). That's the optimizer using backprop's gradients to move $w, b$ toward better values.
-Compare with SGD where the loss decreases more faster (4.5 -> 1.125 -> 0.28125) in the first 3 steps as shown in the example. The reaon is:
+### Step 3
 
-&nbsp;
+- Forward pass: $\\hat{y} = wx + b = 1.171 \\cdot 2 + 0.0855 = 2.4275$
+- Error: $e = \\hat{y} - y = 2.4275 - 5 = -2.5725$
+- Loss: $L = \\frac{1}{2} e^2 = \\frac{1}{2} (-2.5725)^2 = 3.3089$
+- Gradients: $\\nabla_w L = e \\cdot x = -2.5725 \\cdot 2 = -5.145$, $\\nabla_b L = e = -2.5725$
 
-$\\text{Why momentum lags at first:}\\\\[4pt]$
+**Velocity:**
 
-Velocity needs to build up. With $\\beta = 0.9$, the velocity starts at 0 and at early steps it only tracks the current gradient by a fraction.
-That makes the initial steps smaller than plain SGD. 
+$$
+\\begin{aligned}
+v_w &= \\beta \\cdot v_w + (1 - \\beta) \\cdot \\nabla_w L = 0.9 \\cdot (-1.11) + (1 - 0.9) \\cdot (-5.145) \\\\
+&= -0.999 + (-0.5145) = -1.5135 \\\\[4pt]
+v_b &= \\beta \\cdot v_b + (1 - \\beta) \\cdot \\nabla_b L = 0.9 \\cdot (-0.555) + (1 - 0.9) \\cdot (-2.5725) \\\\
+&= -0.4995 + (-0.25725) = -0.75675
+\\end{aligned}
+$$
 
-&nbsp;
+**Optimizer update:**
 
-For example, in our tiny numeric example, 
+$$
+w \\leftarrow w - \\eta \\cdot v_w = 1.171 - 0.1 \\cdot (-1.5135) = 1.32235 \\\\[4pt]
+b \\leftarrow b - \\eta \\cdot v_b = 0.0855 - 0.1 \\cdot (-0.75675) = 0.161175
+$$
 
-**Step 1** accumulates 90% of the past velocity ($0$ for now because $v_w = 0, v_b = 0$) and 10% of the current gradient, so step 1 is 0.1x the raw gradient.
+> You can see the loss decreasing at each step (4.5 → 4.0613 → 3.3089). That's the optimizer using backprop's gradients to move $w, b$ toward better values. Compare with SGD, where the loss decreases faster (4.5 → 1.125 → 0.28125) in the first 3 steps of the example. The reason is below.
 
-**Step 2** accumulates 90% of the past velocity (0.1x raw gradient from step 1) and 10% of the current gradient, so step 2 is roughly 0.19x the raw gradient (0.1 * 0.9 + 0.1 = 0.19).
+## Why momentum lags at first
 
-**Step 3** accumulates 90% of the past velocity (0.19x raw gradient from step 1/2) and 10% of the current gradient, so step 3 is roughly 0.271x the raw gradient (0.19 * 0.9 + 0.1 = 0.271).
+The velocity needs to build up. With $\\beta = 0.9$, the velocity starts at 0, and in early steps it only tracks the current gradient by a fraction. That makes the initial steps smaller than plain SGD.
 
+For example, in our tiny numeric example:
 
-&nbsp;
+- **Step 1** keeps 90% of the past velocity ($0$ for now, because $v_w = 0, v_b = 0$) and adds 10% of the current gradient, so step 1 is 0.1× the raw gradient.
+- **Step 2** keeps 90% of the past velocity (0.1× the raw gradient from step 1) and adds 10% of the current gradient, so step 2 is roughly 0.19× the raw gradient ($0.1 \\cdot 0.9 + 0.1 = 0.19$).
+- **Step 3** keeps 90% of the past velocity (0.19× the raw gradient from steps 1–2) and adds 10% of the current gradient, so step 3 is roughly 0.271× the raw gradient ($0.19 \\cdot 0.9 + 0.1 = 0.271$).
 
-$\\text{When/why momentum wins later:}\\\\[4pt]$
-Once gradients stay roughly aligned, the velocity accumulates, so steps become larger and smoother than SGD. With more steps, momentum catches up and passes SGD.
+## When and why momentum wins later
 
-&nbsp;
+Once gradients stay roughly aligned, the velocity accumulates, so steps become larger and smoother than SGD. That pays off on harder problems, such as noisy or ill-conditioned losses. On this one-example problem it does not: SGD already converges very fast, while momentum overshoots and oscillates. After 10 steps momentum's loss is about 0.44, versus about $4 \\times 10^{-6}$ for SGD.
 
-$\\text{If we want momentum to look better earlier, we can:}\\\\[4pt]$
+## Making momentum look better earlier
 
-$\\text{1.}$ Lower $\\beta$ (e.g., 0.8), so velocity builds up faster.
+If we want momentum to look better earlier, we can:
 
-$\\text{2.}$ Slightly raise $\\eta$ (e.g., 0.12) to make up for the smaller steps at early steps.
-
+1. Lower $\\beta$ (e.g., 0.8), so the velocity builds up faster.
+2. Slightly raise $\\eta$ (e.g., 0.12) to make up for the smaller steps early on.
 `,
   },
 
   adagrad_notes: {
     title: "Adagrad",
     md: `
-$\\textbf{What it is}\\\\[4pt]$
+**Adagrad (Adaptive gradient)** is an optimizer that gives each parameter its own learning rate and automatically adjusts it based on that parameter's past gradients.
 
-Adagrad (Adaptive gradient) is an optimizer that gives each parameter its own learning rate and automatically adjusts it based on that parameter's past gradients.
-Thus parameters with large/frequent past gradients get smaller future steps; parameters with small/rare gradiets get larger future steps.
+> Parameters with large/frequent past gradients get smaller future steps; parameters with small/rare gradients get larger future steps.
 
-&nbsp;
+## Update rule
 
-$\\textbf{Update rule:}\\\\[4pt]$
 Adagrad keeps a running **sum of squared gradients** for each parameter:
+
 $$
 s_i \\leftarrow s_i + g_i \\odot g_i
 $$
 
-Where $g_i$ is the gradient of the $i$-th parameter, and $s_i$ is the running sum of squared gradients for the $i$-th parameter.
-Then adagrad divides the learning rate by the square root of the sum of squared gradients plus a small constant $\\epsilon$ to get the learning rate for the $i$-th parameter:
+where $g_i$ is the gradient of the $i$-th parameter and $s_i$ is the running sum of squared gradients for the $i$-th parameter.
+
+Adagrad then divides the learning rate by the square root of the sum of squared gradients plus a small constant $\\epsilon$ to get the learning rate for the $i$-th parameter:
+
 $$
 \\theta_i \\leftarrow \\theta_i - \\frac{\\eta}{\\sqrt{s_i} + \\epsilon} \\cdot g_i
 $$
-This way, the parameters with large/frequent past gradients get smaller future steps; parameters with small/rare gradiets get larger future steps.
 
-&nbsp;
+This way, parameters with large/frequent past gradients get smaller future steps, and parameters with small/rare gradients get larger future steps.
 
-Because $s_i$ is a cumulative sum, it grows about linearly over time for stationary gradients ($s_i \\propto t$). Using $\\sqrt{s_i}$ in the denominator makes the effective learning rate decay like:
+## Why the square root?
+
+Because $s_i$ is a cumulative sum, it grows about linearly over time for stationary gradients ($s_i \\propto t$). Using $\\sqrt{s_i}$ in the denominator makes the effective learning rate decay like
+
 $$
-\\eta_{\\text{effective, }i} = \\frac{\\eta}{\\sqrt{s_i}} \\approx \\frac{\\eta}{\\sqrt{t}}.
-$$
-The $\\frac{1}{\\sqrt{t}}$ decay is gentle: it shrinks steps over time stabily but not too fast that learning dies early. If we devided by $s_i$, we'd get $\\frac{1}{t}$ decay,
-which becomes tiny too quickly and can stall progress.
-
-&nbsp;
-
-This is also tied to classic online convex optimization results where $\\frac{1}{\\sqrt{t}}$ yields good regret/convergence bounds.
-
-&nbsp;
-
-$\\textbf{Tiny numeric example:}\\\\[4pt]$
-$\\textbf{Setup:}\\\\[4pt]$
-$$
-\\bullet \\ \\text{Parameters: } \\theta = (\\theta_1, \\theta_2)\\\\[4pt]
-\\bullet \\ \\text{Loss: } L = \\frac{1}{2} [(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2]  \\\\[4pt]
-\\bullet \\ \\text{Gradients: } g = (g_1, g_2) = (\\theta_1 - 3, \\theta_2 + 2) \\\\[4pt]
-\\bullet \\ \\text{Adagrad accumulator: } s \\leftarrow s + g \\odot g, \\text{Start } s_0 = (0, 0)\\\\[4pt]
-\\bullet \\ \\text{Updates rule: } \\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{s} + \\epsilon} g \\\\[4pt]
-\\bullet \\ \\text{Hyperparams: } \\eta = 1.0, \\epsilon = 1e-8 \\text{ tiny so numerically negligible} \\\\[4pt]
-\\bullet \\ \\text{Init: } \\theta_0 = (0, 0)\\\\[4pt]
+\\eta_{\\text{effective},\\,i} = \\frac{\\eta}{\\sqrt{s_i}} \\approx \\frac{\\eta}{\\sqrt{t}}.
 $$
 
-Below we define $\\eta_{\\text{eff}} = \\frac{\\eta}{\\sqrt{s_{t}} + \\epsilon}$ as the effective learning rate at time $t$.
+The $\\frac{1}{\\sqrt{t}}$ decay is gentle: it shrinks steps over time steadily, but not so fast that learning dies early. If we divided by $s_i$, we'd get $\\frac{1}{t}$ decay, which becomes tiny too quickly and can stall progress.
 
-&nbsp;
+> This is also tied to classic online convex optimization results, where $\\frac{1}{\\sqrt{t}}$ yields good regret/convergence bounds.
 
-$\\textbf{Step 1:}\\\\[4pt]$
-$$
-\\bullet \\ \\theta_0 = (0, 0)\\\\[4pt]
-\\bullet \\ g_1 = (-3, 2)\\\\[4pt]
-\\bullet \\ s_1 = (0, 0) + (-3, 2) \\odot (-3, 2) = (9, 4)\\\\[4pt]
-\\bullet \\ \\sqrt{s_1} = (3, 2) \\Rightarrow \\eta_{\\text{eff}} = (1/3, 1/2) \\\\[4pt]
-\\bullet \\ \\text{Update } \\triangledown = \\eta_{\\text{eff}} \\cdot g_1 = (1/3, 1/2) \\cdot (-3, 2) = (-1, 1)\\\\[4pt]
-\\bullet \\ \\theta_1 = \\theta_0 - \\triangledown = (0, 0) - (-1, 1) = (1, -1)\\\\[4pt]
-$$
+## Tiny numeric example
 
-Coord1 and coord2 have different effective learning rates now : 1/3 vs 1/2.
+### Setup
 
-&nbsp;
+- **Parameters:** $\\theta = (\\theta_1, \\theta_2)$
+- **Loss:** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$
+- **Gradients:** $g = (g_1, g_2) = (\\theta_1 - 3,\\; \\theta_2 + 2)$
+- **Adagrad accumulator:** $s \\leftarrow s + g \\odot g$, starting from $s_0 = (0, 0)$
+- **Update rule:** $\\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{s} + \\epsilon}\\, g$
+- **Hyperparameters:** $\\eta = 1.0$, $\\epsilon = 10^{-8}$ (tiny, so numerically negligible)
+- **Init:** $\\theta_0 = (0, 0)$
 
-$\\textbf{Step 2:}\\\\[4pt]$
-$$
-\\bullet \\ \\theta_1 = (1, -1)\\\\[4pt]
-\\bullet \\ g_2 = (1 - 3, -1 + 2) = (-2, 1)\\\\[4pt]
-\\bullet \\ s_2 = (9, 4) + (-2, 1) \\odot (-2, 1) = (13, 5)\\\\[4pt]
-\\bullet \\ \\sqrt{s_2} = (3.606, 2.236) \\Rightarrow \\eta_{\\text{eff}} = (0.277, 0.447) \\\\[4pt]
-\\bullet \\ \\text{Update } \\triangledown = \\eta_{\\text{eff}} \\cdot g_2 \\approx (0.277, 0.447) \\cdot (-2, 1) = (-0.554, 0.447)\\\\[4pt]
-\\bullet \\ \\theta_2 = \\theta_1 - \\triangledown = (1, -1) - (-0.554, 0.447) = (1.554, -1.447)\\\\[4pt]
-$$
+Below we define $\\eta_{\\text{eff}} = \\frac{\\eta}{\\sqrt{s_t} + \\epsilon}$ as the effective learning rate at time $t$.
 
-Coord1's step shrank from 1/3 to 0.277, coord2's step shrank from 1/2 to 0.447.
+### Step 1
 
-&nbsp;
+- $\\theta_0 = (0, 0)$
+- $g_1 = (-3, 2)$
+- $s_1 = (0, 0) + (-3, 2) \\odot (-3, 2) = (9, 4)$
+- $\\sqrt{s_1} = (3, 2) \\Rightarrow \\eta_{\\text{eff}} = (1/3,\\; 1/2)$
+- Update $\\triangledown = \\eta_{\\text{eff}} \\cdot g_1 = (1/3, 1/2) \\cdot (-3, 2) = (-1, 1)$
+- $\\theta_1 = \\theta_0 - \\triangledown = (0, 0) - (-1, 1) = (1, -1)$
 
-$\\textbf{Step 3:}\\\\[4pt]$
-$$
-\\bullet \\ \\theta_2 = (1.554, -1.447)\\\\[4pt]
-\\bullet \\ g_3 = (1.554 - 3, -1.447 + 2) = (-1.446, 0.553)\\\\[4pt]
-\\bullet \\ s_3 = (13, 5) + (-1.446, 0.553) \\odot (-1.446, 0.553) = (15.091, 5.306)\\\\[4pt]
-\\bullet \\ \\sqrt{s_3} = (3.885, 2.306) \\Rightarrow \\eta_{\\text{eff}} = (0.257, 0.434) \\\\[4pt]
-\\bullet \\ \\text{Update } \\triangledown = \\eta_{\\text{eff}} \\cdot g_3 \\approx (0.257, 0.434) \\cdot (-1.446, 0.553) = (-0.372, 0.24)\\\\[4pt]
-\\bullet \\ \\theta_3 = \\theta_2 - \\triangledown = (1.554, -1.447) - (-0.372, 0.24) = (1.926, -1.687)\\\\[4pt]
-$$
+Coordinate 1 and coordinate 2 now have different effective learning rates: $1/3$ vs $1/2$.
 
-Coord1's step shrank from 0.277 to 0.257, coord2's step shrank from 0.447 to 0.434.
+### Step 2
 
-&nbsp;
+- $\\theta_1 = (1, -1)$
+- $g_2 = (1 - 3,\\; -1 + 2) = (-2, 1)$
+- $s_2 = (9, 4) + (-2, 1) \\odot (-2, 1) = (13, 5)$
+- $\\sqrt{s_2} = (3.606, 2.236) \\Rightarrow \\eta_{\\text{eff}} = (0.277, 0.447)$
+- Update $\\triangledown = \\eta_{\\text{eff}} \\cdot g_2 \\approx (0.277, 0.447) \\cdot (-2, 1) = (-0.554, 0.447)$
+- $\\theta_2 = \\theta_1 - \\triangledown = (1, -1) - (-0.554, 0.447) = (1.554, -1.447)$
 
-This example shows each coordinate $i$ gets its own learning rage $\\eta_{\\text{eff, }i}$ which depends on the past gradients of the $i$-th coordinate.
-These learning rates shrink over time as $s_i$ accumulates past squared gradients.
+Coordinate 1's step shrank from $1/3$ to $0.277$; coordinate 2's step shrank from $1/2$ to $0.447$.
 
-&nbsp;
+### Step 3
 
-Coordinates with larger/frequent gradients (here $\\theta_1$) get faster shrinkage so they get smaller steps, 
-while coordinates with small/rare gradients (here $\\theta_2$) get slower shrinkage so they get larger steps.
+- $\\theta_2 = (1.554, -1.447)$
+- $g_3 = (1.554 - 3,\\; -1.447 + 2) = (-1.446, 0.553)$
+- $s_3 = (13, 5) + (-1.446, 0.553) \\odot (-1.446, 0.553) = (15.091, 5.306)$
+- $\\sqrt{s_3} = (3.885, 2.306) \\Rightarrow \\eta_{\\text{eff}} = (0.257, 0.434)$
+- Update $\\triangledown = \\eta_{\\text{eff}} \\cdot g_3 \\approx (0.257, 0.434) \\cdot (-1.446, 0.553) = (-0.372, 0.24)$
+- $\\theta_3 = \\theta_2 - \\triangledown = (1.554, -1.447) - (-0.372, 0.24) = (1.926, -1.687)$
 
+Coordinate 1's step shrank from $0.277$ to $0.257$; coordinate 2's step shrank from $0.447$ to $0.434$.
+
+## Takeaways
+
+This example shows that each coordinate $i$ gets its own learning rate $\\eta_{\\text{eff},\\,i}$, which depends on the past gradients of the $i$-th coordinate. These learning rates shrink over time as $s_i$ accumulates past squared gradients.
+
+> Coordinates with larger/frequent gradients (here $\\theta_1$) get faster shrinkage, so they get smaller steps, while coordinates with small/rare gradients (here $\\theta_2$) get slower shrinkage, so they get larger steps.
 `,
   },
 
   rmsprop_notes: {
     title: "RMSProp",
     md: `
-$\\textbf{What it does:}\\\\[4pt]$
+**RMSProp** keeps an exponential moving average (EMA) of each parameter's squared gradient and scales the step by the RMS (square root) of that average.
 
-RMSProp keeps an exponential moving average (EMA) of each parameter's squared gradient and scales the step by the RMS (square root) of that average:
+## What it does
 
 $$
-s_t = \\beta s_{t-1} + (1 - \\beta) (g_t \\odot g_t) \\\\[4pt]
-\\theta_{t+1} = \\theta_t - \\frac{\\eta}{\\sqrt{s_t} + \\epsilon} g_t
+\\begin{aligned}
+s_t &= \\beta s_{t-1} + (1 - \\beta) (g_t \\odot g_t) \\\\
+\\theta_{t+1} &= \\theta_t - \\frac{\\eta}{\\sqrt{s_t} + \\epsilon}\\, g_t
+\\end{aligned}
 $$
 
-Where $\\beta$ is the decay rate (e.g., 0.9), $s_t$ is the EMA of the squared gradient, $g_t$ is the gradient at time $t$, $\\theta_t$ is the parameter at time $t$, and $\\eta$ is the learning rate.
-$\\epsilon$ is a small constant to avoid division by zero.
+- $\\beta$ is the decay rate (e.g., 0.9).
+- $s_t$ is the EMA of the squared gradient.
+- $g_t$ is the gradient at time $t$, and $\\theta_t$ is the parameter at time $t$.
+- $\\eta$ is the learning rate.
+- $\\epsilon$ is a small constant to avoid division by zero.
 
-&nbsp;
+## What RMSProp fixes (vs. Adagrad)
 
----
+Adagrad sums squared gradients forever, so per-parameter step sizes shrink monotonically ($\\sim 1/\\sqrt{t}$) and can get too small in long runs.
 
-&nbsp;
+RMSProp replaces the forever-growing sum with an EMA. This prevents the learning rate from decreasing too quickly, making the algorithm more effective in training deep neural networks.
 
-$\\textbf{What RMSProp fixes (vs. Adagrad):}\\\\[4pt]$
+### An analogy with momentum
 
-Adagrad sums squared gradients forever, so per-parameter step sizes shrink monotonically ($~1/\\sqrt{t}$) and can get too small in long runs.
+We can think of RMSProp vs. Adagrad the way we think of SGD+momentum vs. SGD:
 
-RMSProp replaces the forever growing sum with an EMA, this prevents the learning rate from decreasing too quickly, making the algorithm more effective in trainig deep neural networks.
-
-&nbsp;
-
-We can think of RMSProd to Adagrad as SGD+momentum to SGD in the following way:
-
-$\\bullet \\ $ Adagrap -> RMSProp: add an EMA (memory) to the squared gradient statistic instead of the forever growing sum.
-
-$\\bullet \\ $ SGD -> SGD+momentum: add an EMA (memory) of the gradient itself. 
-
-&nbsp;
+- **Adagrad → RMSProp:** use an EMA (memory) of the squared gradient statistic instead of the forever-growing sum.
+- **SGD → SGD+momentum:** add an EMA (memory) of the gradient itself.
 
 But there are still some key differences:
 
-$\\bullet \\ $ $\\textbf{What gets the EMA: }$ RMSProp = squared gradients. SGD+momentum = gradients.
+- **What gets the EMA:** RMSProp = squared gradients. SGD+momentum = gradients.
+- **Per-parameter LR:** RMSProp (like Adagrad) keeps per-parameter adaptive step sizes; SGD+momentum (like SGD) uses one global LR (no per-parameter).
+- **Failure mode fixed:** Adagrad's LR decays to near zero on long runs; RMSProp avoids that. SGD is noisy/zig-zaggy; SGD+momentum smooths and accelerates it.
 
-$\\bullet \\ $ $\\textbf{Per-parameter LR: }$ RMSProp (like Adagrad) keeps per-parameter adaptive step sizes; SGD+momentum (like SGD) uses one global LR (no per-parameter).
+## Tiny numeric example
 
-$\\bullet \\ $ $\\textbf{Failure mode fixed: }$ Adagrad's LR decays to near-zero on long runs; RMSProd avoids that. SGD is noisy/zig-zaggy; SGD+momentum smooths and accelerates it.
+### Setup
 
-&nbsp;
+- **Parameters:** $\\theta = (\\theta_1, \\theta_2)$
+- **Loss:** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$
+- **Gradients:** $g = (g_1, g_2) = (\\theta_1 - 3,\\; \\theta_2 + 2)$
+- **RMSProp accumulator:** $s \\leftarrow \\beta s + (1 - \\beta) (g \\odot g)$, starting from $s_0 = (0, 0)$
+- **Update rule:** $\\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{s} + \\epsilon}\\, g$
+- **Hyperparameters:** $\\eta = 0.1$, $\\beta = 0.9$, $\\epsilon = 10^{-8}$ (tiny, so numerically negligible)
+- **Init:** $\\theta_0 = (0, 0)$
 
----
+### Step 1
 
-&nbsp;
+- $\\theta_0 = (0, 0)$
+- $g_1 = (-3, 2)$
+- $s_1 = 0.9 \\cdot (0, 0) + (1 - 0.9) \\cdot \\big((-3, 2) \\odot (-3, 2)\\big) = (0.9, 0.4)$
+- $\\sqrt{s_1} = (0.9487, 0.6325) \\Rightarrow \\eta_{\\text{eff}} = (0.1054, 0.1581)$
+- Update $\\triangledown = \\eta_{\\text{eff}} \\cdot g_1 = (0.1054, 0.1581) \\cdot (-3, 2) = (-0.3162, 0.3162)$
+- $\\theta_1 = \\theta_0 - \\triangledown = (0, 0) - (-0.3162, 0.3162) = (0.3162, -0.3162)$
 
-$\\textbf{Tiny numeric example:}\\\\[4pt]$
-$\\textbf{Setup:}\\\\[4pt]$
-$$
-\\bullet \\ \\text{Parameters: } \\theta = (\\theta_1, \\theta_2)\\\\[4pt]
-\\bullet \\ \\text{Loss: } L = \\frac{1}{2} [(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2]  \\\\[4pt]
-\\bullet \\ \\text{Gradients: } g = (g_1, g_2) = (\\theta_1 - 3, \\theta_2 + 2) \\\\[4pt]
-\\bullet \\ \\text{RMSProp accumulator: } s \\leftarrow \\beta s + (1 - \\beta) (g \\odot g), \\text{Start } s_0 = (0, 0)\\\\[4pt]
-\\bullet \\ \\text{Updates rule: } \\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{s} + \\epsilon} g \\\\[4pt]
-\\bullet \\ \\text{Hyperparams: } \\eta = 0.1, \\beta = 0.9, \\epsilon = 1e-8 \\text{ tiny so numerically negligible} \\\\[4pt]
-\\bullet \\ \\text{Init: } \\theta_0 = (0, 0)\\\\[4pt]
-$$
+### Step 2
 
-$\\textbf{Step 1:}\\\\[4pt]$
-$$
-\\bullet \\ \\theta_0 = (0, 0)\\\\[4pt]
-\\bullet \\ g_1 = (-3, 2)\\\\[4pt]
-\\bullet \\ s_1 = 0.9 \\cdot (0, 0) + (1 - 0.9) \\cdot ((-3, 2) \\odot (-3, 2)) = (0.9, 0.4)\\\\[4pt]
-\\bullet \\ \\sqrt{s_1} = (0.9487, 0.6325) \\Rightarrow \\eta_{\\text{eff}} = (0.1054, 0.1581) \\\\[4pt]
-\\bullet \\ \\text{Update } \\triangledown = \\eta_{\\text{eff}} \\cdot g_1 = (0.1054, 0.1581) \\cdot (-3, 2) = (-0.3162, 0.3162)\\\\[4pt]
-\\bullet \\ \\theta_1 = \\theta_0 - \\triangledown = (0, 0) - (-0.3162, 0.3162) = (0.3162, -0.3162)\\\\[4pt]
-$$
+- $\\theta_1 = (0.3162, -0.3162)$
+- $g_2 = (0.3162 - 3,\\; -0.3162 + 2) = (-2.6838, 1.6838)$
+- $s_2 = 0.9 \\cdot (0.9, 0.4) + (1 - 0.9) \\cdot \\big((-2.6838, 1.6838) \\odot (-2.6838, 1.6838)\\big) = (1.5303, 0.6435)$
+- $\\sqrt{s_2} = (1.2370, 0.8022) \\Rightarrow \\eta_{\\text{eff}} = (0.0808, 0.1247)$
+- Update $\\triangledown = \\eta_{\\text{eff}} \\cdot g_2 = (0.0808, 0.1247) \\cdot (-2.6838, 1.6838) = (-0.2170, 0.2099)$
+- $\\theta_2 = \\theta_1 - \\triangledown = (0.3162, -0.3162) - (-0.2170, 0.2099) = (0.5332, -0.5261)$
 
-&nbsp;
+### Step 3
 
-$\\textbf{Step 2:}\\\\[4pt]$
-$$
-\\bullet \\ \\theta_1 = (0.3162, -0.3162)\\\\[4pt]
-\\bullet \\ g_2 = (0.3162 - 3, -0.3162 + 2) = (-2.6838, 1.6838)\\\\[4pt]
-\\bullet \\ s_2 = 0.9 \\cdot (0.9, 0.4) + (1 - 0.9) \\cdot ((-2.6838, 1.6838) \\odot (-2.6838, 1.6838)) = (1.5307, 0.6435)\\\\[4pt]
-\\bullet \\ \\sqrt{s_2} = (1.2373, 0.8022) \\Rightarrow \\eta_{\\text{eff}} = (0.0808, 0.1246) \\\\[4pt]
-\\bullet \\ \\text{Update } \\triangledown = \\eta_{\\text{eff}} \\cdot g_2 = (0.0808, 0.1246) \\cdot (-2.6838, 1.6838) = (-0.2170, 0.2099)\\\\[4pt]
-\\bullet \\ \\theta_2 = \\theta_1 - \\triangledown = (0.3162, -0.3162) - (-0.2170, 0.2099) = (0.5332, -0.5261)\\\\[4pt]
-$$
-
-&nbsp;
-
-$\\textbf{Step 3:}\\\\[4pt]$
-$$
-\\bullet \\ \\theta_2 = (0.5332, -0.5261)\\\\[4pt]
-\\bullet \\ g_3 = (0.5332 - 3, -0.5261 + 2) = (-2.4668, 1.4738)\\\\[4pt]
-\\bullet \\ s_3 = 0.9 \\cdot (1.5307, 0.6435) + (1 - 0.9) \\cdot ((-2.4668, 1.4738) \\odot (-2.4668, 1.4738)) = (1.9862, 0.7964)\\\\[4pt]
-\\bullet \\ \\sqrt{s_3} = (1.4093, 0.8924) \\Rightarrow \\eta_{\\text{eff}} = (0.0710, 0.1121) \\\\[4pt]
-\\bullet \\ \\text{Update } \\triangledown = \\eta_{\\text{eff}} \\cdot g_3 = (0.0710, 0.1121) \\cdot (-2.4668, 1.4738) = (-0.1751, 0.1652)\\\\[4pt]
-\\bullet \\ \\theta_3 = \\theta_2 - \\triangledown = (0.5332, -0.5261) - (-0.1751, 0.1652) = (0.7083, -0.6913)\\\\[4pt]
-$$
-
+- $\\theta_2 = (0.5332, -0.5261)$
+- $g_3 = (0.5332 - 3,\\; -0.5261 + 2) = (-2.4668, 1.4739)$
+- $s_3 = 0.9 \\cdot (1.5303, 0.6435) + (1 - 0.9) \\cdot \\big((-2.4668, 1.4739) \\odot (-2.4668, 1.4739)\\big) = (1.9858, 0.7964)$
+- $\\sqrt{s_3} = (1.4092, 0.8924) \\Rightarrow \\eta_{\\text{eff}} = (0.0710, 0.1121)$
+- Update $\\triangledown = \\eta_{\\text{eff}} \\cdot g_3 = (0.0710, 0.1121) \\cdot (-2.4668, 1.4739) = (-0.1751, 0.1652)$
+- $\\theta_3 = \\theta_2 - \\triangledown = (0.5332, -0.5261) - (-0.1751, 0.1652) = (0.7083, -0.6913)$
 `,
   },
 
   adam_notes: {
     title: "Adam",
     md: `
-$\\textbf{What it is}\\\\[4pt]$
+**Adam** combines the best ideas of RMSProp and SGD+momentum.
 
-Adam combines the best ideas of RMSProp and SGD+momentum:
+## What it is
 
-&nbsp;
+- **RMSProp:** keeps track of the squared gradient (which captures the scale of the gradient) to normalize the step size.
+- **SGD+momentum:** keeps track of the gradient itself (which captures the direction of the gradient) to smooth the updates.
 
-$\\bullet \\ $ **RMSProp**: keeps track of the squared gradient (which captures the scale of the gradient) to normalize the step size.
-
-$\\bullet \\ $ **SGD+momentum**: keeps track of the gradient itself (which captures the direction of the gradient) to smooth the updates.
-
-&nbsp;
-
-Adam then combines these two ideas in a single update rule:
+Adam combines these two ideas in a single update rule:
 
 $$
-m_t = \\beta_1 m_{t-1} + (1 - \\beta_1) g_t \\ \\ \\ \\ \\text{(EMA of gradients: momentum)} \\\\[4pt]
-v_t = \\beta_2 v_{t-1} + (1 - \\beta_2) (g_t \\odot g_t) \\ \\ \\ \\ \\text{(EMA of squared gradients: RMS scaling)} \\\\[4pt]
-\\hat{m}_t = \\frac{m_t}{1 - \\beta_1^t} \\ \\ \\ \\ \\text{(bias correction)} \\\\[4pt]
-\\hat{v}_t = \\frac{v_t}{1 - \\beta_2^t} \\ \\ \\ \\ \\text{(bias correction)} \\\\[4pt]
-\\theta_{t+1} = \\theta_t - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon} \\hat{m}_t \\ \\ \\ \\ \\text{(adaptive step per parameter)} \\\\[4pt]
+\\begin{aligned}
+m_t &= \\beta_1 m_{t-1} + (1 - \\beta_1)\\, g_t && \\text{(EMA of gradients: momentum)} \\\\
+v_t &= \\beta_2 v_{t-1} + (1 - \\beta_2) (g_t \\odot g_t) && \\text{(EMA of squared gradients: RMS scaling)} \\\\
+\\hat{m}_t &= \\frac{m_t}{1 - \\beta_1^t} && \\text{(bias correction)} \\\\
+\\hat{v}_t &= \\frac{v_t}{1 - \\beta_2^t} && \\text{(bias correction)} \\\\
+\\theta_{t+1} &= \\theta_t - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t && \\text{(adaptive step per parameter)}
+\\end{aligned}
 $$
 
-Where $\\beta_1$ and $\\beta_2$ are the momentum and RMS scaling coefficients, respectively.
-$\\epsilon$ is a small constant to avoid division by zero.
+- $\\beta_1$ and $\\beta_2$ are the momentum and RMS scaling coefficients, respectively.
+- $\\epsilon$ is a small constant to avoid division by zero.
 
-&nbsp;
+> Bias correction fixes the biased EMA (exponential moving average) problem. We'll discuss it at the end of the notes.
 
-Bias correction fixes the biased EMA (exponential moving average) problem. We'll discuss it at the end of the notes.
+## Tiny numeric example
 
-&nbsp;
+### Setup
 
----
+- **Parameters:** $\\theta = (\\theta_1, \\theta_2)$
+- **Loss:** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$
+- **Gradients:** $g = (g_1, g_2) = (\\theta_1 - 3,\\; \\theta_2 + 2)$
+- **Update rule:** $\\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t$
+- **Hyperparameters:** $\\eta = 0.1$, $\\beta_1 = 0.9$, $\\beta_2 = 0.999$, $\\epsilon = 10^{-8}$ (tiny, so numerically negligible)
+- **Init:** $\\theta_0 = (0, 0)$, $m_0 = (0, 0)$, $v_0 = (0, 0)$
 
-&nbsp;
+### Step 1
 
-$\\textbf{Tiny numeric example:}\\\\[4pt]$
+- $\\theta_0 = (0, 0)$
+- $g_1 = (-3, 2)$
+- $m_1 = 0.9 \\cdot (0, 0) + (1 - 0.9) \\cdot (-3, 2) = (-0.3, 0.2)$
+- $v_1 = 0.999 \\cdot (0, 0) + (1 - 0.999) \\cdot \\big((-3, 2) \\odot (-3, 2)\\big) = (0.009, 0.004)$
+- **Bias correction:**
 
-$\\textbf{Setup:}\\\\[4pt]$
-$$
-\\bullet \\ \\text{Parameters: } \\theta = (\\theta_1, \\theta_2)\\\\[4pt]
-\\bullet \\ \\text{Loss: } L = \\frac{1}{2} [(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2]  \\\\[4pt]
-\\bullet \\ \\text{Gradients: } g = (g_1, g_2) = (\\theta_1 - 3, \\theta_2 + 2) \\\\[4pt]
-\\bullet \\ \\text{Updates rule: } \\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon} \\hat{m}_t \\\\[4pt]
-\\bullet \\ \\text{Hyperparams: } \\eta = 0.1, \\beta_1 = 0.9, \\beta_2 = 0.999, \\epsilon = 1e-8 \\text{ tiny so numerically negligible} \\\\[4pt]
-\\bullet \\ \\text{Init: } \\theta_0 = (0, 0), m_0 = (0, 0), v_0 = (0, 0)\\\\[4pt]
-$$
+  $$
+  \\begin{aligned}
+  \\hat{m}_1 &= \\frac{m_1}{1 - \\beta_1^1} = \\frac{(-0.3, 0.2)}{1 - 0.9^1} = (-3, 2) \\\\
+  \\hat{v}_1 &= \\frac{v_1}{1 - \\beta_2^1} = \\frac{(0.009, 0.004)}{1 - 0.999^1} = (9, 4)
+  \\end{aligned}
+  $$
 
-$\\textbf{Step 1:}\\\\[4pt]$
-$$
-\\bullet \\ \\theta_0 = (0, 0)\\\\[4pt]
-\\bullet \\ g_1 = (-3, 2)\\\\[4pt]
-\\bullet \\ m_1 = 0.9 \\cdot (0, 0) + (1 - 0.9) \\cdot (-3, 2) = (-0.3, 0.2)\\\\[4pt]
-\\bullet \\ v_1 = 0.999 \\cdot (0, 0) + (1 - 0.999) \\cdot ((-3, 2) \\odot (-3, 2)) = (0.009, 0.004)\\\\[4pt]
-\\bullet \\ \\textbf{Bias correction: } \\\\[4pt]
-\\hat{m}_1 = \\frac{m_1}{1 - \\beta_1^1} = \\frac{(-0.3,0.2)}{1 - 0.9^1} = (-3,2) \\\\[4pt]
-\\hat{v}_1 = \\frac{v_1}{1 - \\beta_2^1} = \\frac{(0.009,0.004)}{1 - 0.999^1} = (9, 4)\\\\[4pt]
-\\bullet \\ \\textbf{Update: } \\theta_1 = \\theta_0 - \\frac{\\eta}{\\sqrt{\\hat{v}_1} + \\epsilon} \\hat{m}_1 = (0, 0) - \\frac{0.1}{\\sqrt{(9,4)}} \\cdot (-3, 2) = (0.1, -0.1)\\\\[4pt]
-$$
+- **Update:**
 
-&nbsp;
+  $$
+  \\theta_1 = \\theta_0 - \\frac{\\eta}{\\sqrt{\\hat{v}_1} + \\epsilon}\\, \\hat{m}_1 = (0, 0) - \\frac{0.1}{\\sqrt{(9, 4)}} \\cdot (-3, 2) = (0.1, -0.1)
+  $$
 
-$\\textbf{Step 2:}\\\\[4pt]$
-$$
-\\bullet \\ \\theta_1 = (0.1, -0.1)\\\\[4pt]
-\\bullet \\ g_2 = (0.1 - 3, -0.1 + 2) = (-2.9, 1.9)\\\\[4pt]
-\\bullet \\ m_2 = 0.9 \\cdot (-0.3, 0.2) + (1 - 0.9) \\cdot (-2.9, 1.9) = (-0.56, 0.37)\\\\[4pt]
-\\bullet \\ v_2 = 0.999 \\cdot (0.009, 0.004) + (1 - 0.999) \\cdot ((-2.9, 1.9) \\odot (-2.9, 1.9)) = (0.017401, 0.007606)\\\\[4pt]
-\\bullet \\ \\textbf{Bias correction: } \\\\[4pt]
-\\hat{m}_2 = \\frac{m_2}{1 - \\beta_1^2} = \\frac{(-0.56,0.37)}{1 - 0.9^2} = (-2.94737, 1.94737) \\\\[4pt]
-\\hat{v}_2 = \\frac{v_2}{1 - \\beta_2^2} = \\frac{(0.017401,0.007606)}{1 - 0.999^2} = (8.70485,3.80490)\\\\[4pt]
-\\bullet \\ \\textbf{Update: } \\theta_2 = \\theta_1 - \\frac{\\eta}{\\sqrt{\\hat{v}_2} + \\epsilon} \\hat{m}_2 = (0.1, -0.1) - \\frac{0.1}{\\sqrt{(8.70485,3.80490)}} \\cdot (-2.94737, 1.94737) \\\\[4pt]
-= (0.1998973,-0.1998335)\\\\[4pt]
-$$
+### Step 2
 
-&nbsp;
+- $\\theta_1 = (0.1, -0.1)$
+- $g_2 = (0.1 - 3,\\; -0.1 + 2) = (-2.9, 1.9)$
+- $m_2 = 0.9 \\cdot (-0.3, 0.2) + (1 - 0.9) \\cdot (-2.9, 1.9) = (-0.56, 0.37)$
+- $v_2 = 0.999 \\cdot (0.009, 0.004) + (1 - 0.999) \\cdot \\big((-2.9, 1.9) \\odot (-2.9, 1.9)\\big) = (0.017401, 0.007606)$
+- **Bias correction:**
 
-$\\textbf{Step 3:}\\\\[4pt]$
-$$
-\\bullet \\ \\theta_2 = (0.1998973,-0.1998335)\\\\[4pt]
-\\bullet \\ g_3 = (0.1998973 - 3, -0.1998335 + 2) = (-2.80010,1.80017)\\\\[4pt]
-\\bullet \\ m_3 = 0.9 \\cdot (-0.56, 0.37) + (1 - 0.9) \\cdot (-2.80010, 1.80017) = (-0.78401, 0.513017)\\\\[4pt]
-\\bullet \\ v_3 = 0.999 \\cdot (0.017401, 0.007606) + (1 - 0.999) \\cdot ((-2.80010, 1.80017) \\odot (-2.80010, 1.80017)) = (0.0252242, 0.010839)\\\\[4pt]
-\\bullet \\ \\textbf{Bias correction: } \\\\[4pt]
-\\hat{m}_3 = \\frac{m_3}{1 - \\beta_1^3} = \\frac{(-0.78401,0.513017)}{1 - 0.9^3} = (-2.89303, 1.89305) \\\\[4pt]
-\\hat{v}_3 = \\frac{v_3}{1 - \\beta_2^3} = \\frac{(0.0252242,0.010839)}{1 - 0.999^3} = (8.41647,3.61661)\\\\[4pt]
-\\bullet \\ \\textbf{Update: } \\theta_3 = \\theta_2 - \\frac{\\eta}{\\sqrt{\\hat{v}_3} + \\epsilon} \\hat{m}_3 = (0.1998973,-0.1998335) - \\frac{0.1}{\\sqrt{(8.41647,3.61661)}} \\cdot (-2.89303, 1.89305) \\\\[4pt]
-= (0.2996185,-0.2993766)\\\\[4pt]
-$$
+  $$
+  \\begin{aligned}
+  \\hat{m}_2 &= \\frac{m_2}{1 - \\beta_1^2} = \\frac{(-0.56, 0.37)}{1 - 0.9^2} = (-2.94737, 1.94737) \\\\
+  \\hat{v}_2 &= \\frac{v_2}{1 - \\beta_2^2} = \\frac{(0.017401, 0.007606)}{1 - 0.999^2} = (8.70485, 3.80490)
+  \\end{aligned}
+  $$
 
-&nbsp;
+- **Update:**
 
-This example shows how Adam combines the best ideas of RMSProp and SGD+momentum to get a more effective optimizer.
-$$
-\\bullet \\ \\textbf{Momentum: } \\hat{m}_t \\text{ is a smoothed version of the raw gradient, reducing noise and zigzagging. } \\\\[4pt]
-\\bullet \\ \\textbf{Per-parameter adaptivity: } \\hat{v}_t \\text{ differs across coordinates, so each parameter get its own effective step size } \\frac{\\eta}{\\sqrt{\\hat{v}_{t,i}} + \\epsilon}.
-$$
+  $$
+  \\begin{aligned}
+  \\theta_2 &= \\theta_1 - \\frac{\\eta}{\\sqrt{\\hat{v}_2} + \\epsilon}\\, \\hat{m}_2 = (0.1, -0.1) - \\frac{0.1}{\\sqrt{(8.70485, 3.80490)}} \\cdot (-2.94737, 1.94737) \\\\
+  &= (0.1998973, -0.1998335)
+  \\end{aligned}
+  $$
 
-&nbsp;
+### Step 3
 
----
+- $\\theta_2 = (0.1998973, -0.1998335)$
+- $g_3 = (0.1998973 - 3,\\; -0.1998335 + 2) = (-2.80010, 1.80017)$
+- $m_3 = 0.9 \\cdot (-0.56, 0.37) + (1 - 0.9) \\cdot (-2.80010, 1.80017) = (-0.78401, 0.513017)$
+- $v_3 = 0.999 \\cdot (0.017401, 0.007606) + (1 - 0.999) \\cdot \\big((-2.80010, 1.80017) \\odot (-2.80010, 1.80017)\\big) = (0.0252242, 0.010839)$
+- **Bias correction:**
 
-&nbsp;
+  $$
+  \\begin{aligned}
+  \\hat{m}_3 &= \\frac{m_3}{1 - \\beta_1^3} = \\frac{(-0.78401, 0.513017)}{1 - 0.9^3} = (-2.89303, 1.89305) \\\\
+  \\hat{v}_3 &= \\frac{v_3}{1 - \\beta_2^3} = \\frac{(0.0252242, 0.010839)}{1 - 0.999^3} = (8.41647, 3.61661)
+  \\end{aligned}
+  $$
 
-$\\textbf{Bias correction:}\\\\[4pt]$
+- **Update:**
 
-Adam keeps **EMA (exponential moving average)** of:
-$$
-\\bullet \\ \\text{the gradient } m_t \\text{ (momentum), and } \\\\[4pt]
-\\bullet \\ \\text{the squared gradient } v_t \\text{ (RMS scaling)}.
-$$
+  $$
+  \\begin{aligned}
+  \\theta_3 &= \\theta_2 - \\frac{\\eta}{\\sqrt{\\hat{v}_3} + \\epsilon}\\, \\hat{m}_3 = (0.1998973, -0.1998335) - \\frac{0.1}{\\sqrt{(8.41647, 3.61661)}} \\cdot (-2.89303, 1.89305) \\\\
+  &= (0.2996185, -0.2993766)
+  \\end{aligned}
+  $$
 
-If both EMAs start at zero ($m_0 = 0, v_0 = 0$). This makes the bias estimation large at the early steps, especially with common $\\beta_1 = 0.9, \\beta_2 = 0.999$.
+### What the example shows
 
-&nbsp;
+This example shows how Adam combines the best ideas of RMSProp and SGD+momentum to get a more effective optimizer:
+
+- **Momentum:** $\\hat{m}_t$ is a smoothed version of the raw gradient, reducing noise and zigzagging.
+- **Per-parameter adaptivity:** $\\hat{v}_t$ differs across coordinates, so each parameter gets its own effective step size $\\frac{\\eta}{\\sqrt{\\hat{v}_{t,i}} + \\epsilon}$.
+
+## Bias correction
+
+Adam keeps an **EMA (exponential moving average)** of:
+
+- the gradient, $m_t$ (momentum), and
+- the squared gradient, $v_t$ (RMS scaling).
+
+Both EMAs start at zero ($m_0 = 0$, $v_0 = 0$). This biases the estimates toward zero, and the bias is large in the early steps, especially with the common $\\beta_1 = 0.9$, $\\beta_2 = 0.999$.
 
 For example, for a constant gradient $g$, the first step would be:
-$$
-\\bullet \\ m_1 = \\beta_1 m_0 + (1 - \\beta_1)g \\ \\ \\ (m_1 \\text{ starts at 0.1}g), \\\\[4pt]
-\\bullet \\ v_1 = \\beta_2 v_0 + (1 - \\beta_2)g^2 \\ \\ \\ (v_1 \\text{ starts at 0.001}g^2). \\\\[4pt]
-$$
 
-So without bias correction, step 1 would use 0.1X the intended numerator and $\\sqrt{0.001} \\approx 0.0316$X the intended denominator. The raw (uncorrected) step magnitude scales like
+- $m_1 = \\beta_1 m_0 + (1 - \\beta_1)\\, g$ ($m_1$ starts at $0.1g$),
+- $v_1 = \\beta_2 v_0 + (1 - \\beta_2)\\, g^2$ ($v_1$ starts at $0.001g^2$).
+
+So without bias correction, step 1 would use $0.1\\times$ the intended numerator and $\\sqrt{0.001} \\approx 0.0316\\times$ the intended denominator. The raw (uncorrected) step magnitude scales like
+
 $$
 \\eta \\cdot \\frac{m_1}{\\sqrt{v_1}} = \\eta \\cdot \\frac{0.1g}{0.0316g} = \\eta \\cdot 3.16 = \\eta \\cdot F_1
 $$
 
-So with common setup $\\beta_1 = 0.9, \\beta_2 = 0.999, m_0 = 0, v_0 = 0$:
+So with the common setup $\\beta_1 = 0.9$, $\\beta_2 = 0.999$, $m_0 = 0$, $v_0 = 0$:
 
-$\\bullet \\ $ $F_1 = 3.16$, the first step is large by a factor of 3.16.
+- $F_1 = 3.16$: the first step is too large by a factor of 3.16.
+- Using similar reasoning, we get $F_2 = 4.25$, $F_3 = 4.95$, $F_4 = 5.44$.
+- At $t = 12$, we reach a high of $F_{12} = 6.568$, and from there it descends to 1.
 
-$\\bullet \\ $ Use similar reasoning we can get $F_2 = 4.25, F_3 = 4.95, F_4 = 5.44.$
+On the other hand, with bias correction, $\\hat{m}_1 = g_1$ and $\\hat{v}_1 = g_1^2$, so the $\\frac{\\hat{m}_1}{\\sqrt{\\hat{v}_1}}$ term becomes less sensitive to the choice of $\\beta$ and to the initial values $m_0$ and $v_0$.
 
-$\\bullet \\ $ At $t = 12$, we reach a high of $F_{12} = 6.568$, and from there it descends to 1.
+### The fix
 
-&nbsp;
+Adam fixes this by dividing by $1 - \\beta^t$:
 
-On the other hand, with bias correction, $\\hat{m}_1 = g_1$, and $\\hat{v}_1 = g_1^2$,
-the $\\frac{\\hat{m}_1}{\\sqrt{\\hat{v}_1}}$ term becomes less sensitive to the choice of $\\beta$ and the initial value of $m_0$ and $v_0$.
-
-&nbsp;
-
-$\\textbf{The fix:}\\\\[4pt]$
-
-Adam fixes this by dividing by:
 $$
-\\hat{m}_t = \\frac{m_t}{1 - \\beta_1^t}, \\hat{v}_t = \\frac{v_t}{1 - \\beta_2^t} \\\\[4pt]
+\\hat{m}_t = \\frac{m_t}{1 - \\beta_1^t}, \\qquad \\hat{v}_t = \\frac{v_t}{1 - \\beta_2^t}
 $$
 
-For the complete proof, refer to section 3 in the original paper [Adam: A Method for Stochastic Optimization](https://arxiv.org/pdf/1412.6980).
+> For the complete proof, refer to Section 3 of the original paper, [Adam: A Method for Stochastic Optimization ↗](https://arxiv.org/pdf/1412.6980).
 
-&nbsp;
+## References
 
-$$\\textbf{References:}\\\\[4pt]$$
-$$\\textbf{1. Adam: A Method for Stochastic Optimization}$$
-Original paper of Adam.
-$$\\href{https://arxiv.org/pdf/1412.6980}{\\texttt{Adam: A Method for Stochastic Optimization}}$$
+1. **Adam: A Method for Stochastic Optimization**
 
-$$\\textbf{References:}\\\\[4pt]$$
-$$\\textbf{1. StackExchange Discussion}$$
-Discussion about the bias correction in Adam.
-$$\\href{https://stats.stackexchange.com/questions/232741/why-is-it-important-to-include-a-bias-correction-term-for-the-adam-optimizer-for}{\\texttt{StackExchange Discussion}}$$
+   Original paper of Adam.
 
+   [Adam: A Method for Stochastic Optimization ↗](https://arxiv.org/pdf/1412.6980)
 
+2. **StackExchange discussion**
+
+   Discussion about the bias correction in Adam.
+
+   [StackExchange Discussion ↗](https://stats.stackexchange.com/questions/232741/why-is-it-important-to-include-a-bias-correction-term-for-the-adam-optimizer-for)
 `,
   },
 
   adamw_notes: {
     title: "AdamW",
     md: `
+**AdamW** = Adam (momentum + RMS scaling + bias correction) plus **weight decay** applied separately.
 
-AdamW = Adam (momentum + RMS scaling + bias correction) plus **weight decay** applied separately:
+## Update rule
 
 $$
-m_t = \\beta_1 m_{t-1} + (1 - \\beta_1) g_t \\ \\ \\ \\ \\text{(EMA of gradients: momentum)} \\\\[4pt]
-v_t = \\beta_2 v_{t-1} + (1 - \\beta_2) (g_t \\odot g_t) \\ \\ \\ \\ \\text{(EMA of squared gradients: RMS scaling)} \\\\[4pt]
-\\hat{m}_t = \\frac{m_t}{1 - \\beta_1^t} \\ \\ \\ \\ \\text{(bias correction)} \\\\[4pt]
-\\hat{v}_t = \\frac{v_t}{1 - \\beta_2^t} \\ \\ \\ \\ \\text{(bias correction)} \\\\[4pt]
-\\theta_t = (1 - \\eta \\lambda) \\theta_t \\ \\ \\ \\ \\text{(decoupled weight decay)} \\\\[4pt]
-\\theta_{t+1} = \\theta_t - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon} \\hat{m}_t \\ \\ \\ \\ \\text{(adaptive step per parameter)} \\\\[4pt]
+\\begin{aligned}
+m_t &= \\beta_1 m_{t-1} + (1 - \\beta_1)\\, g_t && \\text{(EMA of gradients: momentum)} \\\\
+v_t &= \\beta_2 v_{t-1} + (1 - \\beta_2) (g_t \\odot g_t) && \\text{(EMA of squared gradients: RMS scaling)} \\\\
+\\hat{m}_t &= \\frac{m_t}{1 - \\beta_1^t} && \\text{(bias correction)} \\\\
+\\hat{v}_t &= \\frac{v_t}{1 - \\beta_2^t} && \\text{(bias correction)} \\\\
+\\theta_t &= (1 - \\eta \\lambda)\\, \\theta_t && \\text{(decoupled weight decay)} \\\\
+\\theta_{t+1} &= \\theta_t - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t && \\text{(adaptive step per parameter)}
+\\end{aligned}
 $$
 
-Where $\\beta_1$ and $\\beta_2$ are the momentum and RMS scaling coefficients, respectively.
-$\\epsilon$ is a small constant to avoid division by zero. $\\lambda$ is the weight decay strength (e.g. 0.1).
+- $\\beta_1$ and $\\beta_2$ are the momentum and RMS scaling coefficients, respectively.
+- $\\epsilon$ is a small constant to avoid division by zero.
+- $\\lambda$ is the weight decay strength (e.g., 0.1).
 
-&nbsp;
+## Tiny numeric example
 
----
+### Setup
 
-&nbsp;
+- **Parameters:** $\\theta = (\\theta_1, \\theta_2)$
+- **Loss:** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$
+- **Gradients:** $g = (g_1, g_2) = (\\theta_1 - 3,\\; \\theta_2 + 2)$
+- **Update rule:** $\\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t$
+- **Hyperparameters:** $\\eta = 0.1$, $\\beta_1 = 0.9$, $\\beta_2 = 0.999$, $\\epsilon = 10^{-8}$ (tiny, so numerically negligible), $\\lambda = 0.1$
+- **Init:** $\\theta_0 = (0, 0)$, $m_0 = (0, 0)$, $v_0 = (0, 0)$
 
-$\\textbf{Tiny numeric example:}\\\\[4pt]$
+### Step 1
 
-$\\textbf{Setup:}\\\\[4pt]$
-$$
-\\bullet \\ \\text{Parameters: } \\theta = (\\theta_1, \\theta_2)\\\\[4pt]
-\\bullet \\ \\text{Loss: } L = \\frac{1}{2} [(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2]  \\\\[4pt]
-\\bullet \\ \\text{Gradients: } g = (g_1, g_2) = (\\theta_1 - 3, \\theta_2 + 2) \\\\[4pt]
-\\bullet \\ \\text{Updates rule: } \\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon} \\hat{m}_t \\\\[4pt]
-\\bullet \\ \\text{Hyperparams: } \\eta = 0.1, \\beta_1 = 0.9, \\beta_2 = 0.999, \\epsilon = 1e-8, \\lambda = 0.1 \\text{ tiny so numerically negligible} \\\\[4pt]
-\\bullet \\ \\text{Init: } \\theta_0 = (0, 0), m_0 = (0, 0), v_0 = (0, 0)\\\\[4pt]
-$$
+- $\\theta_0 = (0, 0)$
+- $g_1 = (-3, 2)$
+- $m_1 = 0.9 \\cdot (0, 0) + (1 - 0.9) \\cdot (-3, 2) = (-0.3, 0.2)$
+- $v_1 = 0.999 \\cdot (0, 0) + (1 - 0.999) \\cdot \\big((-3, 2) \\odot (-3, 2)\\big) = (0.009, 0.004)$
+- **Bias correction:**
 
-&nbsp;
+  $$
+  \\begin{aligned}
+  \\hat{m}_1 &= \\frac{m_1}{1 - \\beta_1^1} = \\frac{(-0.3, 0.2)}{1 - 0.9^1} = (-3, 2) \\\\
+  \\hat{v}_1 &= \\frac{v_1}{1 - \\beta_2^1} = \\frac{(0.009, 0.004)}{1 - 0.999^1} = (9, 4)
+  \\end{aligned}
+  $$
 
-$\\textbf{Step 1:}\\\\[4pt]$
-$$
-\\bullet \\ \\theta_0 = (0, 0)\\\\[4pt]
-\\bullet \\ g_1 = (-3, 2)\\\\[4pt]
-\\bullet \\ m_1 = 0.9 \\cdot (0, 0) + (1 - 0.9) \\cdot (-3, 2) = (-0.3, 0.2)\\\\[4pt]
-\\bullet \\ v_1 = 0.999 \\cdot (0, 0) + (1 - 0.999) \\cdot ((-3, 2) \\odot (-3, 2)) = (0.009, 0.004)\\\\[4pt]
-\\bullet \\ \\textbf{Bias correction: } \\\\[4pt]
-\\hat{m}_1 = \\frac{m_1}{1 - \\beta_1^1} = \\frac{(-0.3,0.2)}{1 - 0.9^1} = (-3,2) \\\\[4pt]
-\\hat{v}_1 = \\frac{v_1}{1 - \\beta_2^1} = \\frac{(0.009,0.004)}{1 - 0.999^1} = (9, 4)\\\\[4pt]
-\\bullet \\ \\textbf{Decay: } \\theta_0 = (1 - \\eta \\lambda) \\theta_0 = (1 - 0.1 \\cdot 0.1) \\cdot (0, 0) = (0, 0) \\\\[4pt]
-\\bullet \\ \\textbf{Update: } \\theta_1 = \\theta_0 - \\frac{\\eta}{\\sqrt{\\hat{v}_1} + \\epsilon} \\hat{m}_1 = (0, 0) - \\frac{0.1}{\\sqrt{(9,4)}} \\cdot (-3, 2) = (0.1, -0.1)\\\\[4pt]
-$$
+- **Decay:** $\\theta_0 = (1 - \\eta \\lambda)\\, \\theta_0 = (1 - 0.1 \\cdot 0.1) \\cdot (0, 0) = (0, 0)$
+- **Update:**
 
-&nbsp;
+  $$
+  \\theta_1 = \\theta_0 - \\frac{\\eta}{\\sqrt{\\hat{v}_1} + \\epsilon}\\, \\hat{m}_1 = (0, 0) - \\frac{0.1}{\\sqrt{(9, 4)}} \\cdot (-3, 2) = (0.1, -0.1)
+  $$
 
-$\\textbf{Step 2:}\\\\[4pt]$
-$$
-\\bullet \\ \\theta_1 = (0.1, -0.1)\\\\[4pt]
-\\bullet \\ g_2 = (0.1 - 3, -0.1 + 2) = (-2.9, 1.9)\\\\[4pt]
-\\bullet \\ m_2 = 0.9 \\cdot (-0.3, 0.2) + (1 - 0.9) \\cdot (-2.9, 1.9) = (-0.56, 0.37)\\\\[4pt]
-\\bullet \\ v_2 = 0.999 \\cdot (0.009, 0.004) + (1 - 0.999) \\cdot ((-2.9, 1.9) \\odot (-2.9, 1.9)) = (0.017401, 0.007606)\\\\[4pt]
-\\bullet \\ \\textbf{Bias correction: } \\\\[4pt]
-\\hat{m}_2 = \\frac{m_2}{1 - \\beta_1^2} = \\frac{(-0.56,0.37)}{1 - 0.9^2} = (-2.94737, 1.94737) \\\\[4pt]
-\\hat{v}_2 = \\frac{v_2}{1 - \\beta_2^2} = \\frac{(0.017401,0.007606)}{1 - 0.999^2} = (8.70485,3.80490)\\\\[4pt]
-\\bullet \\ \\textbf{Decay: } \\theta_1 = (1 - \\eta \\lambda) \\theta_1 = (1 - 0.1 \\cdot 0.1) \\cdot (0.1, -0.1) = (0.099, -0.099) \\\\[4pt]
-\\bullet \\ \\textbf{Update: } \\theta_2 = \\theta_1 - \\frac{\\eta}{\\sqrt{\\hat{v}_2} + \\epsilon} \\hat{m}_2 = (0.099, -0.099) - \\frac{0.1}{\\sqrt{(8.70485,3.80490)}} \\cdot (-2.94737, 1.94737) \\\\[4pt]
-= (0.1988973,-0.1988335)\\\\[4pt]
-$$
+### Step 2
 
-&nbsp;
+- $\\theta_1 = (0.1, -0.1)$
+- $g_2 = (0.1 - 3,\\; -0.1 + 2) = (-2.9, 1.9)$
+- $m_2 = 0.9 \\cdot (-0.3, 0.2) + (1 - 0.9) \\cdot (-2.9, 1.9) = (-0.56, 0.37)$
+- $v_2 = 0.999 \\cdot (0.009, 0.004) + (1 - 0.999) \\cdot \\big((-2.9, 1.9) \\odot (-2.9, 1.9)\\big) = (0.017401, 0.007606)$
+- **Bias correction:**
 
-$\\textbf{Step 3:}\\\\[4pt]$
-$$
-\\bullet \\ \\theta_2 = (0.1988973,-0.1988335)\\\\[4pt]
-\\bullet \\ g_3 = (0.1988973 - 3, -0.1988335 + 2) = (-2.80110,1.80117)\\\\[4pt]
-\\bullet \\ m_3 = 0.9 \\cdot (-0.56, 0.37) + (1 - 0.9) \\cdot (-2.80110, 1.80117) = (-0.78411, 0.513117)\\\\[4pt]
-\\bullet \\ v_3 = 0.999 \\cdot (0.017401, 0.007606) + (1 - 0.999) \\cdot ((-2.80110, 1.80117) \\odot (-2.80110, 1.80117)) = (0.0252298, 0.0108426)\\\\[4pt]
-\\bullet \\ \\textbf{Bias correction: } \\\\[4pt]
-\\hat{m}_3 = \\frac{m_3}{1 - \\beta_1^3} = \\frac{(-0.78411,0.513117)}{1 - 0.9^3} = (-2.893395, 1.89342) \\\\[4pt]
-\\hat{v}_3 = \\frac{v_3}{1 - \\beta_2^3} = \\frac{(0.0252298,0.0108426)}{1 - 0.999^3} = (8.418349,3.617817)\\\\[4pt]
-\\bullet \\ \\textbf{Decay: } \\theta_2 = (1 - \\eta \\lambda) \\theta_2 = (1 - 0.1 \\cdot 0.1) \\cdot (0.1988973,-0.1988335) = (0.196908,-0.196845) \\\\[4pt]
-\\bullet \\ \\textbf{Update: } \\theta_3 = \\theta_2 - \\frac{\\eta}{\\sqrt{\\hat{v}_3} + \\epsilon} \\hat{m}_3 = (0.196908,-0.196845) - \\frac{0.1}{\\sqrt{(8.418349,3.617817)}} \\cdot (-2.893395, 1.89342) \\\\[4pt]
-= (0.2966312,-0.2963911)\\\\[4pt]
-$$
+  $$
+  \\begin{aligned}
+  \\hat{m}_2 &= \\frac{m_2}{1 - \\beta_1^2} = \\frac{(-0.56, 0.37)}{1 - 0.9^2} = (-2.94737, 1.94737) \\\\
+  \\hat{v}_2 &= \\frac{v_2}{1 - \\beta_2^2} = \\frac{(0.017401, 0.007606)}{1 - 0.999^2} = (8.70485, 3.80490)
+  \\end{aligned}
+  $$
 
-    `,
+- **Decay:** $\\theta_1 = (1 - \\eta \\lambda)\\, \\theta_1 = (1 - 0.1 \\cdot 0.1) \\cdot (0.1, -0.1) = (0.099, -0.099)$
+- **Update:**
+
+  $$
+  \\begin{aligned}
+  \\theta_2 &= \\theta_1 - \\frac{\\eta}{\\sqrt{\\hat{v}_2} + \\epsilon}\\, \\hat{m}_2 = (0.099, -0.099) - \\frac{0.1}{\\sqrt{(8.70485, 3.80490)}} \\cdot (-2.94737, 1.94737) \\\\
+  &= (0.1988973, -0.1988335)
+  \\end{aligned}
+  $$
+
+### Step 3
+
+- $\\theta_2 = (0.1988973, -0.1988335)$
+- $g_3 = (0.1988973 - 3,\\; -0.1988335 + 2) = (-2.80110, 1.80117)$
+- $m_3 = 0.9 \\cdot (-0.56, 0.37) + (1 - 0.9) \\cdot (-2.80110, 1.80117) = (-0.78411, 0.513117)$
+- $v_3 = 0.999 \\cdot (0.017401, 0.007606) + (1 - 0.999) \\cdot \\big((-2.80110, 1.80117) \\odot (-2.80110, 1.80117)\\big) = (0.0252298, 0.0108426)$
+- **Bias correction:**
+
+  $$
+  \\begin{aligned}
+  \\hat{m}_3 &= \\frac{m_3}{1 - \\beta_1^3} = \\frac{(-0.78411, 0.513117)}{1 - 0.9^3} = (-2.893395, 1.89342) \\\\
+  \\hat{v}_3 &= \\frac{v_3}{1 - \\beta_2^3} = \\frac{(0.0252298, 0.0108426)}{1 - 0.999^3} = (8.418349, 3.617817)
+  \\end{aligned}
+  $$
+
+- **Decay:** $\\theta_2 = (1 - \\eta \\lambda)\\, \\theta_2 = (1 - 0.1 \\cdot 0.1) \\cdot (0.1988973, -0.1988335) = (0.196908, -0.196845)$
+- **Update:**
+
+  $$
+  \\begin{aligned}
+  \\theta_3 &= \\theta_2 - \\frac{\\eta}{\\sqrt{\\hat{v}_3} + \\epsilon}\\, \\hat{m}_3 = (0.196908, -0.196845) - \\frac{0.1}{\\sqrt{(8.418349, 3.617817)}} \\cdot (-2.893395, 1.89342) \\\\
+  &= (0.2966312, -0.2963911)
+  \\end{aligned}
+  $$
+`,
   },
 };
