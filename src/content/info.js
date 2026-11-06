@@ -876,45 +876,98 @@ elementwise sum   (B, T, C)
   },
 
   highlevel_transformer_introduction_notes: {
-    title: "High-level Transformer Analogy",
+    title: "High-level Transformer",
     md: `
-**A high-level analogy of a GPT-2 transformer block.**
+**A high-level view of a GPT-2 transformer block: first the structure in code, then an analogy for intuition.**
 
-## Tokens = people in a meeting
+## Part 1: Block structure
+
+### Where the blocks sit in the model
+
+After the embedding step, $x$ has shape $(B, T, 768)$. It then passes through **12 transformer blocks**, one after another. The main path of \`GPT2.forward\`:
+
+\`\`\`python
+x = self.tok_emb(idx) + self.pos_emb(pos)[None, :, :]   # token + position embedding
+x = self.emb_drop(x)                                     # dropout (training only)
+for blk in self.blocks:                                  # 12 blocks, run in order
+    x = blk(x)
+x = self.ln_f(x)                                         # final LayerNorm
+logits = self.lm_head(x)                                 # output projection
+\`\`\`
+
+- **The 12 blocks share the same structure, but each has its own weights.** Nothing is shared between blocks.
+- **Each block maps $(B, T, 768)$ to $(B, T, 768)$.** Because the shape never changes, blocks can be stacked one after another.
+
+### What happens inside one block
+
+\`\`\`python
+class TransformerBlock(nn.Module):
+    def forward(self, x):
+        x = x + self.attn(self.ln1(x))   # sublayer 1: attention
+        x = x + self.mlp(self.ln2(x))    # sublayer 2: MLP
+        return x
+\`\`\`
+
+Just two lines, one per sublayer:
+
+- **Attention:** each position **looks at other positions** (only earlier ones, because of the causal mask) and gathers useful information from them.
+- **MLP:** each position **processes its own vector independently**, without looking at any other position.
+
+So a block is "communicate, then think", repeated 12 times.
+
+> **Information moves between positions only inside attention.** The MLP always works on one position at a time.
+
+### Two structural details
+
+**1. Residual connections: \`x = x + ...\`**
+
+The code is not \`x = attn(...)\` but \`x = x + attn(...)\`. A sublayer doesn't replace $x$; it **adds a small update on top of it**.
+
+Think of $x$ as a main road that runs through all 12 layers, usually called the **residual stream**. Each sublayer reads from the stream, computes an update, and adds it back.
+
+**2. LayerNorm before each sublayer: \`attn(self.ln1(x))\`**
+
+The input to each sublayer first goes through a [LayerNorm](#info:layernorm), which keeps its values in a stable range. This placement is called **Pre-LN**.
+
+> The GPT-2 paper calls this out as a change from the original Transformer. The original put LayerNorm **after** each sublayer (Post-LN). GPT-2 moves it to the **input** of each sublayer and adds one more LayerNorm after the last block: \`ln_f\` above.
+
+## Part 2: The analogy
+
+### Tokens = people in a meeting
 
 Each token is like a person holding their own notes (its current representation).
 
-## Attention = the conversation
+### Attention = the conversation
 
 Everyone briefly scans what the others (those earlier in the sequence) are saying and decides whose points matter for them. Each person builds a short "summary I need" by selectively listening.
 
 > **Why it matters:** this is how long-range connections form. Facts from far back in the text can instantly influence you.
 
-## MLP (feed-forward) = private thinking
+### MLP (feed-forward) = private thinking
 
 After listening, each person goes off for a moment of inner reasoning: "Given what I heard, how should I update my notes?"
 
 > **Why it matters:** it lets each token transform and rephrase ideas, adding nonlinearity and capacity.
 
-## Two LayerNorms = the organizer's ground rules (applied twice)
+### Two LayerNorms = the organizer's ground rules (applied twice)
 
 Before the conversation and before the private thinking, the organizer reminds everyone to keep comments calm and on-topic: no one's voice too loud, none too quiet.
 
 > **Why it matters:** it keeps both phases stable and comparable, so the block behaves predictably.
 
-## Residual connections = a running draft
+### Residual connections = a running draft
 
 After each phase (conversation, then private thinking), you add your new insights to your previous notes rather than replacing them.
 
 > **Why it matters:** you never lose what you already knew; updates are incremental and safe.
 
-## Dropout = occasional silence to build resilience
+### Dropout = occasional silence to build resilience
 
 Sometimes random remarks are withheld during practice meetings.
 
 > **Why it matters:** the group learns to make good decisions even if a few voices are missing, preventing overreliance on any single cue.
 
-## Putting it together
+### Putting it together
 
 Each block is a two-step cycle:
 
