@@ -635,10 +635,19 @@ $$
 - **Weight:** $(3 \\times n\\_embd,\\ n\\_embd)$
 - **Bias:** $(3 \\times n\\_embd)$
 
+Mathematically, $W$ maps $768 \\to 2304$, so it holds $768 \\times 2304$ numbers. PyTorch's \`nn.Linear\` stores it as **(out, in)** $= (2304, 768)$ and computes $x\\,W^\\top + b$, which is why the weight shape above looks transposed.
+
+## One set per block, shared by all tokens
+
+- **Separate per block.** Each of the 12 blocks has its own \`c_attn\`, with its own $W$ and $b$, initialized independently and trained independently. Nothing is shared between blocks, so each layer learns its own way of computing q, k and v.
+- **Shared within a block.** Inside one block, every token, from every sequence in the batch and at every position, is multiplied by the **same** $W$ and shifted by the same $b$. \`c_attn\` has no notion of position: it applies the same rule to every position, so two positions' q, k and v differ only because their input vectors differ. For example, take the two occurrences of "the" in "the cat and the dog":
+  - **In block 1**, they have the same token embedding, so the only difference in their inputs is their position embeddings.
+  - **In later blocks**, each "the" has also gathered different context through attention: the first one sees only itself, the second sees "the cat and the". Their inputs drift further apart, and the difference now comes mostly from context, not just position.
+
 ## What it does to the tensor
 
 1. Input $x \\in \\mathbb{R}^{B \\times T \\times n\\_embd}$.
-2. \`qkv = c_attn(x)\` gives $qkv \\in \\mathbb{R}^{B \\times T \\times 3n\\_embd}$.
+2. \`qkv = c_attn(x)\` gives $qkv \\in \\mathbb{R}^{B \\times T \\times 3n\\_embd}$. Each position's 768-dim vector is projected **on its own**, with the same $W$: no information moves between positions yet. That starts only at $q K^\\top$.
 3. \`q, k, v = qkv.split(n_embd, 2)\` gives $q, k, v \\in \\mathbb{R}^{B \\times T \\times n\\_embd}$.
 4. Split q, k and v into heads with $hs = n\\_embd / n\\_head$: \`view(B, T, n_head, hs).transpose(1, 2)\` gives $(B,\\ n\\_head,\\ T,\\ hs)$.
 
@@ -689,7 +698,14 @@ $$
 
 > So: weights use Kaiming uniform configured to yield the same range as a simple uniform, while biases use that simple uniform directly.
 
-**Note:** many Transformer/GPT-2 implementations override this and use a normal init $\\mathcal{N}(0, 0.02^2)$ for linear layers and embeddings.
+**Note:** many Transformer/GPT-2 implementations override this and use a normal init $\\mathcal{N}(0, 0.02^2)$ for linear layers and embeddings. The original GPT-2 code (OpenAI's TensorFlow \`model.py\`) does exactly that for \`c_attn\`: weights $\\sim \\mathcal{N}(0, 0.02^2)$ and biases **all zero**. The site's code doesn't override anything, so it uses the PyTorch defaults above.
+
+## Why random, and why small?
+
+- **Why not all zeros?** If $W = 0$, every position gets the same q, k, v, and every entry of $W$ receives the same gradient, so the entries stay identical forever and can never learn different things. Random values break this symmetry.
+- **Why small?** Small weights give small q and k, so the scores $q \\cdot k$ start near 0 and the softmax starts close to uniform. That keeps it out of saturation, so gradients flow from the first step.
+
+Everything q, k and v come to mean is learned from these random starting points.
 
 ## References
 
@@ -1056,9 +1072,70 @@ A row of people, one per position $t$ in the sequence. Each person holds notes $
 - **Key ($k$):** what I can offer, i.e. what I can be matched on (built by $W_k$); an index used for matching only.
 - **Value ($v$):** what I will share if you listen (built by $W_v$); the actual content that gets copied/mixed into someone else's representation.
 
+### Why separate Query and Key?
+
+Consider a simpler design with no $W_q$ or $W_k$, scoring directly with $x$: $\\text{score}(i \\to j) = x_i \\cdot x_j$. This has two problems.
+
+**1. Attention would be symmetric.** The dot product is symmetric, $x_{\\text{bank}} \\cdot x_{\\text{river}} = x_{\\text{river}} \\cdot x_{\\text{bank}}$, so bank would have to attend to river exactly as much as river attends to bank. But relations in language are often one-way: bank needs river to tell which sense it is, while river is clear on its own. With separate q and k, the two scores use different vectors and can differ. A 2-D example:
+
+- $q_{\\text{bank}} = [0, 2]$, $k_{\\text{bank}} = [1, 0]$
+- $q_{\\text{river}} = [0, 0]$, $k_{\\text{river}} = [0, 2]$
+- bank → river: $q_{\\text{bank}} \\cdot k_{\\text{river}} = 0 \\cdot 0 + 2 \\cdot 2 = 4$ (strong attention)
+- river → bank: $q_{\\text{river}} \\cdot k_{\\text{bank}} = 0 \\cdot 1 + 0 \\cdot 0 = 0$ (none)
+
+(Under the causal mask river can't see the later word bank anyway; the point is that scores between any two words can be asymmetric.)
+
+**2. Each word would attend mostly to itself.** With raw $x$, a word's score for itself is $x \\cdot x = \\|x\\|^2$, which is usually larger than its score for any other word. Every position would lean toward itself, or toward words **similar** to it. But bank isn't looking for another bank; it needs river or money, words that are **different** and add information. Separate $W_q$ and $W_k$ pick out different features of $x$, so the model can learn "my q matches words whose k complements me".
+
+> **In short:** separating q and k lets scores be **asymmetric** (A attending to B doesn't mean B attends to A), so the model can learn to find words that are **different from itself but useful to it**.
+
 ### Why separate Key vs Value?
 
 Keys are for addressing (similarity search), Values are for content. You choose *who* to listen to via $q \\cdot k$ and copy what matters from those people via $v$.
+
+Could one vector do both jobs, getting found and delivering content? No: *what gets you found* and *what you hand over* are different things. Take:
+
+> The cat sat on the mat because it was tired.
+
+The position of "it" needs to work out who "it" refers to:
+
+- **it's q:** I'm a pronoun, looking for an earlier singular, animate noun.
+- **cat's k:** I'm a singular, animate noun. → A good match.
+- **mat's k:** I'm a singular, inanimate noun. → A weaker match.
+- **cat's v:** the meaning of "cat" (an animal, furry, can get tired…). → Once matched, this is what is passed to "it".
+
+cat's k and v carry **different things**:
+
+- **k** holds the features that get cat **found**: singular, animate, a noun. These are matching labels.
+- **v** holds what a finder actually **needs**: the meaning of "cat", so "it" learns that the one who is tired is a cat.
+
+If $k = v$, "it" would receive only the labels "singular, animate, noun", not "cat" itself. In library terms (below): you search with the index card, but you take home the book's text.
+
+> **In short:** q is what I'm looking for, k is what I can be found by, v is what you get once you find me. All three come from the same $x$, but each has its own $W$ that picks out the features it needs. q and k only decide **who to attend to**; v is the information that actually **gets moved**.
+
+### A library analogy
+
+- **Query:** your search request, e.g. "I want books on river geography".
+- **Key:** each book's index card, with its title and keywords, used to **match** against your request.
+- **Value:** the book's actual text. Once a book matches, this is what you **take away**.
+
+Matching uses q and k; what you take away is v.
+
+### Example: "I went to the river bank"
+
+"bank" is ambiguous (riverbank or financial bank), and its token embedding is the same either way. Look at the position of "bank":
+
+- **bank's q:** I'm an ambiguous word; I'm looking for words that tell me which sense I am.
+- **river's k:** I'm a geography/nature noun. → A good match for bank's q.
+- **went's k:** I'm a verb of motion. → A poor match.
+- **river's v:** information about rivers, water, geography. → Because river matched, this is what gets passed to bank.
+
+Later steps use them like this:
+
+- step 3 scores relevance with **$q \\cdot k$**: bank's q is dotted with every earlier word's k;
+- step 7 mixes the **v**'s with those scores as weights and hands the result to bank.
+
+> Two caveats. The descriptions above ("I'm looking for…", "I'm a geography noun") are only an aid to intuition: real q, k and v are just 768 numbers each, and what they encode is learned during training, not designed by hand. And **every token has all three**: bank uses its q to ask earlier words, while its own k and v are matched and read by the words that come after it.
 
 ## 2. Split into committees (heads): reshape to $(B, n\\_head, T, hs)$
 
