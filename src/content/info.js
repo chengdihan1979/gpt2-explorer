@@ -1658,7 +1658,7 @@ $$
 $$
 
 - $\\mu, \\sigma^2$ are the mean and variance over the last (feature) dimension.
-- $\\gamma, \\beta \\in \\mathbb{R}^{d}$ are a learned scale and shift.
+- $\\gamma, \\beta \\in \\mathbb{R}^{d}$ are a learned scale and shift. [Shared by all tokens? One per block?](#info:layernorm_params_notes)
 - $\\epsilon$ is a small constant for numerical safety ($10^{-5}$ by default in PyTorch).
 
 > It applies to **each token individually**, across its embedding dimensions. GPT-2 uses it in three places: \`ln1\` and \`ln2\` inside every block, and the **final layer norm** \`ln_f\` before the output projection (\`lm_head\`).
@@ -1811,6 +1811,57 @@ See a [tiny numeric example](#info:rmsnorm_gradient_example_notes) of how RMSNor
    Zhang & Sennrich introduce RMSNorm, a lighter alternative (no centering) with similar quality and speed gains. A useful contrast to LN.
 
    [RMSNorm ↗](https://arxiv.org/pdf/1910.07467)
+`,
+  },
+
+  layernorm_params_notes: {
+    title: "LayerNorm Parameters",
+    md: `
+**Which LayerNorm values are shared, and which are not? $\\gamma$ and $\\beta$ are learned per LayerNorm and per dimension, and shared by every token.**
+
+## Shared by all tokens within one LayerNorm
+
+Take block 3's \`ln1\`. Every token that passes through it, from every sequence in the batch and at every position, uses **the same** $\\gamma$ and $\\beta$.
+
+## Separate for each LayerNorm
+
+GPT-2 small has 25 LayerNorms, and each has its own $\\gamma$ and $\\beta$. Nothing is shared between them:
+
+- block 1: \`ln1\` has one set, \`ln2\` another;
+- block 2: \`ln1\` has one set, \`ln2\` another;
+- …
+- block 12: \`ln1\` has one set, \`ln2\` another;
+- \`ln_f\`: one more set.
+
+## One value per dimension, not per token
+
+$\\gamma$ and $\\beta$ each have 768 entries, one per embedding dimension:
+
+$$
+\\gamma = [\\gamma_1, \\gamma_2, \\dots, \\gamma_{768}], \\qquad \\beta = [\\beta_1, \\beta_2, \\dots, \\beta_{768}]
+$$
+
+Dimension $i$ of **every** token is scaled by the same $\\gamma_i$ and shifted by the same $\\beta_i$, but different dimensions can have different values. A 3-dimensional example with $\\gamma = [2, 1, 0.5]$ and $\\beta = [0, 1, 0]$:
+
+- token A, normalized to $[1.22,\\; 0,\\; -1.22]$ → $[2.45,\\; 1,\\; -0.61]$;
+- token B, normalized to $[-1.22,\\; 1.22,\\; 0]$ → $[-2.45,\\; 2.22,\\; 0]$.
+
+Both tokens use the same $\\gamma$ and $\\beta$; within each token, every dimension gets its own scale and shift.
+
+## Contrast with $\\mu$ and $\\sigma$
+
+- **$\\mu$ and $\\sigma$** are not parameters. They are computed on the fly, **per token**, so every token has its own.
+- **$\\gamma$ and $\\beta$** are learned parameters, **shared** by all tokens, with one value per dimension.
+
+$\\gamma$ starts at all ones and $\\beta$ at all zeros. Training updates them like any other weight, and after training they are fixed.
+
+## Parameter count
+
+$$
+25 \\text{ LayerNorms} \\times (768 + 768) = 38{,}400 \\text{ parameters}
+$$
+
+That is about 0.03% of GPT-2 small's roughly 124M parameters.
 `,
   },
 
