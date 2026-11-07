@@ -925,6 +925,8 @@ The code is not \`x = attn(...)\` but \`x = x + attn(...)\`. A sublayer doesn't 
 
 Think of $x$ as a main road that runs through all 12 layers, usually called the **residual stream**. Each sublayer reads from the stream, computes an update, and adds it back.
 
+[Why residual connections matter: with vs. without](#info:residual_why_notes)
+
 **2. LayerNorm before each sublayer: \`attn(self.ln1(x))\`**
 
 The input to each sublayer first goes through a [LayerNorm](#info:layernorm), which keeps its values in a stable range. This placement is called **Pre-LN**.
@@ -977,6 +979,65 @@ Each block is a two-step cycle:
 The organizer (LayerNorm) keeps order, a running draft (residual) preserves history, and practice with partial attendance (dropout) ensures robustness. Stacking many such blocks lets tokens repeatedly share, rethink, and refine.
 `,
 },
+
+  residual_why_notes: {
+    title: "Why Residual Connections",
+    md: `
+**What would happen if a block replaced $x$ instead of adding to it? Comparing the two shows why GPT-2 needs residual connections.**
+
+Count sublayers rather than blocks: each block has 2 (attention and MLP), so GPT-2 small has **24 sublayers** in total. $x_0$ is the input to the first block: token embedding + position embedding.
+
+## 1. With residual: the original information stays intact
+
+$$
+\\begin{aligned}
+x_1 &= x_0 + \\Delta_1 \\\\[4pt]
+x_2 &= x_1 + \\Delta_2 = x_0 + \\Delta_1 + \\Delta_2 \\\\[4pt]
+&\\;\\;\\vdots \\\\[4pt]
+x_{24} &= x_0 + \\Delta_1 + \\Delta_2 + \\cdots + \\Delta_{24}
+\\end{aligned}
+$$
+
+$x_0$ is still present, **unchanged**, in $x_{24}$. Each sublayer only has to learn *what to add*; none of them is responsible for preserving what was already there.
+
+## 2. Without residual: the information is handed over 24 times
+
+$$
+\\begin{aligned}
+x_1 &= f_1(x_0) \\\\[4pt]
+x_2 &= f_2(x_1) = f_2(f_1(x_0)) \\\\[4pt]
+&\\;\\;\\vdots \\\\[4pt]
+x_{24} &= f_{24}(f_{23}(\\cdots f_2(f_1(x_0))\\cdots))
+\\end{aligned}
+$$
+
+$x_0$ is now buried inside 24 nested functions. For the last layer to know "which token was here, and at which position", **every one** of the 24 sublayers must learn to pass that information through intact. If any one of them fails, it is lost.
+
+> **Analogy.** Without residual, it is a game of telephone: 24 people pass a message along, each retelling it in their own words, and by the end it is distorted. With residual, the original document travels in a folder; each person only attaches a sticky note with additions. The last person sees the original plus every note.
+
+## 3. Attention makes the problem worse
+
+The attention output is a **weighted average of other positions' values**. Suppose position 5 attends mostly to positions 3 and 4; its attention output is then mostly their content.
+
+- **Without residual:** that output *replaces* $x$, so position 5's own identity ("which token am I?") is washed out.
+- **With residual:** the output is *added*, so position 5's own information is still there.
+
+## 4. Gradients: the same story in reverse
+
+During backprop, the gradient must travel from the last layer back to the first.
+
+- **Without residual:** the gradient is multiplied by each of the 24 sublayers' Jacobians in turn. If each one scales it by a factor even slightly away from 1, the effect compounds:
+  - $0.8^{24} \\approx 0.005$: the gradient almost vanishes, and the early layers barely learn.
+  - $1.2^{24} \\approx 80$: the gradient explodes.
+- **With residual:** each sublayer's Jacobian is $I + J_{\\text{sublayer}}$. The $I$ is the direct path from $x_0$, so the gradient can reach the first layers without being multiplied away.
+
+See [Prevents vanishing/exploding](#info:prevents_vanishing_exploding_notes) for the Jacobian picture in more detail.
+
+## Bottom line
+
+> Residual connections turn $x$ into an **add-only main road**, the residual stream. The original information is never overwritten, and gradients get a direct path back. This is a key reason 12-layer models, and today's models with 100+ layers, can be trained at all.
+`,
+  },
 
   causal_analogy_notes: {
     title: "Causal Analogy",
@@ -1630,9 +1691,24 @@ $$
 
 ## Why it's used in GPT-style models
 
+Each sublayer reads from the residual stream, which only ever accumulates: $x_{24} = x_0 + \\Delta_1 + \\cdots + \\Delta_{24}$ over the 24 sublayers ([why residual](#info:residual_why_notes)). Every token's vector has the same 768 dimensions, but its **magnitude** (norm) differs:
+
+- the embedding rows already differ in size (in real GPT-2, the norm of position 0's row is 9.88; position 1023's is 0.12);
+- each sublayer adds a different amount to each token;
+- these differences build up with depth.
+
+Why does that matter? Attention and the MLP apply the **same fixed weights** to every token in a layer. Without normalization, the size of what they receive would keep changing: from token to token within a layer, and from layer to layer as the stream grows. And size alone changes what they compute: a larger input can push attention's softmax into saturation and make GELU behave differently, even if its direction (its "meaning") is the same.
+
+[Why? Examples: attention, GELU, and a moving target](#info:layernorm_scale_notes)
+
 ### 1. Stabilizes training by controlling magnitude
 
 After $x \\rightarrow \\hat{x} = \\frac{x - \\mu}{\\sigma}$, the softmax in attention sees $\\frac{QK^\\top}{\\sqrt{d}}$ on a stable scale, reducing exploding logits and saturated softmax. The MLP nonlinearity also operates in a stable range.
+
+**Quick numbers.** $Q$ and $K$ are linear in $x$, so doubling $x$ doubles both and multiplies every dot product by 4:
+
+- scores $[2, 1, 0]$ → softmax $\\approx [0.665, 0.245, 0.090]$: attention is spread out;
+- scores $[8, 4, 0]$ → softmax $\\approx [0.982, 0.018, 0.0003]$: almost all weight on one position, and gradients through the softmax nearly vanish.
 
 [Why? A tiny numeric example](#info:stabilize_training_notes)
 
@@ -1685,6 +1761,8 @@ $$
 \\text{FFN: } y = x_1 + \\text{FFN}(\\text{LN}(x_1))
 $$
 
+In pre-norm, LN is applied to a **copy** of the stream. In \`x = x + self.attn(self.ln1(x))\`, the normalized \`self.ln1(x)\` goes into attention and is then discarded; the update is added back to the **un-normalized** $x$. Across all 12 blocks the stream itself is never normalized, only added to. That is why GPT-2 adds the final \`ln_f\`: it normalizes the stream once, right before \`lm_head\`. In post-norm, by contrast, $x$ itself is replaced by $\\text{LN}(\\dots)$ after every sublayer.
+
 > The main reason pre-norm is widely used is that the residual gives gradients an identity path: $\\frac{\\partial y}{\\partial x} = I + \\dots$ This makes deep stacks train stably.
 
 See a [tiny numeric example](#info:post_norm_gradient_example_notes) that illustrates the issue with post-norm.
@@ -1733,6 +1811,56 @@ See a [tiny numeric example](#info:rmsnorm_gradient_example_notes) of how RMSNor
    Zhang & Sennrich introduce RMSNorm, a lighter alternative (no centering) with similar quality and speed gains. A useful contrast to LN.
 
    [RMSNorm ↗](https://arxiv.org/pdf/1910.07467)
+`,
+  },
+
+  layernorm_scale_notes: {
+    title: "Why Input Scale Matters",
+    md: `
+**Why does it matter if the input's scale varies? Because attention and the MLP use fixed weights, and their behavior depends on the size of the input, not just its direction.**
+
+Within one layer, every token goes through the **same** $W_q$, $W_k$, $W_v$ and the same MLP weights. Those weights are fixed, but without LayerNorm the size of their input would not be. Below are three places where that hurts.
+
+## 1. Between tokens in the same layer: attention
+
+Take two tokens that point in the **same direction** (think "same meaning") but differ in size:
+
+- token A has norm 1;
+- token B $= 10 \\times$ A, so it has norm 10.
+
+$q$ and $k$ are linear in $x$, so scaling the inputs by 10 scales $q$ by 10 and $k$ by 10, and every dot product $q \\cdot k$ by **100**. Suppose a set of small inputs gives these scores:
+
+- scores $[0.2,\\; 0.1,\\; 0]$ → softmax $\\approx [0.367,\\; 0.332,\\; 0.301]$: attention is spread over all three positions.
+
+The same inputs, 10× larger:
+
+- scores $[20,\\; 10,\\; 0]$ → softmax $\\approx [0.99995,\\; 0.00005,\\; 0.000000002]$: all attention goes to one position, and the softmax is saturated, so its gradients nearly vanish.
+
+> Same direction, same weights, completely different attention, and the only difference is the size. One set of weights cannot be right for both norm 1 and norm 10.
+
+## 2. Between tokens in the same layer: the MLP
+
+The MLP's nonlinearity, GELU, treats small and large inputs very differently:
+
+- input $[1,\\; -1]$ → GELU → $[0.84,\\; -0.16]$: the negative coordinate still passes a little signal;
+- input $[10,\\; -10]$ → GELU → $[10.0,\\; 0.00]$: the negative coordinate is cut off entirely.
+
+Scaling the input by 10 doesn't just scale the output by 10; it changes the output's **shape**. So the size of the input changes what computation the MLP actually performs.
+
+## 3. Between layers: a moving target
+
+The residual stream keeps accumulating, so early layers tend to see small inputs and later layers larger ones. Without normalization:
+
+- each layer's weights would have to be tuned to its own typical input size;
+- during training, earlier layers keep changing, so the input size that later layers see keeps changing too. Every layer would be chasing a **moving target**.
+
+## An analogy
+
+> Attention and the MLP are like a translator whose headphones have a fixed volume. Some speakers whisper, others shout. A whisper is too quiet to make out; a shout is so loud that only the loudest word gets through. Before understanding *what* is said, the translator has to deal with *how loud* it is. LayerNorm is an **automatic volume control** in front of the headphones: whisper or shout, it always arrives at the same level, so the translator only has to focus on the content, the vector's direction and shape.
+
+## Bottom line
+
+> With LayerNorm, every sublayer's input has mean 0 and standard deviation 1, whatever the token or the layer. The fixed weights only need to learn **what** the input says, not cope with **how big** it is.
 `,
   },
 
