@@ -1740,7 +1740,31 @@ Now say the vector at position $m$ is rotated by $m \\times \\theta$, with $\\th
 
 > **After rotation, the score depends only on the distance between the two positions** ($5 - 3 = 2$), not on where they are. "The previous word" or "two words back" is scored by the same rule at position 5 and at position 1000.
 
-## 3. From 2-D to 64-D: rotate in pairs
+## 3. Why "only relative distance" is a good property
+
+**Most rules of language are relative.**
+
+- An adjective usually sits **one position before** its noun: \`black cat\`.
+- \`it\` usually refers to something **a little earlier**.
+- A verb often comes **a few positions after** its subject.
+
+These rules say "$n$ positions back", never "position 37". The same rule holds at the start of a text and at token 800.
+
+**With absolute positions, the same rule has to be learned many times.** Suppose \`black cat\` appears twice:
+
+\`\`\`text
+positions 3, 4      :  black cat
+positions 503, 504  :  black cat
+\`\`\`
+
+- **Relative distance only (RoPE):** both pairs are 1 apart, so the position part of the score is automatically the same. Learned once, it works everywhere.
+- **Absolute positions:** the model sees "3 and 4" and "503 and 504", two unrelated pairs of numbers. That they are the same relation must be learned from data.
+
+It is like teaching "look one seat ahead", which works in every seat, versus separately training "from seat 3, look at seat 2", "from seat 503, look at seat 502", and so on.
+
+> **Content still matters.** "Only relative distance" applies to the **position** part of the score. q and k are still computed from the tokens, so at the same distance 1, \`black → cat\` may score high and \`the → of\` low. What RoPE guarantees is that the same content at the same distance gets the same score wherever it appears.
+
+## 4. From 2-D to 64-D: rotate in pairs
 
 Each head's q and k have $hs = 64$ dims. RoPE groups them into **32 pairs** and treats each pair as a 2-D vector that rotates in its own plane:
 
@@ -1774,7 +1798,27 @@ $$
 
 Together they cover both near and far, like the second, minute and hour hands of a clock.
 
-## 4. Relation to sinusoidal encoding
+### q and k are rotated by the same rule
+
+Both use the **same** rule with the **same** 32 speeds $\\theta_i$. Only the angle differs, because it is set by each vector's own position:
+
+- q at position $m$: pair $i$ turns $m\\,\\theta_i$;
+- k at position $n$: pair $i$ turns $n\\,\\theta_i$.
+
+A token's own q and k sit at the same position, so they turn by the same angle.
+
+**Why the rule must be shared.** In the 2-D example ($\\theta = 10°$), q at 5 and k at 3 turn 50° and 30°, and the difference is $(5 - 3) \\times 10° = 20°$. Both angles are "position × the same $\\theta$", so the absolute positions cancel and only the distance is left.
+
+If q used 10° and k used 7° instead:
+
+- q at 5 and k at 3: $50° - 21° = 29°$;
+- q at 105 and k at 103: $1050° - 721° = 329°$.
+
+Same distance, different result: the score would no longer depend only on relative distance.
+
+> "Same rule" means the same *rotation*, not the same *vector*. q and k are still different vectors, made by \`c_attn\` with different weights; RoPE only rotates each of them according to its position afterwards.
+
+## 5. Relation to sinusoidal encoding
 
 The [sinusoidal encoding](#info:sinusoidal_pos_notes) of the original Transformer is:
 
@@ -1791,6 +1835,66 @@ The sinusoidal note shows that shifting by $k$ positions is a rotation. RoPE app
 
 > 🆕 **The base.** The 10000 in the formula is called the base (\`rope_theta\` in Hugging Face configs). Llama 2 uses 10000; Llama 3 raises it to 500000, which slows the slowest pairs further to support longer contexts.
 
+## 6. Beyond the training length
+
+What happens when the sequence is longer than the model was trained on?
+
+### GPT-2: the table has no row for it
+
+GPT-2 gets position from a lookup table, one learned row per position:
+
+\`\`\`text
+pos_emb = nn.Embedding(max_toks, n_embd)    # real GPT-2: 1024 rows × 768
+pos_emb(pos)                                 # pos = 0, 1, ..., T-1
+\`\`\`
+
+- Positions 0 to 1023 each have their own trained row.
+- Position 1024 has no row, so the lookup fails with an index error.
+
+So GPT-2 can see **at most 1024 tokens** at once. And since each row is learned separately, adding a new row would not help: it was never trained, so the model would not know what it means.
+
+### How GPT-2 generates past 1024 tokens: a sliding window
+
+During generation the context also includes the tokens the model has generated so far, so prompt + generated tokens quickly reach the limit. Generation code therefore crops the input at every step to the **most recent** 1024 tokens (nanoGPT's \`generate\` crops to \`block_size\`):
+
+\`\`\`text
+idx_cond = idx[:, -1024:]     # keep only the last 1024 tokens
+logits = model(idx_cond)
+\`\`\`
+
+This is **not** splitting the text into separate chunks. Chunking would cut it into non-overlapping pieces:
+
+\`\`\`text
+[0 ~ 1023] [1024 ~ 2047] [2048 ~ 2999]
+\`\`\`
+
+and token 1024 could not even see token 1023, right next to it. The sliding window instead moves forward by one token per step:
+
+\`\`\`text
+generating token 3000: sees [1976 ~ 2999]
+generating token 3001: sees [1977 ~ 3000]
+generating token 3002: sees [1978 ~ 3001]
+\`\`\`
+
+Consecutive windows share 1023 tokens, so nearby context is always continuous: every token sees the 1023 tokens before it.
+
+What is lost is everything **more than 1023 tokens back**. When generating token 3000, tokens 0 to 1975 are simply invisible, not remembered vaguely. If a name was mentioned at token 100, GPT-2 cannot use it at token 3000. GPT-2 has a short-term memory of about 1024 tokens.
+
+> 🆕 This limit is a major reason later models pushed context length much further; many current models support 128K tokens or more.
+
+### RoPE: any position has an angle
+
+There is no table, only the rule "pair $i$ at position $m$ turns $m\\,\\theta_i$". Position 5000 can be plugged in directly, so nothing breaks. Combined with the relative-distance property (section 3), two tokens 3 apart get the same position part of the score at position 10 and at position 5000.
+
+**But "computable" is not "works well".** A model trained on length 4096 and run on length 32,000 usually gets noticeably worse. The cause is the slowest pairs:
+
+- During training they only ever turned by small angles. Pair 31 turns about 0.55 radian over 4096 positions, less than a tenth of a full turn.
+- Further out, they reach angles **never seen in training**, and the model does not know how to read them.
+
+> 🆕 Long-context models therefore add extra techniques, such as a larger base (Llama 3 uses 500000) or interpolating/rescaling positions (Position Interpolation, YaRN). The idea in each case is to keep far-away angles within the range seen during training.
+
+In short: GPT-2 can never see more than 1024 tokens at once, and a sliding window only hides that by dropping older text; a RoPE model can take longer input, but needs adjustments to stay accurate there.
+
 ## References
 
 1. **RoFormer: Enhanced Transformer with Rotary Position Embedding (2021)**
@@ -1798,6 +1902,18 @@ The sinusoidal note shows that shifting by $k$ positions is a rotation. RoPE app
    Su et al. introduce RoPE and show that the rotated $q \\cdot k$ depends only on relative position.
 
    [RoFormer ↗](https://arxiv.org/abs/2104.09864)
+
+2. **Extending Context Window of Large Language Models via Positional Interpolation (2023)**
+
+   Chen et al. scale positions down so that longer inputs fall within the trained range of RoPE angles.
+
+   [Position Interpolation ↗](https://arxiv.org/abs/2306.15595)
+
+3. **YaRN: Efficient Context Window Extension of Large Language Models (2023)**
+
+   Peng et al. rescale RoPE frequencies differently for fast and slow pairs to extend context length.
+
+   [YaRN ↗](https://arxiv.org/abs/2309.00071)
 `,
   },
 
