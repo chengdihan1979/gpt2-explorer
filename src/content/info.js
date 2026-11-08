@@ -1141,9 +1141,43 @@ Later steps use them like this:
 
 Each committee (head) works in parallel with its own $W_q, W_k, W_v$ and looks at a different perspective (syntax, long-range cues, etc.).
 
+How each tensor is split into heads: [Query View](#info:query_view_notes) · [Key View](#info:key_view_notes) · [Value View](#info:value_view_notes)
+
+### Why 12 heads instead of one?
+
+**One head can only look one way.** In a single head, each position gets **one** set of attention weights (summing to 1 after softmax) and mixes the v's into **one** result. But a word often needs several kinds of information at once:
+
+> The tired dog that chased the cat was sleeping
+
+The position of "was" wants to know:
+
+- **Who is the subject?** dog, skipping over "that chased the cat"; this decides *was* rather than *were*.
+- **What state is the subject in?** tired.
+- **What is the previous word?** cat, which helps with local structure.
+
+With one head, these three compete for the **same** weights: more weight on dog means less on tired. The mixed result is a blur of everything, and none of the three jobs is done well.
+
+**12 heads = 12 independent attention patterns.** Each head has its own 64-dim q, k and v and does attention on its own:
+
+- head 3 finds the subject → almost all weight on dog;
+- head 7 looks at the previous word → almost all weight on cat;
+- head 9 finds modifiers → most weight on tired;
+- …
+
+Each head can **focus on one thing** without interfering with the others. Concatenating the 12 results gives "was" all of this information at once.
+
+> **Analogy:** one person reads the sentence with one question in mind. Twelve people read the same sentence, each with a different question (find the subject, check the previous word, find modifiers…), and then pool their answers.
+
+Two caveats:
+
+1. **It costs nothing extra.** $12 \\times 64 = 768$, so parameters and compute are about the same as one 768-dim head. The same budget is split twelve ways to get twelve different views.
+2. **The division of labor is learned, not assigned.** "Head 3 finds the subject" above is only an illustration. What each head ends up doing is decided by training, and some heads are hard to interpret. But clearly specialized heads do exist: in real GPT-2 small, head 7 of layer 0 mostly attends to the last few tokens, and it stops working when position information is removed.
+
 ## 3. Score who to listen to: \`att_logits = q @ k^T / sqrt(hs)\`
 
 Each person compares their query with everyone's keys to get compatibility scores; dividing by $\\sqrt{hs}$ keeps them numerically calm so softmax doesn't explode.
+
+What the $T \\times T$ score matrix looks like: [Q @ K Product](#info:q_k_product_notes)
 
 ## 4. Causal rule (no looking ahead): mask future positions to $-\\infty$
 

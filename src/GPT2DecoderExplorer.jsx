@@ -756,6 +756,29 @@ $$
 (B, T, C) \\;\\rightarrow\\; (B, T, n\\_head, hs)
 $$
 
+In GPT-2 small, $n\\_head = 12$ and $hs = 768 / 12 = 64$, so each token's 768-dim k is cut **in order** into 12 chunks of 64:
+
+\`\`\`text
+k of one token (768 dims):
+[ dims 0–63 | dims 64–127 | dims 128–191 | ... | dims 704–767 ]
+   head 0       head 1         head 2               head 11
+\`\`\`
+
+A smaller example: a 6-dim k split into 3 heads of 2 dims each.
+
+\`\`\`text
+k = [1, 2, 3, 4, 5, 6]
+
+after view(3, 2):
+[[1, 2],    <- head 0
+ [3, 4],    <- head 1
+ [5, 6]]    <- head 2
+\`\`\`
+
+> **The values don't change.** \`view\` only changes how the same numbers are indexed: no computation and no copy. The 768 numbers are the same 768 numbers, now seen as 12 rows of 64 instead of one long row.
+
+The q and v tensors are split the same way, so each token ends up with 12 small q's, 12 small k's and 12 small v's of 64 dims each. Head $i$ uses chunk $i$ of each.
+
 ## Move heads dimension next to batch
 
 \`.transpose(1, 2)\` swaps the $T$ and $n\\_head$ axes:
@@ -763,6 +786,35 @@ $$
 $$
 (B, T, n\\_head, hs) \\;\\rightarrow\\; (B, n\\_head, T, hs)
 $$
+
+In GPT-2 small this is $(B, T, 12, 64) \\rightarrow (B, 12, T, 64)$.
+
+### Same data, grouped differently
+
+An example with $T = 3$ tokens and 2 heads (each entry is one 64-dim vector):
+
+\`\`\`text
+Before (B, T, n_head, hs): grouped by token
+token 0: [head 0's k, head 1's k]
+token 1: [head 0's k, head 1's k]
+token 2: [head 0's k, head 1's k]
+
+After (B, n_head, T, hs): grouped by head
+head 0: [token 0's k, token 1's k, token 2's k]
+head 1: [token 0's k, token 1's k, token 2's k]
+\`\`\`
+
+The numbers don't change; only the grouping does, from "which heads does each token have" to "which tokens does each head have".
+
+### Why group by head?
+
+Attention runs **within each head**, **across tokens**: in head 0, every token's q is compared with every token's k. After the transpose, the last two dims are $(T, hs)$, a $T \\times 64$ matrix holding all tokens' vectors for one head, so the next step \`q @ k.transpose(-2, -1)\` is a plain matrix multiply on those two dims. PyTorch treats the leading $(B, n\\_head)$ as batch dims and does that multiply for every sequence and every head, in parallel:
+
+\`\`\`text
+(B, n_head, T, hs)
+ └──┬───┘  └─┬─┘
+ batch dims  one matrix per head
+\`\`\`
 `,
   },
 
@@ -785,6 +837,29 @@ $$
 (B, T, C) \\;\\rightarrow\\; (B, T, n\\_head, hs)
 $$
 
+In GPT-2 small, $n\\_head = 12$ and $hs = 768 / 12 = 64$, so each token's 768-dim q is cut **in order** into 12 chunks of 64:
+
+\`\`\`text
+q of one token (768 dims):
+[ dims 0–63 | dims 64–127 | dims 128–191 | ... | dims 704–767 ]
+   head 0       head 1         head 2               head 11
+\`\`\`
+
+A smaller example: a 6-dim q split into 3 heads of 2 dims each.
+
+\`\`\`text
+q = [1, 2, 3, 4, 5, 6]
+
+after view(3, 2):
+[[1, 2],    <- head 0
+ [3, 4],    <- head 1
+ [5, 6]]    <- head 2
+\`\`\`
+
+> **The values don't change.** \`view\` only changes how the same numbers are indexed: no computation and no copy. The 768 numbers are the same 768 numbers, now seen as 12 rows of 64 instead of one long row.
+
+k and v are split the same way, so each token ends up with 12 small q's, 12 small k's and 12 small v's of 64 dims each. Head $i$ uses chunk $i$ of each.
+
 ## Move heads dimension next to batch
 
 \`.transpose(1, 2)\` swaps the $T$ and $n\\_head$ axes:
@@ -792,6 +867,35 @@ $$
 $$
 (B, T, n\\_head, hs) \\;\\rightarrow\\; (B, n\\_head, T, hs)
 $$
+
+In GPT-2 small this is $(B, T, 12, 64) \\rightarrow (B, 12, T, 64)$.
+
+### Same data, grouped differently
+
+An example with $T = 3$ tokens and 2 heads (each entry is one 64-dim vector):
+
+\`\`\`text
+Before (B, T, n_head, hs): grouped by token
+token 0: [head 0's q, head 1's q]
+token 1: [head 0's q, head 1's q]
+token 2: [head 0's q, head 1's q]
+
+After (B, n_head, T, hs): grouped by head
+head 0: [token 0's q, token 1's q, token 2's q]
+head 1: [token 0's q, token 1's q, token 2's q]
+\`\`\`
+
+The numbers don't change; only the grouping does, from "which heads does each token have" to "which tokens does each head have".
+
+### Why group by head?
+
+Attention runs **within each head**, **across tokens**: in head 0, every token's q is compared with every token's k. After the transpose, the last two dims are $(T, hs)$, a $T \\times 64$ matrix holding all tokens' vectors for one head, so the next step \`q @ k.transpose(-2, -1)\` is a plain matrix multiply on those two dims. PyTorch treats the leading $(B, n\\_head)$ as batch dims and does that multiply for every sequence and every head, in parallel:
+
+\`\`\`text
+(B, n_head, T, hs)
+ └──┬───┘  └─┬─┘
+ batch dims  one matrix per head
+\`\`\`
 `,
   },
 
@@ -814,6 +918,29 @@ $$
 (B, T, C) \\;\\rightarrow\\; (B, T, n\\_head, hs)
 $$
 
+In GPT-2 small, $n\\_head = 12$ and $hs = 768 / 12 = 64$, so each token's 768-dim v is cut **in order** into 12 chunks of 64:
+
+\`\`\`text
+v of one token (768 dims):
+[ dims 0–63 | dims 64–127 | dims 128–191 | ... | dims 704–767 ]
+   head 0       head 1         head 2               head 11
+\`\`\`
+
+A smaller example: a 6-dim v split into 3 heads of 2 dims each.
+
+\`\`\`text
+v = [1, 2, 3, 4, 5, 6]
+
+after view(3, 2):
+[[1, 2],    <- head 0
+ [3, 4],    <- head 1
+ [5, 6]]    <- head 2
+\`\`\`
+
+> **The values don't change.** \`view\` only changes how the same numbers are indexed: no computation and no copy. The 768 numbers are the same 768 numbers, now seen as 12 rows of 64 instead of one long row.
+
+The q and k tensors are split the same way, so each token ends up with 12 small q's, 12 small k's and 12 small v's of 64 dims each. Head $i$ uses chunk $i$ of each.
+
 ## Move heads dimension next to batch
 
 \`.transpose(1, 2)\` swaps the $T$ and $n\\_head$ axes:
@@ -821,6 +948,35 @@ $$
 $$
 (B, T, n\\_head, hs) \\;\\rightarrow\\; (B, n\\_head, T, hs)
 $$
+
+In GPT-2 small this is $(B, T, 12, 64) \\rightarrow (B, 12, T, 64)$.
+
+### Same data, grouped differently
+
+An example with $T = 3$ tokens and 2 heads (each entry is one 64-dim vector):
+
+\`\`\`text
+Before (B, T, n_head, hs): grouped by token
+token 0: [head 0's v, head 1's v]
+token 1: [head 0's v, head 1's v]
+token 2: [head 0's v, head 1's v]
+
+After (B, n_head, T, hs): grouped by head
+head 0: [token 0's v, token 1's v, token 2's v]
+head 1: [token 0's v, token 1's v, token 2's v]
+\`\`\`
+
+The numbers don't change; only the grouping does, from "which heads does each token have" to "which tokens does each head have".
+
+### Why group by head?
+
+Attention runs **within each head**, **across tokens**: in head 0, every token's q is compared with every token's k. After the transpose, the last two dims are $(T, hs)$, a $T \\times 64$ matrix holding all tokens' vectors for one head, so the next step \`q @ k.transpose(-2, -1)\` is a plain matrix multiply on those two dims. PyTorch treats the leading $(B, n\\_head)$ as batch dims and does that multiply for every sequence and every head, in parallel:
+
+\`\`\`text
+(B, n_head, T, hs)
+ └──┬───┘  └─┬─┘
+ batch dims  one matrix per head
+\`\`\`
 `,
   },
 
@@ -841,47 +997,85 @@ $$
   Result: for each head, a $T \\times T$ matrix of raw attention scores (one row per query position, one column per key position).
 - \`* (1.0 / hs**0.5)\` multiplies by $1/\\sqrt{hs}$ (with $hs$ = head size). This is the scale from "Scaled Dot-Product Attention."
 
-## Scaled dot-product attention logits in math notation
+## What the $T \\times T$ matrix means
 
-Given
-
-$$
-q, k \\in \\mathbb{R}^{B \\times n\\_head \\times T \\times hs},
-$$
-
-the attention logits are computed as
+Entry $(i, j)$ is the dot product of token $i$'s q with token $j$'s k, scaled by $1/\\sqrt{hs}$ (why: see below): a single number saying how interested position $i$ is in position $j$:
 
 $$
-\\mathrm{att} \\;=\\; \\bigl(q \\; k^\\top\\bigr)\\;\\frac{1}{\\sqrt{hs}},
+\\mathrm{att}[i][j] = \\frac{q_i \\cdot k_j}{\\sqrt{hs}}
 $$
 
-where the transpose is over the last two axes of $k$:
+This is computed separately within each sequence and each head.
 
-$$
-k^\\top \\in \\mathbb{R}^{B \\times n\\_head \\times hs \\times T},
-\\qquad
-q\\,k^\\top \\in \\mathbb{R}^{B \\times n\\_head \\times T \\times T}.
-$$
+An example for "the river bank" ($T = 3$) in one head (made-up numbers, to show the structure):
 
-Elementwise, for batch $b$, head $h$, query position $t_q$, and key position $t_k$:
+\`\`\`text
+             k_the   k_river   k_bank
+q_the     [   1.0     0.2       0.5  ]   <- the's scores for each word
+q_river   [   0.3     1.2       0.4  ]   <- river's scores for each word
+q_bank    [   0.1     2.5       0.8  ]   <- bank's scores: river is highest
+\`\`\`
 
-$$
-\\mathrm{att}_{b,h,t_q,t_k}
-\\;=\\;
-\\frac{ q_{b,h,t_q,:}\\cdot k_{b,h,t_k,:} }{\\sqrt{hs}}.
-$$
+- **Each row:** one token as the asker, scoring every token.
+- **Each column:** one token as the one being looked up, scored by every token.
+
+> **This is the first time positions interact.** \`c_attn\`, \`split\`, \`view\` and \`transpose\` all work on each token separately. At \`q @ k.transpose(-2, -1)\`, token $i$'s q meets **other** tokens' k for the first time.
+
+Two things to note:
+
+- The matrix is still the **full** $T \\times T$, including scores for looking ahead (e.g. the → bank). The [causal mask](#info:causal_mask_notes) removes those next.
+- Each head has its own $T \\times T$ matrix, so there are 12 of them per sequence.
 
 ## Why the $1/\\sqrt{hs}$ scale
 
-If the components of $q$ and $k$ are roughly zero-mean, unit-variance, then
+In GPT-2 small $hs = 64$, so this step simply divides every score by $\\sqrt{64} = 8$.
+
+### The problem: dot products grow with dimension
+
+A score is a sum of $hs$ products:
 
 $$
-\\operatorname{Var}\\!\\bigl(q_{b,h,t_q,:}\\cdot k_{b,h,t_k,:}\\bigr) \\;\\propto\\; hs.
+q \\cdot k = q_1 k_1 + q_2 k_2 + \\cdots + q_{hs} k_{hs}
 $$
 
-> Dividing by $\\sqrt{hs}$ keeps the logits' variance approximately constant (≈1), which helps prevent the softmax from becoming overly peaky (saturation) and stabilizes gradients.
+Assume the components of $q$ and $k$ are independent, with mean 0 and variance 1 (roughly the scale after LayerNorm). Then each term $q_i k_i$ has variance 1, and the sum of $hs$ of them has variance $hs$:
 
-After this step, a causal/padding mask is applied, and then a softmax over the last dimension produces attention probabilities.
+$$
+\\operatorname{Var}(q \\cdot k) = hs, \\qquad \\operatorname{std}(q \\cdot k) = \\sqrt{hs}
+$$
+
+For $hs = 64$ the standard deviation is 8, so scores of $\\pm 8$ or $\\pm 16$ are common. The more dimensions, the bigger the scores.
+
+### Why big scores hurt: softmax saturates
+
+- scores $[8,\\; 0,\\; -8]$ → softmax $\\approx [0.9997,\\; 0.0003,\\; 0.0000]$: nearly all weight on one token;
+- scores $[1,\\; 0,\\; -1]$ → softmax $\\approx [0.665,\\; 0.245,\\; 0.090]$: weight is spread out.
+
+A saturated softmax causes two problems:
+
+- it is almost one-hot, so a position can only look at one token;
+- its gradients are close to zero, so the model can hardly adjust where it attends.
+
+### The fix: divide by $\\sqrt{hs}$
+
+Dividing by $\\sqrt{hs}$ brings the standard deviation back to 1:
+
+$$
+\\operatorname{std}\\!\\left(\\frac{q \\cdot k}{\\sqrt{hs}}\\right) = 1
+$$
+
+The $[8, 0, -8]$ above, divided by 8, becomes exactly $[1, 0, -1]$.
+
+> Whatever the head size, scores stay on a scale with standard deviation about 1, so the softmax doesn't start out saturated. This is the "scaled" in **Scaled Dot-Product Attention**. The Transformer paper gives the same reason: "for large values of $d_k$, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients" ([Vaswani et al., 2017 ↗](https://arxiv.org/abs/1706.03762), §3.2.1).
+
+### How this relates to LayerNorm
+
+- **LayerNorm** controls the scale of the **input** $x$.
+- **$1/\\sqrt{hs}$** controls the scale of the **sum** $q \\cdot k$, which grows with the number of terms even when the inputs are already normalized.
+
+The two work together; neither replaces the other.
+
+After this step, the causal mask is applied, and then a softmax over the last dimension produces attention probabilities.
 `,
   },
 
