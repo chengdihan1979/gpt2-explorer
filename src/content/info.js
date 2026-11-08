@@ -1555,6 +1555,8 @@ $$
 
 Learned absolute positional embeddings, as used in GPT-2, are not widely used in the newest state-of-the-art LLMs. These have largely moved to relative positional methods such as [RoPE (Rotary Position Embeddings) ↗](https://arxiv.org/pdf/2104.09864) or [ALiBi (Attention with Linear Biases) ↗](https://arxiv.org/pdf/2108.12409).
 
+How RoPE works, step by step: [RoPE](#info:rope_notes)
+
 ## References
 
 1. **Transformer positional encodings**
@@ -1671,6 +1673,8 @@ The matrix depends only on $k$, not on $p$. So "look $k$ positions back" is the 
 
 **RoPE** (Rotary Position Embedding), used by most LLMs today, uses the same set of frequencies $\\omega_i$. The difference is that RoPE does not add a position vector to the input. Instead, inside every attention layer it **rotates** $q$ and $k$ by angles proportional to their positions, so $q \\cdot k$ depends only on the **relative distance** between the two positions.
 
+How RoPE works, step by step: [RoPE](#info:rope_notes)
+
 ## References
 
 1. **Attention Is All You Need, §3.5**
@@ -1692,6 +1696,109 @@ The matrix depends only on $k$, not on $p$. So "look $k$ positions back" is the 
    [arXiv:2104.09864 ↗](https://arxiv.org/abs/2104.09864)
 
     `,
+  },
+
+  rope_notes: {
+    title: "RoPE (Rotary Position Embedding)",
+    md: `
+**RoPE (Rotary Position Embedding) is how most LLMs today encode position. GPT-2 does not use it (it uses a [learned position embedding](#info:embedding_pos)), but it is easiest to understand right at the $q \\cdot k$ step.**
+
+## 1. Where the position information goes
+
+**GPT-2: added to $x$ once, at the start.**
+
+\`\`\`text
+x = token embedding + position embedding    <- position mixed into x before block 1
+q = x · W_qᵀ,   k = x · W_kᵀ
+score = q · k
+\`\`\`
+
+**RoPE: $x$ is left alone; $q$ and $k$ are rotated just before scoring.**
+
+\`\`\`text
+x = token embedding                          <- no position embedding
+q = x · W_qᵀ,   k = x · W_kᵀ
+q' = rotate q by an angle set by its position
+k' = rotate k by an angle set by its position
+score = q' · k'
+\`\`\`
+
+Three differences:
+
+- RoPE **adds nothing to $x$**: the residual stream carries no position vector.
+- The rotation happens **inside every attention layer**, right before $q \\cdot k$, not once at the input.
+- Only **q and k** are rotated, never **v**. Position affects *who to attend to*, not *what content is taken*.
+
+## 2. Why rotation encodes position: the 2-D picture
+
+Think of $q$ and $k$ as two arrows in a plane. Their dot product depends on their lengths and the **angle between them**.
+
+Now say the vector at position $m$ is rotated by $m \\times \\theta$, with $\\theta = 10°$:
+
+- q at position 5 turns 50°, k at position 3 turns 30°: the angle between them changes by $50° - 30° = 20°$.
+- Shift both far along, q at 105 and k at 103: q turns 1050°, k turns 1030°, and the change is still $20°$.
+
+> **After rotation, the score depends only on the distance between the two positions** ($5 - 3 = 2$), not on where they are. "The previous word" or "two words back" is scored by the same rule at position 5 and at position 1000.
+
+## 3. From 2-D to 64-D: rotate in pairs
+
+Each head's q and k have $hs = 64$ dims. RoPE groups them into **32 pairs** and treats each pair as a 2-D vector that rotates in its own plane:
+
+\`\`\`text
+q (64 dims) = [ (q0, q1), (q2, q3), (q4, q5), ..., (q62, q63) ]
+                 pair 0    pair 1    pair 2         pair 31
+\`\`\`
+
+At position $m$, pair $i$ is rotated by the angle $m\\,\\theta_i$, using the ordinary 2-D rotation:
+
+$$
+(a,\\, b) \\;\\rightarrow\\; \\bigl(a\\cos(m\\theta_i) - b\\sin(m\\theta_i),\\;\\; a\\sin(m\\theta_i) + b\\cos(m\\theta_i)\\bigr)
+$$
+
+Each pair has its **own speed**:
+
+$$
+\\theta_i = \\frac{1}{10000^{2i/64}}, \\qquad i = 0, 1, \\dots, 31
+$$
+
+- **Pair 0:** $\\theta = 1$ radian per position, about 57.3°. One full turn every $2\\pi \\approx 6.3$ positions.
+- **Pair 16:** $\\theta = 0.01$ radian, about 0.57°. One full turn every ≈ 628 positions.
+- **Pair 31:** $\\theta \\approx 0.00013$ radian. One full turn every ≈ 47,000 positions.
+
+> **Radians.** Angles here are in radians, as in \`torch.sin\` / \`torch.cos\`. A full turn is $360° = 2\\pi \\approx 6.283$ radians, so 1 radian $= 180°/\\pi \\approx 57.3°$: the angle subtended by an arc as long as the radius.
+
+**Why mix fast and slow pairs?**
+
+- **Fast pairs** turn a lot between neighbors, so they can tell "adjacent" from "two apart". But they wrap around after a few positions, so on their own they can't tell far distances apart.
+- **Slow pairs** barely change between neighbors, but their angles spread out over long distances, so they can tell "100 apart" from "1000 apart".
+
+Together they cover both near and far, like the second, minute and hour hands of a clock.
+
+## 4. Relation to sinusoidal encoding
+
+The [sinusoidal encoding](#info:sinusoidal_pos_notes) of the original Transformer is:
+
+$$
+PE(pos, 2i) = \\sin\\!\\left(\\frac{pos}{10000^{2i/d}}\\right), \\qquad PE(pos, 2i+1) = \\cos\\!\\left(\\frac{pos}{10000^{2i/d}}\\right)
+$$
+
+The frequencies are **exactly the same**, $1/10000^{2i/d}$, also in sin/cos pairs. The difference is how they are used:
+
+- **Sinusoidal:** the sin/cos values are **added** to $x$, once at the input, and get mixed into the residual stream.
+- **RoPE:** the sin/cos values **rotate** (multiply) $q$ and $k$, in every attention layer, and touch nothing else.
+
+The sinusoidal note shows that shifting by $k$ positions is a rotation. RoPE applies that rotation **directly to q and k**, so $q \\cdot k$ automatically depends only on relative distance.
+
+> 🆕 **The base.** The 10000 in the formula is called the base (\`rope_theta\` in Hugging Face configs). Llama 2 uses 10000; Llama 3 raises it to 500000, which slows the slowest pairs further to support longer contexts.
+
+## References
+
+1. **RoFormer: Enhanced Transformer with Rotary Position Embedding (2021)**
+
+   Su et al. introduce RoPE and show that the rotated $q \\cdot k$ depends only on relative position.
+
+   [RoFormer ↗](https://arxiv.org/abs/2104.09864)
+`,
   },
 
   positional_embeddings_example_notes: {

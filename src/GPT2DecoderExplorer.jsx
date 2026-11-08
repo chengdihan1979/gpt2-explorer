@@ -1026,6 +1026,8 @@ Two things to note:
 - The matrix is still the **full** $T \\times T$, including scores for looking ahead (e.g. the → bank). The [causal mask](#info:causal_mask_notes) removes those next.
 - Each head has its own $T \\times T$ matrix, so there are 12 of them per sequence.
 
+> 🆕 Most LLMs today don't add position embeddings to $x$. Instead they rotate q and k by position right before this step, so each score depends only on the distance between $i$ and $j$: [RoPE](#info:rope_notes).
+
 ## Why the $1/\\sqrt{hs}$ scale
 
 In GPT-2 small $hs = 64$, so this step simply divides every score by $\\sqrt{64} = 8$.
