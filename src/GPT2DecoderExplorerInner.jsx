@@ -36,7 +36,7 @@ function Legend() {
 }
 
 export default function GPT2DecoderExplorerInner() {
-  const { close } = useInfo();
+  const { close, lang, setLang } = useInfo();
   const [selectedId, setSelectedId] = useState("token_embed");
 
   const handleSelect = (id) => {
@@ -74,6 +74,25 @@ export default function GPT2DecoderExplorerInner() {
               </p>
             </div>
           </div>
+          <div className="flex shrink-0 items-center gap-3">
+          <div
+            role="group"
+            aria-label="Notes language"
+            title="Notes language"
+            className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 text-xs font-medium shadow-sm"
+          >
+            {[["en", "EN"], ["zh", "中文"]].map(([code, label]) => (
+              <button
+                key={code}
+                type="button"
+                onClick={() => setLang(code)}
+                aria-pressed={lang === code}
+                className={`rounded-md px-2.5 py-1 ${lang === code ? "bg-indigo-600 text-white" : "text-slate-600 hover:text-slate-900"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <a
             href={REPO_URL}
             target="_blank"
@@ -85,6 +104,7 @@ export default function GPT2DecoderExplorerInner() {
             </svg>
             <span className="hidden sm:inline">GitHub</span>
           </a>
+          </div>
         </div>
       </header>
 

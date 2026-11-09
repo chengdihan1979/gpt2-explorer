@@ -1153,89 +1153,207 @@ Docs: [unsqueeze ↗](https://docs.pytorch.org/docs/stable/generated/torch.unsqu
   causal_mask_notes: {
     title: "Causal Mask",
     md: `
-**That line applies the causal (look-back only) mask to the attention logits, so each token can attend only to itself and earlier tokens.**
+**This line applies the causal (look-back only) mask to the attention scores, so each token can attend only to itself and earlier tokens.**
 
 \`\`\`python
 att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))
 \`\`\`
 
-- \`att\`: $(B,\\ n\\_head,\\ T,\\ T)$
-- \`self.mask\`: $(1,\\ 1,\\ 1024,\\ 1024)$, lower-triangular 1s, else 0s
+- \`att\`: $(B,\\ n\\_head,\\ T,\\ T)$, the scaled scores $q\\,k^\\top/\\sqrt{hs}$ from the [previous step](#info:q_k_product_notes)
+- \`self.mask\`: $(1,\\ 1,\\ 1024,\\ 1024)$, 1s on and below the diagonal, 0s above
 
-## What's happening step by step
+## Why a mask is needed
+
+The score matrix from $q\\,k^\\top$ is the **full** $T \\times T$: every position has scored every other position, **including the ones after it**. With the 4 tokens \`I love black cats\` (rows = the query, "who is looking"; columns = the key, "who is looked at"):
+
+\`\`\`text
+            I     love   black   cats
+I        [  ✓      ✓       ✓      ✓  ]
+love     [  ✓      ✓       ✓      ✓  ]
+black    [  ✓      ✓       ✓      ✓  ]
+cats     [  ✓      ✓       ✓      ✓  ]
+\`\`\`
+
+Look at the \`love\` row. Its output is used to predict the next token, \`black\`, yet it has already scored \`black\`. That is **peeking at the answer**.
+
+- **Training:** the whole sequence is processed in parallel, and every position predicts its next token. If \`love\` could see \`black\`, predicting \`black\` would just be copying, and the model would learn nothing useful.
+- **Inference:** text is generated left to right, so the later tokens **do not exist yet**. Hiding the future during training makes training match how the model is used.
+
+The fix: before softmax, block everything above the diagonal, so each row sees only **itself and earlier positions**.
+
+## Step by step
 
 ### 1. What \`self.mask\` is
 
-Earlier we had:
+It is built once, in \`__init__\`:
 
 \`\`\`python
 self.register_buffer("mask", torch.tril(torch.ones(1024, 1024)).unsqueeze(0).unsqueeze(0))
 \`\`\`
 
-- [torch.tril](#info:torch_tril_notes)([torch.ones](#info:torch_ones_notes)(1024, 1024)) makes a **lower-triangular** matrix of size $1024 \\times 1024$ with $1$s on/under the main diagonal and $0$s above it (future positions).
-- [unsqueeze(0)](#info:unsqueeze_notes)\`.unsqueeze(0)\` turns it into shape $(1,\\ 1,\\ 1024,\\ 1024)$ so it can **broadcast** across batch and heads.
-- It is stored as a **buffer**, so it moves with the module to GPU/CPU and is saved, but not trained.
+- [torch.ones](#info:torch_ones_notes)(1024, 1024) is all 1s; [torch.tril](#info:torch_tril_notes) keeps the **lower triangle** (on and below the diagonal) and sets everything above it to 0. At size 4:
 
-### 2. Slicing to the current length
+  \`\`\`text
+  torch.tril(torch.ones(4, 4))
+  [[1, 0, 0, 0],
+   [1, 1, 0, 0],
+   [1, 1, 1, 0],
+   [1, 1, 1, 1]]
+  \`\`\`
 
-\`self.mask[:, :, :T, :T]\` $\\to (1,\\ 1,\\ T,\\ T)$, matching the current sequence length.
+  Row $t$ has 1s in columns $0 \\dots t$: position $t$ may look at itself and everything before it.
+- [unsqueeze(0)](#info:unsqueeze_notes)\`.unsqueeze(0)\` adds two leading dims, giving $(1,\\ 1,\\ 1024,\\ 1024)$, so it can **broadcast** over batch and heads (how this works: see **Broadcasting** at the end of step 4 below).
+- It is a [buffer](#info:register_buffer_notes): it moves with the module to GPU/CPU and is saved with it, but it is not a parameter and is never trained.
 
-### 3. Build a boolean mask of disallowed links
+### 2. Slice to the current length
 
-\`== 0\` converts the $0/1$ matrix into a boolean mask: **True** where the entry is $0$ (i.e., future positions), **False** otherwise.
+The buffer is sized for the maximum length, 1024, but the current sequence has $T$ tokens:
 
-### 4. \`masked_fill\` on the logits
+\`\`\`text
+self.mask[:, :, :T, :T]   →   (1, 1, T, T)
+\`\`\`
 
-- \`att\` has shape $(B,\\ n\\_head,\\ T,\\ T)$ and holds **raw attention logits** $\\bigl(q\\,k^\\top/\\sqrt{hs}\\bigr)$.
-- \`.masked_fill(bool_mask, -inf)\` writes $-\\infty$ into \`att\` **where the mask is True** (i.e., where attending would look **ahead**).
-- Broadcasting lets a $(1,\\ 1,\\ T,\\ T)$ mask apply to all batches and heads.
+This takes the top-left $T \\times T$ corner. The top-left corner of a lower-triangular matrix is itself lower-triangular, so for $T = 4$ it is exactly the $4 \\times 4$ matrix above.
 
-### 5. Why \`-inf\`?
+### 3. Turn it into "which links are forbidden"
 
-Next you do \`att = F.softmax(att, dim=-1)\`. Since $\\exp(-\\infty) = 0$, masked positions get **exactly zero probability**, and the softmax **renormalizes only over allowed (past/self) positions**.
+\`== 0\` turns the 0/1 matrix into booleans: **True** where the entry is 0, i.e. the future positions to block.
 
-> If you zeroed *after* softmax, probabilities would still be influenced by future tokens during normalization. **Masking before softmax** fixes that.
+\`\`\`text
+mask == 0
+[[False, True,  True,  True ],
+ [False, False, True,  True ],
+ [False, False, False, True ],
+ [False, False, False, False]]
+\`\`\`
 
-## Intuition (per token row)
+### 4. \`masked_fill\`: write \`-inf\` where it is True
 
-For query position $t$, this sets
+\`att.masked_fill(bool_mask, -inf)\` writes $-\\infty$ into \`att\` wherever the mask is True, and leaves every other score unchanged. One head's scores for \`I love black cats\`, before and after:
+
+\`\`\`text
+before                                    after
+          I     love  black  cats                   I     love  black  cats
+I      [ 2.1,   0.3,  1.1,   0.6 ]      I      [ 2.1,   -inf, -inf,  -inf ]
+love   [ 0.5,   1.3,  1.7,   2.5 ]      love   [ 0.5,   1.3,  -inf,  -inf ]
+black  [ 0.2,   0.9,  1.7,   1.4 ]      black  [ 0.2,   0.9,  1.7,   -inf ]
+cats   [ 0.1,   0.4,  2.5,   0.8 ]      cats   [ 0.1,   0.4,  2.5,   0.8  ]
+\`\`\`
+
+Now \`I\` sees only itself, \`love\` sees \`I\` and itself, and \`cats\` sees all four. In general, for query position $t$:
 
 $$
-\\text{att}_{t,j} = -\\infty \\quad \\text{for } j > t,
+\\text{att}_{t,j} = -\\infty \\quad \\text{for } j > t
 $$
 
-so after softmax, the row can only distribute probability over keys $j \\le t$ (itself and earlier tokens). That's exactly **causal self-attention**.
+**Broadcasting.** The mask is $(1,\\ 1,\\ T,\\ T)$ while \`att\` is $(B,\\ n\\_head,\\ T,\\ T)$. The size-1 dims are stretched, so the **same** triangle is applied to every sequence in the batch and every head. That is correct: "don't look ahead" depends only on positions, not on the content or the head.
+
+### 5. Why \`-inf\`, not \`0\`?
+
+The next line is \`att = F.softmax(att, dim=-1)\`. Softmax raises $e$ to each score and divides by the row's sum:
+
+$$
+\\text{softmax}(s)_i = \\frac{e^{s_i}}{\\sum_j e^{s_j}}
+$$
+
+Take the \`love\` row from step 4.
+
+**Filling \`-inf\`: future weights become exactly 0.** Since $e^{-\\infty} = 0$:
+
+\`\`\`text
+scores:   [ 0.5,   1.3,   -inf,  -inf ]
+e^s:      [ 1.65,  3.67,  0,     0    ]    sum 5.32
+softmax:  [ 0.31,  0.69,  0,     0    ]
+\`\`\`
+
+The future gets no weight, and the allowed positions are **renormalized automatically**: they still sum to 1.
+
+**Filling \`0\` would not work.** A score of 0 does not mean "ignore"; it is an ordinary score, and $e^0 = 1$:
+
+\`\`\`text
+scores:   [ 0.5,   1.3,   0,     0     ]
+softmax:  [ 0.225, 0.501, 0.137, 0.137 ]
+\`\`\`
+
+The two future positions still receive 27% of the attention: the model is still peeking.
+
+**Why not zero the weights after softmax?** Then the row no longer sums to 1. With the unmasked \`love\` row \`[0.5, 1.3, 1.7, 2.5]\`:
+
+\`\`\`text
+softmax (no mask):  [ 0.072, 0.16, 0.238, 0.53 ]
+zero the future:    [ 0.072, 0.16, 0,     0    ]    sum only 0.23
+\`\`\`
+
+It would need a second division to fix the sum. Filling \`-inf\` **before** softmax gives "future = 0" and "row sums to 1" in one step.
+
+> In one sentence: $e^{-\\infty} = 0$, so softmax treats a \`-inf\` score as if that position did not exist.
 
 ## Notes
 
-- This mask enforces **causality**; it does **not** handle padding on its own. If you have padded tokens, you typically *also* add a padding mask (another \`masked_fill\`) so padding positions get $-\\infty$ too.
-- Using a big negative constant (e.g. $-10^9$) is common; $-\\infty$ is cleaner and numerically robust in PyTorch softmax.
+- This mask enforces **causality** only; it does not handle padding. If a batch contains padded tokens, a padding mask is usually applied too (another \`masked_fill\`), so padding positions also get $-\\infty$.
+- Some code uses a large negative constant (e.g. $-10^9$) instead of $-\\infty$; after softmax its weight is also effectively 0.
 `,
   },
 
   register_buffer_notes: {
     title: "register_buffer",
     md: `
-**Registers a tensor as a *buffer* on a Module: it moves with the module (\`to\`/\`cuda\`/\`cpu\`), is saved/restored with \`state_dict\` (by default), and is *not* a learnable parameter.**
+**A buffer is a tensor that belongs to the model but is not trained.** It moves with the model (\`.to()\`, \`.cuda()\`, \`.cpu()\`) and is saved and loaded with it (\`state_dict\`), but it is not a parameter, so the optimizer never updates it.
 
-## Signature
+## Parameter vs plain attribute vs buffer
+
+There are three ways to keep a tensor on an \`nn.Module\`. Take the causal mask:
+
+\`\`\`python
+# 1. parameter
+self.mask = nn.Parameter(torch.tril(torch.ones(1024, 1024)))
+
+# 2. plain attribute
+self.mask = torch.tril(torch.ones(1024, 1024))
+
+# 3. buffer
+self.register_buffer("mask", torch.tril(torch.ones(1024, 1024)))
+\`\`\`
+
+They differ in three ways:
+
+|  | trained? | moves with \`.to("cuda")\`? | saved in \`state_dict\`? |
+| --- | :---: | :---: | :---: |
+| Parameter | yes | yes | yes |
+| plain attribute | no | no | no |
+| buffer | **no** | **yes** | **yes** |
+
+> **Analogy.** The model is a toolbox. Parameters are knives to be sharpened (training sharpens them). A buffer is the ruler in the box: it never needs sharpening, but it moves house with the box. A plain attribute is a sticky note on the old wall: it gets left behind.
+
+## Why the causal mask is a buffer
+
+- **Not a Parameter:** the mask is a fixed rule; "don't look ahead" should not be learned. As a Parameter, the optimizer would update it every step, and a 0 above the diagonal could drift to 0.03: the model would start peeking.
+- **Not a plain attribute:** \`model.to("cuda")\` moves only Parameters and buffers. A plain attribute stays on the CPU, so in forward \`att\` (on GPU) and \`mask\` (on CPU) would meet and raise a device mismatch error.
+- **A buffer fits exactly:** never trained, but moved to the GPU and saved/loaded together with the model.
+
+## Using \`register_buffer\`
 
 \`\`\`python
 Module.register_buffer(name, tensor, persistent=True)
 \`\`\`
 
-## Properties
+- **name:** the buffer becomes an attribute with this name. After \`self.register_buffer("mask", ...)\`, forward uses it simply as \`self.mask\`.
+- **persistent:** with the default \`True\`, the buffer is saved in \`state_dict\`. With \`False\`, it still moves with the model but is not saved; useful for things that are cheap to rebuild.
+- **Listing:** buffers appear in \`model.buffers()\`, not in \`model.parameters()\`. Since the optimizer is built from \`model.parameters()\`, it never sees them.
 
-- **Not a Parameter:** excluded from \`parameters()\` and optimizer updates.
-- **Persistence:** included in \`state_dict\` if \`persistent=True\`; set \`persistent=False\` to exclude.
-- **Device/Dtype:** a buffer follows \`module.to()\`/\`cuda()\`/\`cpu()\` just like parameters.
-- **Use cases:** masks (e.g., causal masks), running statistics, indices, constants tied to the model.
+"Not trained" means not updated by gradients. A buffer can still change if code writes to it: BatchNorm keeps its \`running_mean\` and \`running_var\` as buffers and updates them during forward. The causal mask never changes.
 
-## Example
+**Typical uses:** masks (like the causal mask), running statistics, fixed index tables, and other constants tied to the model.
+
+## In GPT-2
 
 \`\`\`python
 self.register_buffer("mask", torch.tril(torch.ones(1024, 1024)).unsqueeze(0).unsqueeze(0))
 \`\`\`
+
+This stores the $(1,\\ 1,\\ 1024,\\ 1024)$ lower-triangular mask once, in \`__init__\`. Every forward slices it to the current length; see [Causal Mask](#info:causal_mask_notes).
+
+> 🆕 Later implementations (e.g. newer nanoGPT) mostly call \`F.scaled_dot_product_attention(..., is_causal=True)\`, which applies the causal mask inside the kernel, so no 1024 × 1024 mask buffer is stored.
 
 Docs: [register_buffer ↗](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_buffer)
 `,

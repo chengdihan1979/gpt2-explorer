@@ -1,11 +1,23 @@
 import React, { useState, useRef, useLayoutEffect, useCallback, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
+import remarkGfm from "remark-gfm";
 import rehypeKatex from "rehype-katex";
 import rehypeSlug from "rehype-slug";
 import "katex/dist/katex.min.css";
 import { useInfo } from "../context/InfoContext";
 import { INFO } from "../content/info";
+import { INFO_ZH } from "../content/info_zh";
+
+// The note to show in the chosen language; a note with no Chinese version falls back to English.
+function getNote(id, lang) {
+  const en = INFO[id];
+  const zh = lang === "zh" ? INFO_ZH[id] : null;
+  return { title: zh?.title ?? en?.title, md: zh?.md ?? en?.md, missingZh: lang === "zh" && !zh };
+}
+
+// GFM adds tables; singleTilde is off so a lone "~" (as in "~10×") never becomes strikethrough.
+const REMARK_PLUGINS = [remarkMath, [remarkGfm, { singleTilde: false }]];
 
 // Inline code written as `⟦Hello⟧⟦,⟧⟦⎵world⟧` renders as a row of boxed token chunks.
 function NoteCode({ children, className, ...props }) {
@@ -27,7 +39,7 @@ function NoteCode({ children, className, ...props }) {
 }
 
 export default function InfoPanel() {
-  const { active, previous, close, open, back } = useInfo();
+  const { active, previous, close, open, back, lang } = useInfo();
   const bodyRef = useRef(null);
   const [hoverInfoId, setHoverInfoId] = useState(null);
   const [hoverPos, setHoverPos] = useState({ top: 0, left: 0 });
@@ -91,6 +103,9 @@ export default function InfoPanel() {
 
   if (!active) return null;
 
+  const note = getNote(active, lang);
+  const prevTitle = previous ? getNote(previous, lang).title : null;
+
   return (
     <aside
       className="notes-drawer fixed inset-x-0 bottom-0 top-16 z-40 flex flex-col border-r border-slate-200 bg-white shadow-2xl lg:right-auto lg:w-1/2"
@@ -102,15 +117,15 @@ export default function InfoPanel() {
             type="button"
             onClick={back}
             className="inline-flex max-w-[45%] items-center gap-1 truncate rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800"
-            title={`Back to ${INFO[previous]?.title ?? "previous note"}`}
+            title={`Back to ${prevTitle ?? "previous note"}`}
           >
             <span aria-hidden="true">←</span>
-            <span className="truncate">{INFO[previous]?.title ?? "Back"}</span>
+            <span className="truncate">{prevTitle ?? "Back"}</span>
           </button>
         )}
         <div className="min-w-0 flex-1">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-600">Notes</p>
-          <h2 className="truncate text-base font-semibold text-slate-900">{INFO[active]?.title ?? "Info"}</h2>
+          <h2 className="truncate text-base font-semibold text-slate-900">{note.title ?? "Info"}</h2>
         </div>
         <button
           type="button"
@@ -124,9 +139,14 @@ export default function InfoPanel() {
           </svg>
         </button>
       </header>
-      <div ref={bodyRef} className="note-body prose prose-slate prose-sm max-w-none flex-1 overflow-y-auto px-6 py-5">
+      <div ref={bodyRef} lang={lang === "zh" && !note.missingZh ? "zh-CN" : "en"} className="note-body prose prose-slate prose-sm max-w-none flex-1 overflow-y-auto px-6 py-5">
+      {note.missingZh && (
+        <p className="not-prose mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          这篇笔记的中文版暂缺，下面显示英文原文。
+        </p>
+      )}
       <ReactMarkdown
-        remarkPlugins={[remarkMath]}
+        remarkPlugins={REMARK_PLUGINS}
         rehypePlugins={[[rehypeKatex, { trust: (ctx) => ctx.command === "\\href", strict: "ignore", fleqn: true }], rehypeSlug]}
         components={{
           code: NoteCode,
@@ -181,7 +201,7 @@ export default function InfoPanel() {
           },
         }}
       >
-        {INFO[active]?.md || "_No content_"}
+        {note.md || "_No content_"}
       </ReactMarkdown>
       {hoverInfoId && INFO[hoverInfoId] && (
         <div
@@ -191,10 +211,10 @@ export default function InfoPanel() {
           onClick={(e) => { e.stopPropagation(); }}
         >
           <ReactMarkdown
-            remarkPlugins={[remarkMath]}
+            remarkPlugins={REMARK_PLUGINS}
             rehypePlugins={[[rehypeKatex, { trust: (ctx) => ctx.command === "\\href", strict: "ignore", fleqn: true }], rehypeSlug]}
           >
-            {INFO[hoverInfoId]?.md || "_No content_"}
+            {getNote(hoverInfoId, lang).md || "_No content_"}
           </ReactMarkdown>
         </div>
       )}

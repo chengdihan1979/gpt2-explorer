@@ -183,6 +183,17 @@ body {
 .note-body pre {
   border-radius: 10px;
 }
+/* GFM tables: scroll sideways inside the note on narrow screens instead of widening it. */
+.note-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0.75em 0;
+}
+.note-body th,
+.note-body td {
+  white-space: nowrap;
+}
 /* The typography plugin wraps inline code in literal backticks; show a subtle chip instead. */
 .note-body :not(pre) > code::before,
 .note-body :not(pre) > code::after,
