@@ -95,6 +95,17 @@ export default function InfoPanel() {
     return () => window.removeEventListener("keydown", onKey);
   }, [active, hoverInfoId, close]);
 
+  // A click outside the popup closes it (a click on its own link toggles it via the link's handler).
+  useEffect(() => {
+    if (!hoverInfoId) return;
+    const onDown = (e) => {
+      if (popupRef.current?.contains(e.target) || e.target.closest?.('a[href^="#hover:"]')) return;
+      setHoverInfoId(null);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [hoverInfoId]);
+
   // Each new note starts at the top, and any hover popup from the previous note goes away.
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = 0;
@@ -207,7 +218,7 @@ export default function InfoPanel() {
         <div
           ref={popupRef}
           className="note-popup prose prose-slate prose-sm fixed z-50 overflow-auto rounded-xl border border-slate-200 bg-white p-4 shadow-xl"
-          style={{ top: hoverPos.top, left: hoverPos.left, maxWidth: 720, maxHeight: '70vh', minWidth: 360 }}
+          style={{ top: hoverPos.top, left: hoverPos.left, maxWidth: 'min(720px, calc(100vw - 16px))', maxHeight: '70vh', minWidth: 'min(360px, calc(100vw - 16px))' }}
           onClick={(e) => { e.stopPropagation(); }}
         >
           <ReactMarkdown

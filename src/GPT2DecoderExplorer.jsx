@@ -1298,7 +1298,7 @@ It would need a second division to fix the sum. Filling \`-inf\` **before** soft
   register_buffer_notes: {
     title: "register_buffer",
     md: `
-**A buffer is a tensor that belongs to the model but is not trained.** It moves with the model (\`.to()\`, \`.cuda()\`, \`.cpu()\`) and is saved and loaded with it (\`state_dict\`), but it is not a parameter, so the optimizer never updates it.
+**A buffer is a tensor that belongs to the model but is not trained.** It moves with the model (\`.to()\`, \`.cuda()\`, \`.cpu()\`) and is saved and loaded with it ([\`state_dict\`](#info:state_dict_notes)), but it is not a parameter, so the optimizer never updates it.
 
 ## Parameter vs plain attribute vs buffer
 
@@ -1356,6 +1356,177 @@ This stores the $(1,\\ 1,\\ 1024,\\ 1024)$ lower-triangular mask once, in \`__in
 > 🆕 Later implementations (e.g. newer nanoGPT) mostly call \`F.scaled_dot_product_attention(..., is_causal=True)\`, which applies the causal mask inside the kernel, so no 1024 × 1024 mask buffer is stored.
 
 Docs: [register_buffer ↗](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_buffer)
+`,
+  },
+
+  state_dict_notes: {
+    title: "state_dict",
+    md: `
+**\`state_dict\` is a dictionary holding a model's parameters and persistent buffers: the key is a name, the value is the tensor.** It is the model's save file. It is a PyTorch concept: \`nn.Module\` and optimizers both have a \`state_dict()\` method.
+
+## What it looks like
+
+For the GPT2 code on this site, \`model.state_dict()\` looks roughly like this (shapes for real GPT-2):
+
+\`\`\`text
+"tok_emb.weight"                 → (50257, 768)
+"pos_emb.weight"                 → (1024, 768)
+"blocks.0.ln1.weight"            → (768,)              # γ
+"blocks.0.ln1.bias"              → (768,)              # β
+"blocks.0.attn.mask"             → (1, 1, 1024, 1024)  # buffer
+"blocks.0.attn.c_attn.weight"    → (2304, 768)
+"blocks.0.attn.c_attn.bias"      → (2304,)
+...
+"blocks.11.mlp. ..."
+"ln_f.weight"                    → (768,)
+"ln_f.bias"                      → (768,)
+"lm_head.weight"                 → (50257, 768)
+\`\`\`
+
+Each key is the attribute path in the code: \`self.blocks[0].attn.c_attn.weight\` becomes \`"blocks.0.attn.c_attn.weight"\`.
+
+| What | In \`state_dict\`? |
+| --- | :---: |
+| Parameters (W, b, γ, β, embedding tables) | yes |
+| Persistent [buffers](#info:register_buffer_notes) (e.g. \`mask\`) | yes |
+| Plain attributes | no |
+| Activations computed during forward | no |
+| Modules without tensors (e.g. \`nn.Dropout\`) | no entry |
+
+> With [weight tying](#info:weight_tying_notes), \`tok_emb.weight\` and \`lm_head.weight\` both appear as keys, but they point to the **same** tensor.
+
+### Does the mask need to be saved?
+
+For the causal mask, **not really**:
+
+- It is always rebuilt by \`torch.tril(torch.ones(1024, 1024))\` in \`__init__\`, with the same result every time.
+- Loading starts with \`model = GPT2(...)\`, which already builds the mask; the saved copy just overwrites it with identical values.
+
+It also takes space:
+
+\`\`\`text
+one mask:  1024 × 1024 × 4 bytes (float32) = 4 MB
+12 blocks: 12 × 4 MB = 48 MB
+\`\`\`
+
+That is close to 10% of a ~500 MB file spent on 12 identical triangles.
+
+**Why is it saved by default, then?** \`register_buffer\` is a general tool, and \`persistent=True\` is the right default for buffers that **cannot** be rebuilt, such as BatchNorm's \`running_mean\`, a statistic gathered during training. For the mask, a better choice is:
+
+\`\`\`python
+self.register_buffer("mask", torch.tril(...), persistent=False)
+\`\`\`
+
+It still moves to the GPU with the model, but is not written to the file. The code on this site uses the default, so its mask is saved; some GPT-2 implementations also skip these mask keys when loading.
+
+## Saving and loading
+
+A \`state_dict\` is **not a file**: it is a Python dictionary in memory. It becomes a file only when written to disk with \`torch.save\`:
+
+\`\`\`python
+sd = model.state_dict()          # step 1: a dict in memory; no file yet
+torch.save(sd, "gpt2.pt")        # step 2: write the dict to the file gpt2.pt
+\`\`\`
+
+Without step 2, the dictionary is gone when the program exits. \`torch.save\` serializes it with Python's pickle into a zip-format file; the name and extension are up to you (\`.pt\` and \`.pth\` are common).
+
+Loading goes the other way:
+
+\`\`\`python
+model = GPT2(...)                # build the same structure first (randomly initialized)
+sd = torch.load("gpt2.pt")       # file → dict in memory
+model.load_state_dict(sd)        # dict → values filled into the model
+\`\`\`
+
+\`state_dict\` stores **values only, not the structure**. To load, the code must first [build a model with the same structure](#hover:state_dict_build_notes); the values are then matched **by name**. If a name or a shape does not match, \`load_state_dict\` raises an error.
+
+> **Analogy.** The model code is a building's **blueprint**; the \`state_dict\` is the **inventory** of what goes in each room. When moving, you take only the inventory: at the new place you build the same building from the blueprint, then put everything back room by room according to the inventory.
+
+### One file or several
+
+- GPT-2 small has 124M parameters; in float32 that is about 500 MB, so one file is enough.
+- 🆕 Models of tens of GB usually **split** the dictionary into several shards, one file each, plus an index file recording which shard holds each key. A typical Hugging Face layout:
+
+\`\`\`text
+model-00001-of-00004.safetensors
+model-00002-of-00004.safetensors
+model-00003-of-00004.safetensors
+model-00004-of-00004.safetensors
+model.safetensors.index.json      ← which file each key is in
+\`\`\`
+
+### 🆕 Why \`.safetensors\` is now common
+
+A \`.pt\` file is stored with pickle, and unpickling **can execute arbitrary code**. Loading an untrusted \`.pt\` file downloaded from the internet is therefore a security risk (recent PyTorch versions default to \`torch.load(..., weights_only=True)\` to limit this).
+
+\`.safetensors\` stores only names, shapes and values, so it cannot hide code, and it also loads faster. Hugging Face now uses it by default.
+
+## Checkpoints during training
+
+Training does not save just once at the end; it saves a **checkpoint** every so often:
+
+\`\`\`python
+for step in range(max_steps):
+    ...  # one training step
+    if step % 1000 == 0:
+        torch.save({"model": model.state_dict(),
+                    "optim": optimizer.state_dict(),
+                    "step": step}, f"ckpt_{step}.pt")
+\`\`\`
+
+Two reasons:
+
+- **Crashes.** Training can run for days. If a machine fails, training resumes from the latest checkpoint instead of starting over. For that the **optimizer's** state is needed too: \`optimizer.state_dict()\` holds its own state, e.g. Adam's two running statistics for every parameter.
+- **The last step is not always the best.** Loss on a validation set is tracked during training. An earlier checkpoint is often better than the last one (later steps may start to overfit), and the best one is what gets released.
+
+After training, for inference or release, usually **only the model's \`state_dict\`** is kept. Adam's optimizer state is about twice the size of the parameters and is not needed for inference.
+
+## Outside PyTorch
+
+The name \`state_dict\` is PyTorch's, but the idea (save parameters as name → array) is common:
+
+- **Hugging Face:** the \`.safetensors\` file written by \`save_pretrained()\` is essentially a \`state_dict\`.
+- **TensorFlow/Keras:** \`model.save_weights()\` and checkpoints.
+- **JAX/Flax:** the parameters already are a nested dictionary (a pytree), which is saved directly.
+
+Docs: [Saving and loading models ↗](https://docs.pytorch.org/tutorials/beginner/saving_loading_models.html)
+`,
+  },
+
+  state_dict_build_notes: {
+    title: "Building the same structure (hover)",
+    md: `
+**How is “the same structure” built?** The structure lives in the model class: the \`nn.xxx(...)\` calls in \`__init__\`. In this site's code (simplified):
+
+\`\`\`python
+class GPT2(nn.Module):
+    def __init__(self, vocab_size, n_layer, n_embd, n_head, max_toks, dropout=0.1):
+        super().__init__()
+        self.tok_emb = nn.Embedding(vocab_size, n_embd)
+        self.pos_emb = nn.Embedding(max_toks, n_embd)
+        self.blocks  = nn.ModuleList([TransformerBlock(...) for _ in range(n_layer)])
+        self.ln_f    = nn.LayerNorm(n_embd)
+        self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
+\`\`\`
+
+This fixes three things: which layers exist, the shape of each, and the name of each. The attribute name \`tok_emb\` is what later becomes the key \`"tok_emb.weight"\`.
+
+"Building the same structure" just means running this code with the same hyperparameters, e.g. \`model = GPT2(vocab_size=50304, n_layer=12, n_embd=768, n_head=12, max_toks=1024)\`. Afterwards every layer exists with the right shape, but holds **random** numbers: the model runs, but its output is gibberish. \`load_state_dict\` then overwrites those numbers. Roughly:
+
+\`\`\`text
+for each key in sd, e.g. "blocks.0.attn.c_attn.weight":
+  1. find the tensor with the same name in the model
+  2. check that the shapes match, e.g. both (2304, 768)
+  3. copy the numbers in
+\`\`\`
+
+If the model is built with different hyperparameters, loading fails. Say training used \`n_layer=12\` but the model is built with \`n_layer=6\`:
+
+- **Unexpected key(s):** the file has \`blocks.6.…\` to \`blocks.11.…\`, which the model does not have.
+- **Missing key(s):** the reverse case, a name the model has but the file does not.
+- **size mismatch:** the names match but a shape does not, e.g. if \`n_embd\` were 512.
+
+So loading needs the **same code** and the **same hyperparameters**. That is why a Hugging Face model folder also contains a \`config.json\` that records hyperparameters such as \`n_layer\` and \`n_embd\`. 🆕 \`from_pretrained()\` reads \`config.json\`, builds the model, then loads the weights, all in one call.
 `,
   },
 
