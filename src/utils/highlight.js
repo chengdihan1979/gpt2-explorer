@@ -178,7 +178,7 @@ export function buildCodeHtml({ component, selectedId }) {
   html = html.replace(/unsqueeze/g, '<span data-action="open:unsqueeze_notes" style="text-decoration: underline; cursor: pointer;">unsqueeze</span>');
   html = html.replace(/F\.softmax\(att, dim=-1\)/g, '<span data-action="open:softmax_notes" style="text-decoration: underline; cursor: pointer;">F.softmax(att, dim=-1)</span>');
   html = html.replace(/y = att @ v/g, '<span data-action="open:att_v_product_notes" style="text-decoration: underline; cursor: pointer;">y = att @ v</span>');
-  html = html.replace(/y\.transpose\(1, 2\)\.contiguous\(\)\.view\(B, T, C\)/g, '<span data-action="open:reorder_merge_heads_notes" style="text-decoration: underline; cursor: pointer;"> y.transpose(1, 2).contiguous().view(B, T, C)</span>');
+  html = html.replace(/y\.transpose\(1, 2\)\.contiguous\(\)\.view\(B, T, C\)/g, '<span data-action="open:reorder_merge_heads_notes" style="text-decoration: underline; cursor: pointer;">y.transpose(1, 2).contiguous().view(B, T, C)</span>');
   html = html.replace(/nn\.Dropout\(dropout\)\s*#\s*embedding\s*dropout/g, '<span data-action="open:emb_dropout_notes" style="text-decoration: underline; cursor: pointer;">nn.Dropout(dropout) # embedding dropout</span>');
 
   // Emphasize the QK matmul line when Matmul (Q×Kᵀ) node is selected

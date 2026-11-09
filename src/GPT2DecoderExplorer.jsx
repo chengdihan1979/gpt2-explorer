@@ -1533,19 +1533,43 @@ So loading needs the **same code** and the **same hyperparameters**. That is why
   softmax_notes: {
     title: "softmax",
     md: `
-## F.softmax explanation
+**\`F.softmax(att, dim=-1)\` turns each row of scores into attention weights: every value is between 0 and 1, and each row sums to 1.** Before this line, \`att\` holds raw scores, which can be negative or \`-inf\` and don't sum to anything in particular. The shape does not change: $(B,\\ n\\_head,\\ T,\\ T)$ in and out.
 
-1. Converts the raw attention scores in \`att\` into probabilities along the last dimension (keys dimension).
-2. For each query token (and each head), the resulting row tells how much attention that query token should pay to each allowed previous token: a higher value means more attention, zero means ignore (e.g., masked future/padding).
-3. Each row sums to 1, so the weights are comparable and interpretable.
-4. The output has the same shape as the input; only the values are rescaled to valid probabilities.
-5. These probabilities are then used to take a weighted average of the value vectors for that query token.
+## Each row is one token's attention split
 
-## Math interpretation
+Continuing the \`I love black cats\` example from [Causal Mask](#info:causal_mask_notes) (one head; rows are queries, "who is looking"; columns are keys, "who is looked at"):
 
-Applies softmax along the last dimension of \`att\` to turn logits into probabilities.
+\`\`\`text
+after the mask                            after softmax
+          I     love  black  cats                   I     love  black  cats
+I      [ 2.1,   -inf, -inf,  -inf ]      I      [ 1,     0,    0,     0    ]
+love   [ 0.5,   1.3,  -inf,  -inf ]      love   [ 0.31,  0.69, 0,     0    ]
+black  [ 0.2,   0.9,  1.7,   -inf ]      black  [ 0.13,  0.27, 0.60,  0    ]
+cats   [ 0.1,   0.4,  2.5,   0.8  ]      cats   [ 0.07,  0.09, 0.72,  0.13 ]
+\`\`\`
 
-**Shape:**
+Working through the \`black\` row:
+
+\`\`\`text
+e^0.2 = 1.22    e^0.9 = 2.46    e^1.7 = 5.47    e^-inf = 0
+sum = 1.22 + 2.46 + 5.47 = 9.15
+weights = [1.22/9.15, 2.46/9.15, 5.47/9.15, 0] = [0.13, 0.27, 0.60, 0]
+\`\`\`
+
+So \`black\` gives 13% of its attention to \`I\`, 27% to \`love\` and 60% to itself; \`cats\` gets 0 because it was masked. (Values are rounded to two decimals.)
+
+- **\`I\` row:** only itself is visible, so it puts 100% on itself.
+- **\`cats\` row:** nothing is masked; 72% goes to \`black\`.
+
+A higher weight means more attention; a weight of 0 means the key is ignored. The next line, \`att @ v\`, uses these weights to take a weighted average of the value vectors.
+
+## Why \`dim=-1\`
+
+The last axis of \`att\` is the **key** axis: the columns within one row. \`dim=-1\` normalizes along each row, so every query (in every head) splits its own attention.
+
+With \`dim=-2\`, each **column** would sum to 1 instead, meaning "the attention each key receives sums to 1". That is not what we want.
+
+## The formula
 
 $$
 att \\in \\mathbb{R}^{B\\times n\\_head\\times T\\times T}
@@ -1564,56 +1588,81 @@ P_{b,h,t_q,j}
 \\sum_{j=1}^{T} P_{b,h,t_q,j} = 1.
 $$
 
-**Effect of the causal mask:**
-
-$$
-att_{b,h,t_q,j}=-\\infty \\;\\Rightarrow\\; P_{b,h,t_q,j}=0
-$$
-
-(future positions get zero probability).
+**Effect of the causal mask:** $att_{b,h,t_q,j}=-\\infty \\;\\Rightarrow\\; P_{b,h,t_q,j}=0$, so future positions get zero weight.
 
 ## Notes
 
-- \`dim=-1\` means "over the last axis" (the keys dimension).
-- \`F.softmax\` is numerically stable (it effectively subtracts a row max).
+- \`F.softmax\` is numerically stable: it effectively subtracts each row's max before exponentiating, so large scores do not overflow.
 `,
   },
 
   att_v_product_notes: {
     title: "att @ v",
     md: `
-## Explanation and intuition
+**[\`y = att @ v\`](#hover:matmul_example_notes) is where each token actually collects information: its output is a weighted average of the value vectors, and the weights are its row of \`att\`.** It comes right after [softmax](#info:softmax_notes) and [attention dropout](#info:attn_dropout_notes), and turns \`(B, n_head, T, T)\` weights into \`(B, n_head, T, hs)\` outputs.
 
-1. \`att\` holds, for each token (and each head), how much attention to pay to every allowed token in the sequence.
-2. \`v\` holds the content for each token: what is worth copying "if you attend to me."
+## Who to look at vs. what to take
 
-**Intuition:** for each token, the operation mixes together other tokens' information according to those attention weights.
+Attention splits the work between q, k and v:
 
-- Tokens with higher weights contribute more; tokens with zero weight do not contribute.
-- The result \`y\` is a context-aware summary for each token (per head) that pulls in the most relevant information.
+- **q · k** decides *who to look at, and how much*: it produces the weights in \`att\`.
+- **v** decides *what to take*: it is the content that actually gets mixed.
 
-## Math interpretation
+k and v come from the same token, but they are different vectors. A token uses k to say "what I am relevant to" and v to say "what I provide when someone attends to me", and the two can be completely different.
 
-\`\`\`python
-y = att @ v
+The result is a context-aware vector for each token (per head) that pulls in information from the tokens it attends to.
+
+## A worked example
+
+### One row
+
+Take head size 2 and these value vectors for \`I love black cats\`:
+
+\`\`\`text
+v_I     = [1, 0]
+v_love  = [0, 1]
+v_black = [2, 2]
+v_cats  = [5, 5]
 \`\`\`
 
-$$
-att \\in \\mathbb{R}^{B\\times n\\_head \\times T\\times T},\\quad
-v \\in \\mathbb{R}^{B\\times n\\_head \\times T\\times hs},\\quad
-y \\in \\mathbb{R}^{B\\times n\\_head \\times T\\times hs}
-$$
+The \`black\` row of \`att\` after softmax is \`[0.13, 0.27, 0.60, 0]\` (ignoring dropout), so:
 
-For a fixed batch $b$ and head $h$:
+\`\`\`text
+y_black = 0.13 × [1, 0] + 0.27 × [0, 1] + 0.60 × [2, 2] + 0 × [5, 5]
+        = [0.13, 0]     + [0, 0.27]     + [1.2, 1.2]    + [0, 0]
+        = [1.33, 1.47]
+\`\`\`
 
-$$
-y^{(b,h)} \\,=\\, att^{(b,h)}\\, v^{(b,h)},\\quad
-att^{(b,h)}\\in\\mathbb{R}^{T\\times T},\\;
-v^{(b,h)}\\in\\mathbb{R}^{T\\times hs},\\;
-y^{(b,h)}\\in\\mathbb{R}^{T\\times hs}
-$$
+- \`black\`'s own value has 60% of the weight, so the result is closest to \`[2, 2]\`.
+- \`cats\` has weight 0, so its \`[5, 5]\` does not leak in at all. This is what the [causal mask](#info:causal_mask_notes) is for: no information from the future.
 
-Elementwise (per query position $t$):
+### All rows at once
+
+One matrix multiplication computes every token's weighted average together: row $t$ of \`att\` times \`v\` gives row $t$ of \`y\`.
+
+\`\`\`text
+att (T × T)                         v (T × hs)         y (T × hs)
+I      [ 1,    0,    0,    0    ]   I     [1, 0]       I      [1.00, 0.00]
+love   [ 0.31, 0.69, 0,    0    ] @ love  [0, 1]   =   love   [0.31, 0.69]
+black  [ 0.13, 0.27, 0.60, 0    ]   black [2, 2]       black  [1.33, 1.47]
+cats   [ 0.07, 0.09, 0.72, 0.13 ]   cats  [5, 5]       cats   [2.16, 2.18]
+\`\`\`
+
+The \`I\` row copies \`v_I\` exactly (100% on itself); \`cats\` takes 72% from \`black\`.
+
+## Shapes
+
+\`\`\`text
+att:  (B, n_head, T, T)
+v:    (B, n_head, T, hs)
+y:    (B, n_head, T, hs)
+\`\`\`
+
+\`@\` multiplies only the last two dimensions: $(T, T) \\times (T, hs) \\to (T, hs)$. The leading $(B, n\\_head)$ are treated as a batch: every sequence and every head is computed independently.
+
+## The formula
+
+For batch $b$, head $h$ and query position $t$:
 
 $$
 y_{b,h,t,:}
@@ -1621,124 +1670,236 @@ y_{b,h,t,:}
 \\sum_{j=1}^{T} att_{b,h,t,j}\\; v_{b,h,j,:}
 $$
 
-> - **Attention row:** each element is the probability of attending to a specific key position (i.e., a specific token in the allowed context: self and previous tokens in causal attention). Masked tokens (future/padding) have probability 0.
-> - **Value vectors:** there is one value vector per source token (same positions as the keys). These vectors carry the content to be mixed.
-> - **Result:** for a given query token $t$, the output is a weighted mix of those value vectors, using the attention row as weights. Tokens with higher probability contribute more; zero means no contribution.
+**Causality:** $att_{b,h,t,j}=0$ for $j>t$, so the sum only ranges over allowed (past and self) positions.
 
-### Concrete mini-example
+**Convex combination:** $att_{b,h,t,j}\\ge 0$ and $\\sum_{j} att_{b,h,t,j}=1$, so $y_{b,h,t,:}$ is a convex combination of the $v_{b,h,j,:}$: a point "between" the value vectors. (During training, attention dropout breaks the exact sum of 1 for each sample, but not on average.)
 
-Say the attention row for token $t$ is $[0.5,\\ 0.3,\\ 0.2]$. The value vectors at positions 1, 2, 3 are $v_1, v_2, v_3$ (each is a length-$hs$ vector). Then the output vector for token $t$ is
+## Next
 
-$$
-0.5\\,v_1 + 0.3\\,v_2 + 0.2\\,v_3,
-$$
+\`y\` still has one \`hs\`-long vector per head. The next line concatenates the heads back into one \`C\`-long vector per token, \`(B, T, C)\`: see [merging the heads](#info:reorder_merge_heads_notes).
+`,
+  },
 
-a single vector (length $hs$) that mixes information using that row's weights.
+  matmul_example_notes: {
+    title: "a @ b: a numerical example (hover)",
+    md: `
+**\`a @ b\` is matrix multiplication (\`torch.matmul\`).** Each entry of the result is a row of \`a\` times a column of \`b\`: multiply element by element, then add up.
 
-### Causality
+**A 2-D example: (2 × 3) @ (3 × 2) → (2 × 2)**
 
-$$
-att_{b,h,t,j}=0 \\;\\text{ for } j>t
-\\;\\Rightarrow\\;
-\\text{the sum only ranges over allowed (past/self) positions.}
-$$
+\`\`\`text
+a = [[1, 2, 3],        b = [[1, 0],
+     [4, 5, 6]]             [0, 1],
+                            [2, 2]]
+\`\`\`
 
-### Convex combination
+Entry (row $i$, column $j$) of the result = row $i$ of \`a\` · column $j$ of \`b\`:
 
-$$
-att_{b,h,t,j}\\ge 0 \\;\\text{ and }\\; \\sum_{j} att_{b,h,t,j}=1
-\\;\\Rightarrow\\;
-y_{b,h,t,:}\\;\\text{is a convex combination of the } v_{b,h,j,:}
-$$
+\`\`\`text
+(0, 0): row 0 · col 0 = 1×1 + 2×0 + 3×2 = 7
+(0, 1): row 0 · col 1 = 1×0 + 2×1 + 3×2 = 8
+(1, 0): row 1 · col 0 = 4×1 + 5×0 + 6×2 = 16
+(1, 1): row 1 · col 1 = 4×0 + 5×1 + 6×2 = 17
+
+a @ b = [[ 7,  8],
+         [16, 17]]
+\`\`\`
+
+**The same thing, one row at a time**
+
+Row $i$ of the result is a **weighted sum of the rows of \`b\`**, with weights from row $i$ of \`a\`:
+
+\`\`\`text
+row 0 of (a @ b) = 1 × [1, 0] + 2 × [0, 1] + 3 × [2, 2]
+                 = [1, 0] + [0, 2] + [6, 6]
+                 = [7, 8]
+\`\`\`
+
+This is exactly how \`att @ v\` works: each row of \`att\` holds the weights, and the rows of \`v\` are what gets mixed. A row like \`[1, 0, 0]\` just copies the first row of \`b\`, like the \`I\` row in attention that puts 100% on itself.
+
+**Shape rule**
+
+\`\`\`text
+(m × n) @ (n × p) → (m × p)
+\`\`\`
+
+The inner sizes (\`n\`) must match: a row of \`a\` and a column of \`b\` need the same length. Otherwise PyTorch raises a shape error.
+
+**More than 2 dimensions: a batch of matrix products**
+
+With more than two dimensions, \`@\` multiplies only the **last two**; the leading dimensions are a batch, and each pair is multiplied independently:
+
+\`\`\`text
+a: (2, 2, 3)    two (2 × 3) matrices: the a above, and [[1, 0, 0], [0, 0, 1]]
+b: (2, 3, 2)    two (3 × 2) matrices: the b above, twice
+a @ b: (2, 2, 2)
+
+batch 0:  [[1, 2, 3], [4, 5, 6]] @ b  = [[ 7,  8], [16, 17]]
+batch 1:  [[1, 0, 0], [0, 0, 1]] @ b  = [[ 1,  0], [ 2,  2]]
+\`\`\`
+
+In GPT-2, \`att @ v\` is \`(B, n_head, T, T) @ (B, n_head, T, hs) → (B, n_head, T, hs)\`: $B \\times n\\_head$ separate products of $(T \\times T) @ (T \\times hs)$, one per sequence and head.
 `,
   },
 
   reorder_merge_heads_notes: {
-    title: "reorder_merge_heads",
+    title: "Merging the heads",
     md: `
-## Explanation and intuition
+**\`y.transpose(1, 2).contiguous().view(B, T, C)\` concatenates the heads' outputs, so that each token again has a single $C$-dim vector: $(B,\\ n\\_head,\\ T,\\ hs) \\to (B,\\ T,\\ C)$.**
 
-\`\`\`python
-y.transpose(1, 2).contiguous().view(B, T, C)
+## Why merge
+
+After [att @ v](#info:att_v_product_notes), every head has produced its own $hs$-dim vector for every token:
+
+\`\`\`text
+y: (B, n_head, T, hs)      GPT-2 small: n_head = 12, hs = 64
 \`\`\`
 
-### \`transpose(1, 2)\`
+The layers that follow (the output projection and the residual add) need one $C = 768$-dim vector per token. Since $12 \\times 64 = 768$, the heads' outputs are **concatenated**.
 
-You currently have per-head outputs arranged as $(B,\\ n\\_head,\\ T,\\ hs)$. This swap moves **time** next to **batch** → $(B,\\ T,\\ n\\_head,\\ hs)$, so for each token you can gather all heads together.
+## Example
 
-### \`contiguous()\`
+Take 2 heads with $hs = 2$, so $C = 4$. For the token \`black\`:
 
-After a transpose, the tensor's memory is strided (non-contiguous). \`view\` needs a contiguous layout, so this makes a compact copy if necessary.
+\`\`\`text
+head 0 output for black:  [1.33, 1.47]
+head 1 output for black:  [0.50, -0.20]
 
-### \`view(B, T, C)\`
+concatenated:             [1.33, 1.47, 0.50, -0.20]    ← length 4 = C
+\`\`\`
 
-Finally, **stitch all heads back together** by flattening $(n\\_head,\\ hs)$ into the model dimension \`C = n_head * hs\`, giving one vector per token → shape $(B,\\ T,\\ C)$.
+Every token is merged the same way. The heads are placed **side by side, not added**. Mixing information across heads happens in the next line, the [output projection](#info:attention_output_linear_notes).
 
-> In plain terms: reorder to time-major per token → ensure the memory layout is safe → merge the heads so each token has a single $C$-dim embedding again, ready for the output projection.
+## Step by step
 
-More on contiguous: [contiguous](#info:contiguous_notes)
+### 1. \`transpose(1, 2)\`: group by token
+
+\`y\` is currently ordered "by head, then by token":
+
+\`\`\`text
+(B, n_head, T, hs):
+  head 0:  [I: 2 numbers]  [love: 2 numbers]  [black: 2 numbers]  [cats: 2 numbers]
+  head 1:  [I: 2 numbers]  [love: 2 numbers]  [black: 2 numbers]  [cats: 2 numbers]
+\`\`\`
+
+We want each token to hold all of its heads' results together, so \`transpose(1, 2)\` swaps the \`n_head\` and \`T\` dimensions back:
+
+\`\`\`text
+(B, T, n_head, hs):
+  I:      [head 0: 2 numbers]  [head 1: 2 numbers]
+  love:   [head 0: 2 numbers]  [head 1: 2 numbers]
+  black:  [head 0: 2 numbers]  [head 1: 2 numbers]
+  cats:   [head 0: 2 numbers]  [head 1: 2 numbers]
+\`\`\`
+
+### 2. \`contiguous()\`: fix the memory order
+
+\`transpose\` only changes how the tensor is *indexed*; the numbers in memory are still in the old order. \`view\` needs them laid out in memory in the new order, so \`.contiguous()\` copies them into that order (it does nothing if they already are). More: [contiguous](#info:contiguous_notes).
+
+### 3. \`view(B, T, C)\`: join the heads
+
+\`view\` flattens the last two dimensions $(n\\_head,\\ hs)$ into one dimension $C$. For each token, \`[head 0's numbers] [head 1's numbers]\` are joined end to end into one vector of length 4.
+
+### Shapes
+
+\`\`\`text
+y                     (B, n_head, T, hs)    (B, 12, T, 64)
+  .transpose(1, 2)    (B, T, n_head, hs)    (B, T, 12, 64)
+  .contiguous()       (B, T, n_head, hs)    same shape, new memory order
+  .view(B, T, C)      (B, T, C)             (B, T, 768)
+\`\`\`
+
+## The inverse of the split
+
+When the heads were created (see [Query View](#info:query_view_notes)), the code did \`view(B, T, n_head, hs).transpose(1, 2)\`: **cut** $C$ into heads, then **move** the head dimension forward. Merging does the reverse: **move** it back, then **join**.
+
+Because the cutting and the joining use the same order, head $h$'s output lands in dimensions $h \\cdot hs$ to $(h+1) \\cdot hs - 1$ of the merged vector:
+
+\`\`\`text
+merged y of one token (768 dims):
+[ dims 0–63 | dims 64–127 | dims 128–191 | ... | dims 704–767 ]
+   head 0       head 1         head 2               head 11
+\`\`\`
+
+## Next
+
+\`y\` is now \`(B, T, C)\`, the same shape as the attention input \`x\`. The next line, \`self.resid_drop(self.proj(y))\`, mixes the heads with a $C \\times C$ linear layer and applies dropout.
 `,
   },
 
   contiguous_notes: {
     title: "contiguous",
     md: `
-**A tensor is contiguous if its elements are laid out in memory in the usual row-major order for its current shape.**
+**A tensor is contiguous if its elements are laid out in memory in the usual row-major order for its current shape.** Some ops (like \`transpose\`, or strided slicing such as \`a[:, ::2]\`) only change how memory is read, so the result becomes non-contiguous. \`.contiguous()\` copies the data into the new order, so that ops like \`.view(...)\` can work.
 
-Some ops (like transpose, or strided slicing such as \`a[:, ::2]\`) change the view/strides so the tensor becomes non-contiguous. \`.contiguous()\` makes a compact copy in the new order so things like \`.view(...)\` can work.
+## A tensor in memory is one long row
 
-## Example 1: a normal tensor is contiguous
-
-\`\`\`python
-a = torch.arange(12).view(3, 4)  # shape (3,4)
-print(a)
-print("shape:", a.shape, "is_contiguous:", a.is_contiguous(), "strides:", a.stride())
-\`\`\`
-
-### What you'll see
+Whatever its number of dimensions, a tensor is stored in memory as one flat sequence of numbers:
 
 \`\`\`text
-is_contiguous: True
+a = [[1, 2, 3],
+     [4, 5, 6]]        shape (2, 3)
+
+memory:  1  2  3  4  5  6
 \`\`\`
 
-Strides: $(4,\\ 1)$ → moving 1 step along dim 1 (columns) = +1 in memory; moving 1 step along dim 0 (rows) = +4 in memory. That's the standard row-major layout.
-
-## Example 2: transpose makes it non-contiguous
-
-\`\`\`python
-b = a.transpose(0, 1)  # shape (4,3)
-print(b)
-print("is_contiguous:", b.is_contiguous(), "strides:", b.stride())
-\`\`\`
-
-### What you'll see
+PyTorch records how to read that sequence as a multi-dimensional shape with **strides**:
 
 \`\`\`text
-is_contiguous: False
+a.stride() = (3, 1)
+  row + 1     → jump 3 places in memory
+  column + 1  → jump 1 place in memory
 \`\`\`
 
-Strides: $(1,\\ 4)$ → now moving along rows is the "fast" axis; the memory jumps don't match the $(4,3)$ row-major order.
+Reading row by row walks straight through memory, so \`a.is_contiguous()\` is \`True\`.
 
-## Example 3: why \`.view(...)\` can fail on non-contiguous tensors
+## \`transpose\` moves no data, only the strides
+
+\`\`\`text
+t = a.T = [[1, 4],
+           [2, 5],
+           [3, 6]]     shape (3, 2)
+
+memory:  still 1  2  3  4  5  6    ← the same memory; nothing moved
+t.stride() = (1, 3)
+\`\`\`
+
+Only the reading rule changes, which is why \`transpose\` is so fast. The cost: reading \`t\` row by row gives 1, 4, 2, 5, 3, 6, which jumps around in memory. That is what **non-contiguous** means: \`t.is_contiguous()\` is \`False\`.
+
+## Why \`view\` fails
+
+\`view\` does not move data either: it reads **the same memory** under a new shape. Calling \`t.view(6)\` would read memory as 1 2 3 4 5 6, but in \`t\`'s logical order the answer should be 1 4 2 5 3 6. These do not match, so PyTorch raises an error:
+
+\`\`\`text
+t.view(6)
+RuntimeError: view size is not compatible with input tensor's size and stride ...
+Use .reshape(...) instead.
+\`\`\`
+
+## What \`.contiguous()\` does
+
+\`\`\`text
+c = t.contiguous()
+memory:  1  4  2  5  3  6     ← a new copy, in t's logical order
+c.stride() = (2, 1)
+c.view(6) = [1, 4, 2, 5, 3, 6]   ✓
+\`\`\`
+
+If the tensor is already contiguous, \`.contiguous()\` just returns it, with no copy.
+
+## In attention
+
+When [merging the heads](#info:reorder_merge_heads_notes), \`transpose(1, 2)\` leaves each token's heads scattered in memory. \`.contiguous()\` first lays them out next to each other, so that \`view(B, T, C)\` can join them directly.
+
+## Two fixes
 
 \`\`\`python
-try:
-    flat = b.view(-1)  # will error: not contiguous
-except RuntimeError as e:
-    print("view error:", e)
+flat_ok1 = t.contiguous().view(-1)  # copy into order, then view
+flat_ok2 = t.reshape(-1)            # reshape copies only if needed
 \`\`\`
 
-\`.view\` only works when the data are laid out contiguously for the new shape. A transposed tensor isn't.
-
-### Two fixes
-
-\`\`\`python
-flat_ok1 = b.contiguous().view(-1)  # make a compact copy, then view
-flat_ok2 = b.reshape(-1)            # reshape will copy if needed
-\`\`\`
-
-- \`.contiguous()\` copies the data into a compact row-major buffer for the current ordering.
-- \`.reshape\` is more flexible: it returns a view if possible, or silently copies if not.
+- \`.contiguous()\` copies the data into row-major order for the current shape.
+- \`.reshape\` is more flexible: it returns a view if possible, and otherwise copies. The merge line could equally be written \`y.transpose(1, 2).reshape(B, T, C)\`.
 `,
   },
 };

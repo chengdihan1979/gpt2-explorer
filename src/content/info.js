@@ -782,51 +782,93 @@ In a post-norm block, $x \\leftarrow \\mathrm{LN}(x + f(x))$, the stream is reno
   attn_dropout_notes: {
     title: "Attention dropout",
     md: `
-**Attention dropout applies dropout to the attention matrix after softmax and masking, before the value mix.**
+**Attention dropout randomly zeroes some attention weights during training, after softmax and before the weighted sum with $V$.**
 
 $$
 A = \\mathrm{softmax}(S + \\text{mask}), \\quad \\tilde A = \\mathrm{Dropout}_p(A), \\quad Y = \\tilde A\\,V
 $$
 
-In code: \`att = self.attn_drop(att)\`, where \`att\` is already softmaxed.
+In code: \`att = self.attn_drop(att)\`, where \`att\` is already masked and softmaxed, and \`self.attn_drop = nn.Dropout(dropout)\` with \`dropout=0.1\` on this site. The shape does not change: $(B,\\ n\\_head,\\ T,\\ T)$ in and out.
 
-## Why it helps (intuition)
+## What it does to one row
 
-- Think of attention as a graph from each query token to earlier tokens; dropout randomly removes some edges.
-- It prevents over-reliance on a single edge, nudging heads to find backup paths and generalize better.
-- It acts like gentle exploration: sometimes forcing the model to look elsewhere.
+Take the \`black\` row from the [softmax](#info:softmax_notes) example, and suppose that this time the black→black weight is the one dropped:
+
+\`\`\`text
+                    I      love   black  cats
+softmax:         [ 0.13,  0.27,  0.60,  0 ]
+drop one (→ 0):  [ 0.13,  0.27,  0,     0 ]
+rest × 1/0.9:    [ 0.14,  0.30,  0,     0 ]
+\`\`\`
+
+For this training step, \`black\` cannot see itself and has to take its information from \`I\` and \`love\`. The next step drops a different random set.
+
+## Why multiply by 1/(1 − p)
+
+### On average, nothing changes
+
+Each weight is kept with probability $1 - p = 0.9$ and then multiplied by $1/0.9 \\approx 1.11$, or zeroed with probability $0.1$. For the 0.60 weight over 10 steps, about 9 keep it and 1 drops it:
+
+\`\`\`text
+kept (9 times):    0.60 × 1.11 = 0.667
+dropped (1 time):  0
+average = (9 × 0.667 + 1 × 0) / 10 = 0.60
+\`\`\`
+
+On average it is exactly the original weight. In general:
+
+$$
+\\tilde A = \\frac{A \\odot M}{1 - p}, \\qquad M_{ij} \\sim \\mathrm{Bernoulli}(1 - p), \\qquad \\mathbb{E}[\\tilde A] = A
+$$
+
+So a single row's sum is no longer 1 after dropout: 0.44 in the example above (the largest weight was dropped), 1.11 if nothing is dropped, 0.97 if only the 0.13 is dropped. On average, it is 1.
+
+### Why that matters: inference has no dropout
+
+At inference dropout is off, and every row sums to exactly 1. Without the $1/(1-p)$ factor, rows during training would average only 0.9, so \`att @ v\` would come out about 10% smaller in training than at inference. The model would adapt to the smaller values, then see larger ones at inference. Scaling by $1/(1-p)$ restores what was dropped, so the average matches inference.
+
+### Why not renormalize the row?
+
+Dividing the row by its sum (0.44 above) would also make it sum to 1, but it is not needed:
+
+- The average already matches, which is what matters.
+- Dropout is meant to be noise ("a bit less information, at random"); each sample does not need to sum to exactly 1.
+- A fixed factor is simple; renormalizing needs an extra sum and division per row.
+
+So \`nn.Dropout\` uses "zero, then multiply by $1/(1-p)$" everywhere it is used (this is called **inverted dropout**).
+
+## Why it helps
+
+The goal is to **prevent over-reliance on any single attention edge**. Dropout does not boost small weights; it randomly cuts edges:
+
+- Cutting a small edge (say 0.07) changes little.
+- Cutting a large edge (say 0.60) removes that information for this step, and the loss gets worse.
+
+To keep the loss low when any edge might be cut, the model learns to:
+
+1. **Not keep important information in one place only.** E.g. "\`black\` is an adjective" should also reach later tokens through other paths.
+2. **Not bet everything on one token**, so it can still decide reasonably when that token is missing.
+
+At inference, dropout is off and the weights are whatever the model learned: if \`black\` really should mostly attend to itself, it still does.
+
+> **Analogy.** A student always copies homework from the same classmate. The teacher sends that classmate home at random, so the student has to understand the problems or check several sources. At the exam the classmate is there, but the student no longer depends on them alone.
+
+**Example.** Suppose a head usually puts most attention on "dogs" to decide that the verb should be "were". With attention dropout, that strongest edge is sometimes zeroed during training. The model must then use other cues (plurality elsewhere, other heads), which builds redundancy and avoids brittle shortcuts.
 
 ## When it is active
 
 - **Training only:** enabled in \`model.train()\`.
 - **Disabled at inference:** \`model.eval()\`.
 
-## Shape
+## Not only in attention
 
-$\\text{att} \\in \\mathbb{R}^{B \\times n\\_head \\times T \\times T}$, with the same shape after dropout.
+GPT-2 uses the same \`nn.Dropout\` in several places: [embedding dropout](#info:emb_dropout_notes), [residual dropout](#info:resid_dropout_notes) and [MLP dropout](#info:mlp_dropout_notes). They all serve as **regularization**: random noise during training, so the model does not memorize the training data (overfit) and generalizes to text it has not seen.
 
-## Mechanics (inverted dropout)
+## Choosing p
 
-$$
-\\tilde A = \\frac{A \\odot M}{1 - p}, \\qquad M_{ij} \\sim \\mathrm{Bernoulli}(1 - p)
-$$
-
-This keeps the expected value unchanged: $\\mathbb{E}[\\tilde A] = A$.
-
-> Row sums are not exactly 1 per sample, but the expectation matches.
-
-## Practical notes
-
-- Apply after masking and softmax (never drop masked zeros).
-- Typical $p \\approx 0.1$ (e.g., GPT-2 uses ~0.1).
-- Smaller datasets may benefit from a larger $p$; huge models sometimes set it to 0 if other regularizers suffice.
-
-## One intuition example
-
-- Suppose a head usually puts most attention on "dogs" to decide the verb should be "were".
-- With attention dropout, that strongest edge is sometimes zeroed during training.
-- When that happens, the model must use other cues (plurality elsewhere, other heads) to solve the task correctly.
-- Over time, this builds redundancy and avoids brittle shortcuts, making predictions more robust.
+- Typical $p \\approx 0.1$; GPT-2 uses 0.1.
+- Smaller datasets may benefit from a larger $p$.
+- 🆕 Many recent LLMs (e.g. LLaMA) pretrain with dropout 0: the data is huge and usually seen about once, so overfitting is not the main problem.
 `,
   },
 

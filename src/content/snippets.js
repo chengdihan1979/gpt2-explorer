@@ -125,25 +125,27 @@ class CausalSelfAttention(nn.Module):
         self.proj  = nn.Linear(n_embd, n_embd, bias=True)
         self.attn_drop  = nn.Dropout(dropout)
         self.resid_drop = nn.Dropout(dropout)
+        # mask: (1, 1, 1024, 1024)
         self.register_buffer("mask", torch.tril(torch.ones(1024, 1024)).unsqueeze(0).unsqueeze(0))
 
-    def forward(self, x):
+    def forward(self, x):                                  # x: (B, T, C)
         B, T, C = x.size()
-        hs = C // self.n_head
+        hs = C // self.n_head                              # 64 (768 // 12)
 
-        qkv = self.c_attn(x)  # [B, T, 3C]
-        q, k, v = qkv.split(C, dim=2)
+        qkv = self.c_attn(x)                               # (B, T, 3C)
+        q, k, v = qkv.split(C, dim=2)                      # each (B, T, C)
 
-        q = q.view(B, T, self.n_head, hs).transpose(1, 2)
-        k = k.view(B, T, self.n_head, hs).transpose(1, 2)
-        v = v.view(B, T, self.n_head, hs).transpose(1, 2)
-        att = (q @ k.transpose(-2, -1)) * (1.0 / hs**0.5)
-        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))
-        att = F.softmax(att, dim=-1)
-        att = self.attn_drop(att)
-        y = att @ v
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
-        y = self.resid_drop(self.proj(y))
+        # nh = n_head, hs = head size
+        q = q.view(B, T, self.n_head, hs).transpose(1, 2)  # (B, nh, T, hs)
+        k = k.view(B, T, self.n_head, hs).transpose(1, 2)  # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, hs).transpose(1, 2)  # (B, nh, T, hs)
+        att = (q @ k.transpose(-2, -1)) * (1.0 / hs**0.5)  # (B, nh, T, T)
+        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))  # (B, nh, T, T)
+        att = F.softmax(att, dim=-1)                       # (B, nh, T, T)
+        att = self.attn_drop(att)                          # (B, nh, T, T)
+        y = att @ v                                        # (B, nh, T, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)   # (B, T, C)
+        y = self.resid_drop(self.proj(y))                  # (B, T, C)
         return y
 `;
 
@@ -261,7 +263,7 @@ export const content = {
     code: attnCode,
     anchors: [
       { id: "c_attn_def", label: "define c_attn", match: "self.c_attn = nn.Linear(n_embd, 3 * n_embd, bias=True)" },
-      { id: "c_attn_call", label: "call c_attn", match: "qkv = self.c_attn(x)  # [B, T, 3C]" },
+      { id: "c_attn_call", label: "call c_attn", match: "qkv = self.c_attn(x)" },
       { id: "qkv_split", label: "split qkv", match: "q, k, v = qkv.split(C, dim=2)" },
     ],
   },
