@@ -700,4 +700,423 @@ flat_ok2 = t.reshape(-1)            # reshape copies only if needed
 - \`.reshape\` 更灵活：能 view 就返回 view，不能就复制。所以合并 head 那一行也可以写成 \`y.transpose(1, 2).reshape(B, T, C)\`。
 `,
   },
+
+  attention_output_linear_notes: {
+    title: "Attention output projection",
+    md: `
+**输出投影让不同 head 的信息在进入残差流之前相互作用。**
+
+\`\`\`python
+self.proj = nn.Linear(n_embd, n_embd, bias=True)    # C → C
+y = self.resid_drop(self.proj(y))                   # (B, T, C)
+\`\`\`
+
+## 从并排到混合
+
+[合并 head](#info:reorder_merge_heads_notes) 只是把各个 head 的结果**并排放在一起**。每个 head 各占一段，彼此之间还没有任何交流：
+
+\`\`\`text
+black: [1.33, 1.47 | 0.50, -0.20]
+         head 0       head 1
+\`\`\`
+
+\`proj\` 是一个 $C \\to C$ 的线性层：输出的**每一维**，都是输入**全部** $C$ 维的加权和。所以每个输出维度都可以用到所有 head 的信息。
+
+接着用 $C = 4$ 的例子。假设算第 0 个输出维度的那一行权重是 \`[0.5, 0, 1, 0]\`，bias 是 0：
+
+\`\`\`text
+out[0] = 0.5 × 1.33 + 0 × 1.47 + 1 × 0.50 + 0 × (-0.20)
+       = 0.665 + 0.50
+       = 1.17
+         ↑ from head 0   ↑ from head 1
+\`\`\`
+
+这一个输出数字就把两个 head 的信息组合在了一起。另外 3 个输出维度，各自用自己那一行权重，以别的方式组合。
+
+直观一点说：假设 head 0 找到了"前面那个形容词"，head 1 找到了"句子的主语"，\`proj\` 负责把这两条线索组合成一个有用的更新。
+
+## 为什么需要它
+
+1. **混合各个 head。** 没有 \`proj\` 的话，head 0 的结果永远只待在第 0–63 维，head 1 的永远只在 64–127 维，以此类推：在进入下一个 block 之前，各个 head 的发现没法结合起来。
+2. **写回残差流。** attention 的输出接下来会加回到 \`x\` 上（\`x = x + attn(...)\`）。\`proj\` 负责把拼接起来的结果，转换成[适合加到残差流里的形式](#hover:proj_residual_stream_notes)。
+
+从更高的层面看：
+
+- **Q/K 负责路由：** 在每个 head 里，决定哪个 token 关注哪些 token。
+- **V 携带内容。**
+- **投影决定把这些内容写到残差空间的哪里、怎么写**（一次学出来的基变换）。
+
+> 它让模型可以给各个 head 重新加权、旋转特征，并控制哪些信息传到下一层。
+
+## 形状和参数
+
+\`\`\`text
+input y:  (B, T, C)
+output:   (B, T, C)     same shape
+\`\`\`
+
+- **Weight：** $(n\\_embd,\\ n\\_embd)$
+- **Bias：** $(n\\_embd)$
+- **数量：** GPT-2 small 里是 $768 \\times 768 + 768 = 590{,}592$ 个参数。
+
+更严格地说，输入维度是 $n\\_head \\cdot hs$（合并后的各个 head），所以按 (out, in) 存储的 \`nn.Linear\` 权重是 $(n\\_embd,\\ n\\_head \\cdot hs)$。在 GPT-2 里 $n\\_head \\cdot hs = n\\_embd$（比如 $12 \\times 64 = 768$），所以两者一样。
+
+和 \`c_attn\` 一样，\`proj\` 对每个 token 独立地做同样的变换，不会在 **token 之间**混合信息。token 之间的交流只发生在 [\`att @ v\`](#info:att_v_product_notes) 那一步。
+
+## PyTorch 默认初始化
+
+详见 [Attention linear notes](#info:attention_linear_notes) 里的 "PyTorch default initialization" 一节。
+
+## Residual-writing weights
+
+\`proj\` 是 attention 的输出加回残差流之前的最后一个矩阵：
+
+\`\`\`text
+x = x + attn(ln1(x))
+        └─ last step inside attn:  y = self.resid_drop(self.proj(y))
+                                                       ↑
+                              last matrix with weights before the add
+\`\`\`
+
+（\`resid_drop\` 没有参数。）所以 \`proj\` 的权重决定了 attention 往残差流里写什么、写多少。处在这个位置的权重叫 **residual-writing weights**。MLP 里也有一个处在同样位置的矩阵，就是最后的 [\`fc_out\`](#info:mlp_fc_out_notes)，所以每个 block 有 2 个，GPT-2 small（12 个 block）一共 24 个。
+
+为什么要特别提它：初始化时，有些实现会把 residual-writing weights 乘以 $\\frac{1}{\\sqrt{N}}$，其中 $N$ 是残差层的数量（GPT-2 small 里 $N = 2 \\times n\\_layer = 24$，所以同一个因子也写成 $\\frac{1}{\\sqrt{2\\, n\\_layer}}$）。这样 $N$ 次残差相加之后，方差不会随着深度越来越大（推导见[初始化时的方差](#info:variance_init_notes)第 8 节）。不往残差流里写的矩阵（比如 \`c_attn\`）不做这个缩放。
+
+各个实现是否这样做不尽相同。GPT-2 论文做了；🆕 nanoGPT 用标准差 \`0.02 / sqrt(2 * n_layer)\` 来初始化这些权重。本网站的代码没有做，用的是 PyTorch 的默认初始化。
+
+### 为什么像 GPT-2 这样的 pre-norm 结构需要它
+
+在 pre-norm block 里，$x \\leftarrow x + f(\\mathrm{LN}(x))$：LayerNorm 只归一化子层的**输入**。残差流本身从来不被归一化，所以每个 block 都往上加一点，它的方差随着残差相加的次数增长。把 residual-writing weights 乘以 $\\frac{1}{\\sqrt{N}}$，就能让这个累加和保持在合理范围内。GPT-2 论文正是这样做的：初始化时把残差层的权重乘以 $\\frac{1}{\\sqrt{N}}$，以抵消残差路径上随深度的累积。
+
+在 post-norm block 里，$x \\leftarrow \\mathrm{LN}(x + f(x))$，每次相加之后残差流都会重新归一化，所以不会以同样的方式累积。
+
+> 看一个 post-norm 结构里残差缩放的小数值[例子](#info:post_norm_scaling_example_notes)。
+`,
+  },
+
+  proj_residual_stream_notes: {
+    title: "写回残差流",
+    md: `
+**"适合加到残差流里的形式"是什么意思？** 拼接后的向量和残差流 \`x\` 虽然都是 768 维，但同一位置上的数字含义不一样。\`proj\` 负责把前者翻译成后者的"坐标"，然后才能相加。
+
+**残差流是一块共用的"白板"**
+
+\`x\` 从 embedding 开始，一路穿过 12 个 block，每个 block 都在它上面加一点东西：
+
+\`\`\`text
+x = x + attn(ln1(x))
+x = x + mlp(ln2(x))
+\`\`\`
+
+所以 \`x\` 的 768 维是所有层**共用**的。可以把它想成一块有 768 栏的白板，每一栏（更准确地说，是每个方向）表示什么，是整个模型在训练中一起形成的约定。所有层读的是它，写的也是它。
+
+**拼接后的向量用的是"head 自己的坐标"**
+
+合并 head 之后，\`y\` 的第 0–63 维是 head 0 的输出，第 64–127 维是 head 1 的输出，以此类推。这些数字是在各个 head 自己的 value 空间里算出来的，它们的含义只对那个 head 有意义，和白板上第 0–63 栏的约定无关。
+
+如果不经过 \`proj\`，直接把 \`y\` 加到 \`x\` 上：
+
+\`\`\`text
+x[0:64]    += head 0's output
+x[64:128]  += head 1's output
+...
+\`\`\`
+
+这就要求 head 0 永远只能改白板的第 0–63 栏，head 1 永远只能改第 64–127 栏，而且每个 head 的输出坐标必须恰好和那几栏的含义对上。这个限制太死了。
+
+**proj 做的事**
+
+\`proj\` 是一个 $768 \\times 768$ 的矩阵。它让每个 head 的结果可以写到白板上**任意**位置，写多少也由它决定：
+
+\`\`\`text
+what head 0 found  ──proj──→  the columns that need it
+what head 1 found  ──proj──→  other columns, or the same ones as head 0
+\`\`\`
+
+打个比方：每个 head 用自己的速记符号写了一张便条，\`proj\` 是翻译员，把这些便条翻译成白板的统一格式，再写到合适的栏里。后面的层只看得懂白板的格式，看不懂各个 head 的速记。
+
+> "白板上每一栏表示什么"只是帮助理解的说法。实际上这些含义是训练出来的，通常不对应人能直接读懂的概念，而且往往分散在很多维度上，而不是一维一个意思。
+`,
+  },
+
+  variance_init_notes: {
+    title: "初始化时的方差",
+    md: `
+**GPT-2 里有几处设计，比如 attention 里的 $1/\\sqrt{hs}$、对 residual-writing weights 的缩放，都是为了在初始化时把方差控制住。** 这篇笔记把用到的每一个方差都推导一遍：从 LayerNorm 的输出开始，一直到 attention 分数和残差流。下面的数字对应本网站的代码（PyTorch 默认初始化），并且都和在 PyTorch 里实测的结果一致。
+
+## 0. 方差是什么
+
+一个随机数 $X$ 的**均值** $E[X]$，就是它平均起来是多少。**方差**衡量它偏离均值的程度，是"离均值的距离的平方"的平均：
+
+\`\`\`text
+Var(X) = E[(X − E[X])²]
+       = E[X²] − (E[X])²        ← equivalent, often more convenient
+\`\`\`
+
+均值是 0 时，这个式子简化成 **Var(X) = E[X²]**，也就是"平方的平均"。后面一直在用这个形式。
+
+**标准差** = √方差，表示这个数"典型的大小"。比如方差是 64，标准差是 8，意思是这个数通常在 ±8 左右。
+
+**"随机"指的是什么：** 初始化时权重是随机抽的，所以 q、k 也是随机的。下面说的均值和方差，都是对"随机初始化"取的平均。
+
+## 1. 四条规则
+
+**规则 1：乘以常数 c，方差乘以 c²**
+
+\`\`\`text
+Var(cX) = c² × Var(X)
+e.g. if X has variance 64, then X / 8 has variance 64 / 8² = 1
+\`\`\`
+
+**规则 2：独立的随机数相加，方差直接相加**
+
+\`\`\`text
+Var(X + Y) = Var(X) + Var(Y)      (X, Y independent)
+\`\`\`
+
+是方差相加，不是标准差相加，因为正负号会部分抵消。用两个各自以 ½ 的概率取 +1 或 −1 的数来看：
+
+\`\`\`text
+a     b     a + b
++1    +1     +2
++1    −1      0
+−1    +1      0
+−1    −1     −2
+
+each case has probability 1/4
+
+a alone:   E[a] = 0,  a² is always 1  →  Var(a) = 1   (same for b)
+
+mean:      E[a + b] = (2 + 0 + 0 − 2) / 4 = 0
+
+variance:  Var(a + b) = E[(a + b)²] − (E[a + b])²
+                      = E[(a + b)²] − 0²             ← because E[a + b] = 0
+                      = (2² + 0² + 0² + (−2)²) / 4
+                      = (4 + 0 + 0 + 4) / 4
+                      = 2                            ← exactly Var(a) + Var(b) = 1 + 1
+
+std:       √2 ≈ 1.41                                 ← not 1 + 1 = 2
+\`\`\`
+
+所以 $n$ 个这样的数相加，结果的典型大小是 $\\sqrt{n}$，而不是 $n$。
+
+**规则 3：两个独立的数相乘，两个的均值都为 0**
+
+\`\`\`text
+Var(X × Y) = Var(X) × Var(Y)
+\`\`\`
+
+原因：$X$ 和 $Y$ 独立时，乘积的平均等于平均的乘积：$E[XY] = E[X] \\times E[Y]$。$X^2$ 和 $Y^2$ 也是独立的，同样成立。所以：
+
+\`\`\`text
+mean:      E[XY] = E[X] × E[Y] = 0 × 0 = 0      ← both have mean 0
+
+variance:  Var(XY) = E[(XY)²] − (E[XY])²        ← definition of variance
+                   = E[X²Y²] − 0²               ← because E[XY] = 0
+                   = E[X²] × E[Y²]              ← X² and Y² are independent
+                   = Var(X) × Var(Y)            ← mean 0, so E[X²] = Var(X) and E[Y²] = Var(Y)
+\`\`\`
+
+**规则 4：均匀分布 U(−a, a) 的方差是 a²/3**
+
+$U(-a, a)$ 的意思是"$-a$ 到 $a$ 之间的任何值，可能性都一样"。它是对称的，均值为 0，所以方差就是 $x^2$ 在这个范围上的平均：
+
+$$
+\\mathrm{Var} = \\frac{1}{2a}\\int_{-a}^{a} x^2\\,dx = \\frac{1}{2a} \\cdot \\frac{2a^3}{3} = \\frac{a^2}{3}
+$$
+
+## 2. 起点：LayerNorm 的输出 h
+
+attention 的输入是 \`ln1(x)\`，形状是 $(B,\\ T,\\ C) = (B,\\ T,\\ 768)$：每个 token 一个 768 维向量。\`c_attn\` 对每个 token 的向量分别算出这个 token 的 q、k、v，所以**一次只看一个 token** 就够了。下面的 **h** 指一个 token 的向量，也就是 \`ln1(x)[b, t, :]\`（768 个数），$h[j]$ 是它的第 $j$ 个分量。初始化时（$\\gamma = 1$，$\\beta = 0$），[LayerNorm](#info:layernorm) 让每个 token 的 768 个分量均值为 0、方差为 1。均值为 0 时，方差就是平方的平均，所以：
+
+\`\`\`text
+(h[0]² + h[1]² + ... + h[767]²) / 768 = 1
+i.e.  h[0]² + h[1]² + ... + h[767]² = 768
+\`\`\`
+
+这是精确的（只差一个很小的 eps），并且 LayerNorm 对**每一个** token 都保证这一点。一个 4 维的例子：
+
+\`\`\`text
+before LayerNorm:       [2, 4, 6, 8]
+subtract the mean 5:    [−3, −1, 1, 3]
+variance:               (9 + 1 + 1 + 9) / 4 = 5
+divide by √5 ≈ 2.236:   h = [−1.34, −0.45, 0.45, 1.34]
+
+average of h[j]²:       (1.8 + 0.2 + 0.2 + 1.8) / 4 = 1     ✓
+\`\`\`
+
+## 3. 权重的方差
+
+本网站的代码用 PyTorch 默认初始化：\`nn.Linear(768, …)\` 的权重从 $U(-1/\\sqrt{768},\\ 1/\\sqrt{768})$ 里抽，768 是这一层的输入维数（这个范围是怎么来的，见 [Attention linear](#info:attention_linear_notes) 里的 "PyTorch default initialization" 一节）。按规则 4，取 $a = 1/\\sqrt{768}$：
+
+\`\`\`text
+Var(W) = (1/√768)² / 3 = 1 / (3 × 768) ≈ 0.000434
+\`\`\`
+
+bias 也从同一个范围里抽，所以 $\\mathrm{Var}(b)$ 也是 $1/(3 \\times 768)$。（作为对照，GPT-2 原版用 $N(0,\\ 0.02)$：$\\mathrm{Var}(W) = 0.02^2 = 0.0004$。）
+
+## 4. q 的一维：方差约为 1/3
+
+固定一个 token。它的 h 就是确定的 768 个数，随机的只有权重。这个 token 的 q 的第 $i$ 个分量（768 个分量中的一个）是：
+
+\`\`\`text
+q[i] = W[i,0] h[0] + W[i,1] h[1] + ... + W[i,767] h[767] + b[i]
+\`\`\`
+
+**均值为 0：**
+
+\`\`\`text
+E[q[i]] = E[W[i,0] h[0] + ... + W[i,767] h[767] + b[i]]
+        = E[W[i,0]] h[0] + ... + E[W[i,767]] h[767] + E[b[i]]   ← (1) and (2)
+        = 0 × h[0] + ... + 0 × h[767] + 0                       ← (3)
+        = 0
+\`\`\`
+
+用到的三个事实：
+
+1. **和的平均等于平均的和：** $E[X + Y] = E[X] + E[Y]$。不管是否独立，这一条都成立。
+2. **常数因子可以提到平均外面：** $E[cX] = c \\times E[X]$。这里 $h[j]$ 是常数，因为 token 是固定的。
+3. **每个权重和 bias 的均值都是 0：** 它们从 $U(-a,\\ a)$ 里抽取，这个分布以 0 为中心对称，所以 $E[W] = 0$，$E[b] = 0$。
+
+直观地说：不管 $h[j]$ 是多少，每一项 $W[i,j]\\,h[j]$ 取正和取负的机会相等，平均下来就是 0。
+
+**方差：** 每一项是一个随机的 $W$ 乘以常数 $h[j]$，按规则 1，它的方差是 $h[j]^2 \\times \\mathrm{Var}(W)$。768 项用的是互相独立的权重，按规则 2 直接相加：
+
+\`\`\`text
+Var(q[i]) = Var(W) × (h[0]² + h[1]² + ... + h[767]²) + Var(b)
+          = Var(W) × 768 + Var(b)          ← the sum of squares from section 2
+          = 1/(3 × 768) × 768 + 0.0004
+          ≈ 1/3 ≈ 0.334                    ← measured: 0.334 ✓
+\`\`\`
+
+k 和 v 也一样，都约为 1/3，它们用的是 \`c_attn\` 权重里另外几部分、各自独立抽取的值。因为有 LayerNorm，这对**任何**输入 token 都成立。
+
+## 5. 一项 q[i] × k[i]：方差 1/9
+
+从这里开始，q 和 k 指的是**一个 head 的 64 维切片**（见 [Query View](#info:query_view_notes)）：q 来自 query token，k 来自 key token，$i$ 从 0 到 63。按第 4 节，每个分量的均值仍然是 0，方差仍然约为 1/3。
+
+q 和 k 用的是不同的、各自独立抽取的权重，所以初始化时两者独立。按规则 3：
+
+\`\`\`text
+Var(q[i] × k[i]) = Var(q[i]) × Var(k[i]) = 1/3 × 1/3 = 1/9
+\`\`\`
+
+## 6. 点积 q · k：hs 项相加
+
+head size $hs = 64$，两个 token 之间的分数是：
+
+\`\`\`text
+q · k = q[0]k[0] + q[1]k[1] + ... + q[63]k[63]
+\`\`\`
+
+不同的 $i$ 用的是权重里不同的行，它们是各自独立抽取的，所以这 64 项互相独立。每一项的方差都是 1/9，按规则 2：
+
+\`\`\`text
+Var(q · k) = 64 × 1/9 ≈ 7.1
+std        = √7.1 ≈ 2.67                  ← measured: 2.67 ✓
+\`\`\`
+
+**Transformer 原论文的假设：** 如果 q、k 每一维的方差都是 1，每一项的方差就是 1，加起来是 64（标准差 8）。"方差约为 64"就是这么来的。
+
+不管是哪一种情况，**点积的方差都和 $hs$ 成正比**：head size 翻倍，方差也翻倍。
+
+## 7. 除以 √hs：方差不再依赖 hs
+
+### 问题：方差随 hs 增大
+
+把第 6 节写成一般形式：$q \\cdot k$ 是 $hs$ 个独立项的和；按规则 3，每一项 $q[i]\\,k[i]$ 的方差是 $\\mathrm{Var}(q[i]) \\times \\mathrm{Var}(k[i])$。按规则 2：
+
+\`\`\`text
+Var(q · k) = hs × Var(q[i]) × Var(k[i])
+\`\`\`
+
+在本网站的初始化下（$\\mathrm{Var}(q[i]) = \\mathrm{Var}(k[i]) = 1/3$，所以每一项的方差是 1/9）：
+
+\`\`\`text
+hs     Var(q · k)          std
+32     32 × 1/9  = 3.56    1.89
+64     64 × 1/9  = 7.11    2.67     ← GPT-2 small
+128    128 × 1/9 = 14.22   3.77
+\`\`\`
+
+head size 越大，分数就越大，尽管 q 和 k 本身没有变。
+
+### 解决办法：除以 √hs
+
+代码里算的是 \`(q @ k.transpose(-2, -1)) * (1.0 / hs**0.5)\`，也就是每个分数乘以 $c = 1/\\sqrt{hs}$。按规则 1，方差乘以 $c^2 = 1/hs$：
+
+\`\`\`text
+Var(q · k / √hs) = (1/√hs)² × Var(q · k)                  ← rule 1 with c = 1/√hs
+                 = (1/hs) × hs × Var(q[i]) × Var(k[i])     ← Var(q · k) from above
+                 = Var(q[i]) × Var(k[i])                   ← hs cancels
+\`\`\`
+
+结果里不再有 $hs$：不管 head size 是多少，分数的方差都一样。
+
+\`\`\`text
+hs     before dividing    after dividing by √hs
+32     3.56               3.56 / 32  = 1/9
+64     7.11               7.11 / 64  = 1/9      std ≈ 0.33   ← measured: 0.334 ✓
+128    14.22              14.22 / 128 = 1/9
+\`\`\`
+
+在 Transformer 原论文的假设下（每个分量方差为 1），同样的步骤得到 $1 \\times 1 = 1$：不管 head size 是多少，标准差都是 1。
+
+### 为什么是 √hs，而不是 hs
+
+方差按因子的**平方**变化（规则 1）。要让方差除以 $hs$，分数就要除以 $\\sqrt{hs}$。如果分数直接除以 $hs$，方差会除以 $hs^2$，剩下 $\\mathrm{Var}(q[i]) \\times \\mathrm{Var}(k[i]) / hs$：这时 $hs$ 越大，分数反而越**小**，变成了相反的问题。只有 $\\sqrt{hs}$ 能正好把 $hs$ 消掉。
+
+### 为什么分数不能太大
+
+softmax 对分数之间的**差**非常敏感。看两个分数的情况。标准差为 8 时（论文的假设，除之前），相差 16 很常见：
+
+\`\`\`text
+scores [16, 0]  →  softmax ≈ [0.9999999, 0.0000001]
+scores [2, 0]   →  softmax ≈ [0.88, 0.12]              ← the same scores divided by 8
+\`\`\`
+
+$[16, 0]$ 时几乎全部权重都给了一个 token，而且分数变化时它几乎不动：两个分数的情况下，输出对分数差的敏感度是 $p(1-p)$，这里只有约 $0.0000001$，而 $[2, 0]$ 时约为 $0.105$。敏感度极小，梯度就极小，模型就很难学会该关注哪里。更多见 [Q @ K](#info:q_k_product_notes)。
+
+## 8. 残差流：24 次相加
+
+点积是 64 项相加，残差流是 24 层的输出相加，用的是同一条规则 2：
+
+\`\`\`text
+x_final = x_embedding + update_1 + update_2 + ... + update_24
+\`\`\`
+
+GPT-2 small 有 12 个 block，每个 block 里 attention 和 MLP 各加一次，一共 24 次。假设每次更新的方差约为 $v$，并且各次大致独立：
+
+\`\`\`text
+Var(x_final) ≈ Var(x_embedding) + 24 × v      ← grows with depth
+\`\`\`
+
+**缩放 residual-writing weights：** 初始化时把 [\`proj\`](#info:attention_output_linear_notes)（以及 MLP 的 \`fc_out\`）的权重乘以 $1/\\sqrt{24}$。更新（近似）和这些权重成线性关系：它们是更新经过的最后一个矩阵，所以权重乘以 $c$，更新也乘以 $c$（GPT-2 把 bias 初始化为 0，所以 bias 不影响这一点）。因此每次更新缩小为 $1/\\sqrt{24}$，按规则 1，方差变成 $v/24$：
+
+\`\`\`text
+Var(x_final) ≈ Var(x_embedding) + 24 × v/24
+             = Var(x_embedding) + v           ← no longer grows with depth
+\`\`\`
+
+这就是 $1/\\sqrt{N}$ 里那个根号的来源：方差按 $c^2$ 变化，要让 $N$ 份方差加起来只相当于一份，每次更新就要乘以 $1/\\sqrt{N}$。
+
+GPT-2 论文和 nanoGPT 做了这个缩放；本网站的代码没有做（见 [Attention output projection](#info:attention_output_linear_notes)）。
+
+## 总结
+
+\`\`\`text
+h = one token's LayerNorm out    average of h[j]² = 1 (exact)
+W at initialization              Var(W) = 1/(3·768)
+q[i] = 768 terms W·h             Var ≈ 768 × 1/(3·768) = 1/3
+q[i]·k[i]                        Var = 1/3 × 1/3 = 1/9
+q·k = 64 terms                   Var = 64/9 ≈ 7.1, std 2.67
+divide by √64 = 8                Var = 1/9, std 0.33 (independent of hs)
+
+residual stream = 24 updates     variance grows with depth
+proj / fc_out weights × 1/√24    each update's variance ÷ 24; the total stops growing
+\`\`\`
+
+> 这些都**只在初始化时**成立，因为那时权重是随机、对称、独立的。训练开始后权重会变，这些方差也会跟着变。这些设计的作用，是让训练从一个尺度合适的起点开始。
+`,
+  },
 };

@@ -1048,6 +1048,8 @@ $$
 
 For $hs = 64$ the standard deviation is 8, so scores of $\\pm 8$ or $\\pm 16$ are common. The more dimensions, the bigger the scores.
 
+> At initialization in this site's code, the components of $q$ and $k$ actually have variance about 1/3, not 1 (LayerNorm's output has variance 1, but q and k come after a linear layer). The conclusion is the same: the variance is still proportional to $hs$. Every variance is derived step by step in [Variance at initialization](#info:variance_init_notes).
+
 ### Why big scores hurt: softmax saturates
 
 - scores $[8,\\; 0,\\; -8]$ → softmax $\\approx [0.9997,\\; 0.0003,\\; 0.0000]$: nearly all weight on one token;

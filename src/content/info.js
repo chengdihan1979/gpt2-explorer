@@ -740,11 +740,41 @@ Everything q, k and v come to mean is learned from these random starting points.
     md: `
 **The output projection lets information from different heads interact before it enters the residual stream.**
 
-## Intuition
+\`\`\`python
+self.proj = nn.Linear(n_embd, n_embd, bias=True)    # C → C
+y = self.resid_drop(self.proj(y))                   # (B, T, C)
+\`\`\`
 
-The projection layer increases expressivity: it learns a linear combination so information from different heads can interact before entering the residual. Without it, heads would stay in disjoint slices and couldn't "talk" before the next block.
+## From side by side to mixed
 
-At a high level, think of it as follows:
+[Merging the heads](#info:reorder_merge_heads_notes) only places the heads' results **side by side**. Each head occupies its own slice, and the heads have not interacted yet:
+
+\`\`\`text
+black: [1.33, 1.47 | 0.50, -0.20]
+         head 0       head 1
+\`\`\`
+
+\`proj\` is a $C \\to C$ linear layer: **every** output dimension is a weighted sum of **all** $C$ input dimensions, so every output dimension can use information from every head.
+
+Continuing the $C = 4$ example, suppose the weight row for output dimension 0 is \`[0.5, 0, 1, 0]\` and the bias is 0:
+
+\`\`\`text
+out[0] = 0.5 × 1.33 + 0 × 1.47 + 1 × 0.50 + 0 × (-0.20)
+       = 0.665 + 0.50
+       = 1.17
+         ↑ from head 0   ↑ from head 1
+\`\`\`
+
+This single output number combines both heads. The other 3 output dimensions each use their own weight row to combine them in other ways.
+
+Intuitively: if head 0 found "the adjective before me" and head 1 found "the subject of the sentence", \`proj\` combines the two clues into one useful update.
+
+## Why it is needed
+
+1. **Mixing the heads.** Without \`proj\`, head 0's result would always stay in dimensions 0–63, head 1's in 64–127, and so on: the heads' findings could not be combined before the next block.
+2. **Writing into the residual stream.** The attention output is added back onto \`x\` (\`x = x + attn(...)\`). \`proj\` turns the concatenated result into [a form suited to that addition](#hover:proj_residual_stream_notes).
+
+At a high level:
 
 - **Q/K do routing:** which tokens attend to which other tokens, within each head.
 - **V carries content.**
@@ -752,12 +782,20 @@ At a high level, think of it as follows:
 
 > It lets the model reweight heads, rotate features, and gate what survives to the next layer.
 
-## Parameter shapes
+## Shapes and parameters
+
+\`\`\`text
+input y:  (B, T, C)
+output:   (B, T, C)     same shape
+\`\`\`
 
 - **Weight:** $(n\\_embd,\\ n\\_embd)$
 - **Bias:** $(n\\_embd)$
+- **Count:** $768 \\times 768 + 768 = 590{,}592$ parameters in GPT-2 small.
 
 More strictly, the input dimension is $n\\_head \\cdot hs$ (the merged heads), so the \`nn.Linear\` weight, stored as (out, in), is $(n\\_embd,\\ n\\_head \\cdot hs)$. In GPT-2, $n\\_head \\cdot hs = n\\_embd$ (e.g. $12 \\times 64 = 768$), so the two are the same.
+
+Like \`c_attn\`, \`proj\` applies the same transformation to each token independently; it does not mix information **between tokens**. That only happens in [\`att @ v\`](#info:att_v_product_notes).
 
 ## PyTorch default initialization
 
@@ -765,9 +803,20 @@ See the "PyTorch default initialization" section in the [Attention linear notes]
 
 ## Residual-writing weights
 
-The weight of this layer is also called the **residual-writing weights**, because it is the final projection matrix that writes the residual update to the original stream.
+\`proj\` is the last matrix before the attention output is added back to the residual stream:
 
-Why I call this out: at initialization, some implementations scale these residual-writing weights by $\\frac{1}{\\sqrt{N}}$ (or $\\frac{1}{\\sqrt{2N}}$), where $N$ is the number of residual layers, so that the sum of $N$ residual additions doesn't blow up in variance with depth. Whether to use it varies between implementations.
+\`\`\`text
+x = x + attn(ln1(x))
+        └─ last step inside attn:  y = self.resid_drop(self.proj(y))
+                                                       ↑
+                              last matrix with weights before the add
+\`\`\`
+
+(\`resid_drop\` has no parameters.) So \`proj\`'s weight decides what the attention writes into the residual stream, and how much. Weights in this position are called **residual-writing weights**. The MLP has one in the same position, its final [\`fc_out\`](#info:mlp_fc_out_notes), so each block has 2, and GPT-2 small (12 blocks) has 24.
+
+Why this matters: at initialization, some implementations scale the residual-writing weights by $\\frac{1}{\\sqrt{N}}$, where $N$ is the number of residual layers ($N = 2 \\times n\\_layer = 24$ in GPT-2 small, so the same factor is also written $\\frac{1}{\\sqrt{2\\, n\\_layer}}$). This keeps the sum of $N$ residual additions from blowing up in variance with depth (derivation: [Variance at initialization](#info:variance_init_notes), section 8). Matrices that do not write to the stream, such as \`c_attn\`, are not scaled.
+
+Whether to use it varies between implementations. The GPT-2 paper does it, and 🆕 nanoGPT initializes these weights with standard deviation \`0.02 / sqrt(2 * n_layer)\`. The code on this site does not; it uses PyTorch's default initialization.
 
 ### Why pre-norm stacks like GPT-2 need it
 
@@ -776,6 +825,332 @@ In a pre-norm block, $x \\leftarrow x + f(\\mathrm{LN}(x))$: LayerNorm normalize
 In a post-norm block, $x \\leftarrow \\mathrm{LN}(x + f(x))$, the stream is renormalized after every addition, so it cannot accumulate in the same way.
 
 > See a tiny numeric [example](#info:post_norm_scaling_example_notes) of residual scaling in a post-norm stack.
+`,
+  },
+
+  proj_residual_stream_notes: {
+    title: "Writing into the residual stream (hover)",
+    md: `
+**What does "a form suited to the residual stream" mean?** The concatenated vector and the residual stream \`x\` are both 768-dimensional, but the same position does not mean the same thing in the two. \`proj\` translates the former into the latter's "coordinates" before they are added.
+
+**The residual stream is a shared whiteboard**
+
+\`x\` starts at the embedding and passes through all 12 blocks, and every block adds something to it:
+
+\`\`\`text
+x = x + attn(ln1(x))
+x = x + mlp(ln2(x))
+\`\`\`
+
+So the 768 dimensions of \`x\` are **shared** by every layer. Think of a whiteboard with 768 columns: what each column (more precisely, each direction) stands for is a convention the whole model forms together during training. Every layer reads from it and writes to it.
+
+**The concatenated vector uses each head's own coordinates**
+
+After merging the heads, dimensions 0–63 of \`y\` are head 0's output, 64–127 are head 1's, and so on. These numbers were computed in each head's own value space; their meaning is specific to that head and has nothing to do with the convention for whiteboard columns 0–63.
+
+Adding \`y\` to \`x\` directly, without \`proj\`, would mean:
+
+\`\`\`text
+x[0:64]    += head 0's output
+x[64:128]  += head 1's output
+...
+\`\`\`
+
+Head 0 could then only ever change whiteboard columns 0–63, head 1 only 64–127, and each head's output coordinates would have to line up exactly with what those columns mean. That is far too rigid.
+
+**What proj does**
+
+\`proj\` is a $768 \\times 768$ matrix. It lets each head's result be written **anywhere** on the whiteboard, in any amount:
+
+\`\`\`text
+what head 0 found  ──proj──→  the columns that need it
+what head 1 found  ──proj──→  other columns, or the same ones as head 0
+\`\`\`
+
+As an analogy: each head writes a note in its own shorthand, and \`proj\` is the translator who rewrites the notes in the whiteboard's common format and puts them in the right columns. Later layers only understand the whiteboard's format, not each head's shorthand.
+
+> "What each column stands for" is only a way to build intuition. In practice these meanings are learned, usually do not match concepts a person can read directly, and are often spread across many dimensions rather than one meaning per dimension.
+`,
+  },
+
+  variance_init_notes: {
+    title: "Variance at initialization",
+    md: `
+**Several design choices in GPT-2, such as the $1/\\sqrt{hs}$ in attention and the scaling of residual-writing weights, exist to keep variances under control at initialization.** This note derives every variance involved, from LayerNorm's output to the attention scores and the residual stream. The numbers are for this site's code (PyTorch default initialization) and match measurements in PyTorch.
+
+## 0. What variance is
+
+The **mean** $E[X]$ of a random number $X$ is its average. The **variance** measures how far it typically is from the mean: the average squared distance.
+
+\`\`\`text
+Var(X) = E[(X − E[X])²]
+       = E[X²] − (E[X])²        ← equivalent, often more convenient
+\`\`\`
+
+When the mean is 0, this is simply **Var(X) = E[X²]**, "the average of the square". That form is used throughout.
+
+The **standard deviation** is √variance: the number's typical size. Variance 64 means standard deviation 8, i.e. values around ±8.
+
+**What is random here:** at initialization the weights are drawn at random, so q and k are random too. All means and variances below are averages over that random initialization.
+
+## 1. Four rules
+
+**Rule 1: multiplying by a constant c multiplies the variance by c²**
+
+\`\`\`text
+Var(cX) = c² × Var(X)
+e.g. if X has variance 64, then X / 8 has variance 64 / 8² = 1
+\`\`\`
+
+**Rule 2: for independent random numbers, variances add**
+
+\`\`\`text
+Var(X + Y) = Var(X) + Var(Y)      (X, Y independent)
+\`\`\`
+
+Variances add, not standard deviations, because random signs partly cancel. With two numbers that are each +1 or −1 with probability ½:
+
+\`\`\`text
+a     b     a + b
++1    +1     +2
++1    −1      0
+−1    +1      0
+−1    −1     −2
+
+each case has probability 1/4
+
+a alone:   E[a] = 0,  a² is always 1  →  Var(a) = 1   (same for b)
+
+mean:      E[a + b] = (2 + 0 + 0 − 2) / 4 = 0
+
+variance:  Var(a + b) = E[(a + b)²] − (E[a + b])²
+                      = E[(a + b)²] − 0²             ← because E[a + b] = 0
+                      = (2² + 0² + 0² + (−2)²) / 4
+                      = (4 + 0 + 0 + 4) / 4
+                      = 2                            ← exactly Var(a) + Var(b) = 1 + 1
+
+std:       √2 ≈ 1.41                                 ← not 1 + 1 = 2
+\`\`\`
+
+So the sum of $n$ such terms is typically about $\\sqrt{n}$ in size, not $n$.
+
+**Rule 3: product of two independent numbers, both with mean 0**
+
+\`\`\`text
+Var(X × Y) = Var(X) × Var(Y)
+\`\`\`
+
+Why: for independent $X$ and $Y$, the average of a product is the product of the averages: $E[XY] = E[X] \\times E[Y]$. The same holds for $X^2$ and $Y^2$, which are independent too. So:
+
+\`\`\`text
+mean:      E[XY] = E[X] × E[Y] = 0 × 0 = 0      ← both have mean 0
+
+variance:  Var(XY) = E[(XY)²] − (E[XY])²        ← definition of variance
+                   = E[X²Y²] − 0²               ← because E[XY] = 0
+                   = E[X²] × E[Y²]              ← X² and Y² are independent
+                   = Var(X) × Var(Y)            ← mean 0, so E[X²] = Var(X) and E[Y²] = Var(Y)
+\`\`\`
+
+**Rule 4: the uniform distribution U(−a, a) has variance a²/3**
+
+$U(-a, a)$ means "any value between $-a$ and $a$, all equally likely". Its mean is 0 (it is symmetric), so its variance is the average of $x^2$ over that range:
+
+$$
+\\mathrm{Var} = \\frac{1}{2a}\\int_{-a}^{a} x^2\\,dx = \\frac{1}{2a} \\cdot \\frac{2a^3}{3} = \\frac{a^2}{3}
+$$
+
+## 2. The starting point: LayerNorm's output h
+
+Attention's input is \`ln1(x)\`, with shape $(B,\\ T,\\ C) = (B,\\ T,\\ 768)$: one 768-dim vector per token. \`c_attn\` turns each token's vector into that token's q, k and v separately, so it is enough to look at **one token at a time**. Below, **h** means one token's vector, \`ln1(x)[b, t, :]\` (768 numbers), and $h[j]$ is its $j$-th component. At initialization ($\\gamma = 1$, $\\beta = 0$), [LayerNorm](#info:layernorm) makes each token's 768 components have mean 0 and variance 1. With mean 0, variance is the average of the squares, so:
+
+\`\`\`text
+(h[0]² + h[1]² + ... + h[767]²) / 768 = 1
+i.e.  h[0]² + h[1]² + ... + h[767]² = 768
+\`\`\`
+
+This is exact (up to a tiny eps), enforced by LayerNorm for **every** token. A 4-dim example:
+
+\`\`\`text
+before LayerNorm:       [2, 4, 6, 8]
+subtract the mean 5:    [−3, −1, 1, 3]
+variance:               (9 + 1 + 1 + 9) / 4 = 5
+divide by √5 ≈ 2.236:   h = [−1.34, −0.45, 0.45, 1.34]
+
+average of h[j]²:       (1.8 + 0.2 + 0.2 + 1.8) / 4 = 1     ✓
+\`\`\`
+
+## 3. The variance of the weights
+
+This site's code uses PyTorch's default initialization: the weight of \`nn.Linear(768, …)\` is drawn from $U(-1/\\sqrt{768},\\ 1/\\sqrt{768})$, where 768 is the layer's number of inputs (see "PyTorch default initialization" in [Attention linear](#info:attention_linear_notes) for where this range comes from). By rule 4, with $a = 1/\\sqrt{768}$:
+
+\`\`\`text
+Var(W) = (1/√768)² / 3 = 1 / (3 × 768) ≈ 0.000434
+\`\`\`
+
+The bias is drawn from the same range, so $\\mathrm{Var}(b) = 1/(3 \\times 768)$ as well. (For comparison, original GPT-2 uses $N(0,\\ 0.02)$: $\\mathrm{Var}(W) = 0.02^2 = 0.0004$.)
+
+## 4. One component of q: variance about 1/3
+
+Fix one token. Its h is now 768 fixed numbers; only the weights are random. Component $i$ of that token's q (one of its 768 components) is:
+
+\`\`\`text
+q[i] = W[i,0] h[0] + W[i,1] h[1] + ... + W[i,767] h[767] + b[i]
+\`\`\`
+
+**Mean 0:**
+
+\`\`\`text
+E[q[i]] = E[W[i,0] h[0] + ... + W[i,767] h[767] + b[i]]
+        = E[W[i,0]] h[0] + ... + E[W[i,767]] h[767] + E[b[i]]   ← (1) and (2)
+        = 0 × h[0] + ... + 0 × h[767] + 0                       ← (3)
+        = 0
+\`\`\`
+
+The three facts used:
+
+1. **The average of a sum is the sum of the averages:** $E[X + Y] = E[X] + E[Y]$. This always holds, independent or not.
+2. **A constant factor comes out of the average:** $E[cX] = c \\times E[X]$. Here $h[j]$ is a constant, because the token is fixed.
+3. **Each weight and the bias have mean 0:** they are drawn from $U(-a,\\ a)$, which is symmetric around 0, so $E[W] = 0$ and $E[b] = 0$.
+
+Intuitively: each term $W[i,j]\\,h[j]$ is positive or negative with equal chance, whatever $h[j]$ is, so it averages to 0.
+
+**Variance:** each term is a random $W$ times the constant $h[j]$, so by rule 1 its variance is $h[j]^2 \\times \\mathrm{Var}(W)$. The 768 terms use independent weights, so by rule 2 they add:
+
+\`\`\`text
+Var(q[i]) = Var(W) × (h[0]² + h[1]² + ... + h[767]²) + Var(b)
+          = Var(W) × 768 + Var(b)          ← the sum of squares from section 2
+          = 1/(3 × 768) × 768 + 0.0004
+          ≈ 1/3 ≈ 0.334                    ← measured: 0.334 ✓
+\`\`\`
+
+k and v are the same, about 1/3 each; they use other, independently drawn parts of \`c_attn\`'s weight. Thanks to LayerNorm, this holds for **any** input token.
+
+## 5. One term q[i] × k[i]: variance 1/9
+
+From here on, q and k are **one head's 64-dim pieces** (see [Query View](#info:query_view_notes)): q comes from the query token, k from the key token, and $i$ runs from 0 to 63. Each component still has mean 0 and variance about 1/3, by section 4.
+
+q and k use different, independently drawn weights, so at initialization they are independent. By rule 3:
+
+\`\`\`text
+Var(q[i] × k[i]) = Var(q[i]) × Var(k[i]) = 1/3 × 1/3 = 1/9
+\`\`\`
+
+## 6. The dot product q · k: a sum of hs terms
+
+With head size $hs = 64$, the score between the two tokens is:
+
+\`\`\`text
+q · k = q[0]k[0] + q[1]k[1] + ... + q[63]k[63]
+\`\`\`
+
+Different $i$ use different rows of the weights, drawn independently, so the 64 terms are independent. Each has variance 1/9, and by rule 2:
+
+\`\`\`text
+Var(q · k) = 64 × 1/9 ≈ 7.1
+std        = √7.1 ≈ 2.67                  ← measured: 2.67 ✓
+\`\`\`
+
+**The Transformer paper's assumption:** if each component of q and k had variance 1, each term would have variance 1, and the sum variance 64 (standard deviation 8). That is where "variance about 64" comes from.
+
+Either way, **the dot product's variance is proportional to $hs$**: doubling the head size doubles it.
+
+## 7. Dividing by √hs: the variance no longer depends on hs
+
+### The problem: the variance grows with hs
+
+Section 6 in general form: $q \\cdot k$ is a sum of $hs$ independent terms, and by rule 3 each term $q[i]\\,k[i]$ has variance $\\mathrm{Var}(q[i]) \\times \\mathrm{Var}(k[i])$. By rule 2:
+
+\`\`\`text
+Var(q · k) = hs × Var(q[i]) × Var(k[i])
+\`\`\`
+
+With this site's initialization ($\\mathrm{Var}(q[i]) = \\mathrm{Var}(k[i]) = 1/3$, so each term has variance 1/9):
+
+\`\`\`text
+hs     Var(q · k)          std
+32     32 × 1/9  = 3.56    1.89
+64     64 × 1/9  = 7.11    2.67     ← GPT-2 small
+128    128 × 1/9 = 14.22   3.77
+\`\`\`
+
+The bigger the head size, the bigger the scores, even though q and k themselves have not changed.
+
+### The fix: divide by √hs
+
+The code computes \`(q @ k.transpose(-2, -1)) * (1.0 / hs**0.5)\`, i.e. every score is multiplied by $c = 1/\\sqrt{hs}$. By rule 1, the variance is multiplied by $c^2 = 1/hs$:
+
+\`\`\`text
+Var(q · k / √hs) = (1/√hs)² × Var(q · k)                  ← rule 1 with c = 1/√hs
+                 = (1/hs) × hs × Var(q[i]) × Var(k[i])     ← Var(q · k) from above
+                 = Var(q[i]) × Var(k[i])                   ← hs cancels
+\`\`\`
+
+The result no longer contains $hs$: for every head size the scores have the same variance.
+
+\`\`\`text
+hs     before dividing    after dividing by √hs
+32     3.56               3.56 / 32  = 1/9
+64     7.11               7.11 / 64  = 1/9      std ≈ 0.33   ← measured: 0.334 ✓
+128    14.22              14.22 / 128 = 1/9
+\`\`\`
+
+Under the Transformer paper's assumption (variance 1 per component), the same steps give $1 \\times 1 = 1$: standard deviation 1 for every head size.
+
+### Why √hs and not hs
+
+Variance scales by the **square** of the factor (rule 1). To divide the variance by $hs$, the scores are divided by $\\sqrt{hs}$. Dividing the scores by $hs$ itself would divide the variance by $hs^2$, leaving $\\mathrm{Var}(q[i]) \\times \\mathrm{Var}(k[i]) / hs$: now the scores would **shrink** as $hs$ grows, the opposite problem. Only $\\sqrt{hs}$ cancels $hs$ exactly.
+
+### Why scores must not be too large
+
+softmax is very sensitive to the **difference** between scores. Take two scores. With standard deviation 8 (the paper's assumption, before dividing), a difference of 16 is common:
+
+\`\`\`text
+scores [16, 0]  →  softmax ≈ [0.9999999, 0.0000001]
+scores [2, 0]   →  softmax ≈ [0.88, 0.12]              ← the same scores divided by 8
+\`\`\`
+
+With $[16, 0]$ essentially all the weight goes to one token, and it barely moves when the scores change: for two scores, the output's sensitivity to their difference is $p(1-p)$, which is about $0.0000001$ here, versus about $0.105$ for $[2, 0]$. Tiny sensitivity means tiny gradients, so the model can hardly learn where to attend. See [Q @ K](#info:q_k_product_notes) for more.
+
+## 8. The residual stream: 24 additions
+
+The dot product sums 64 terms; the residual stream sums 24 layer outputs, under the same rule 2:
+
+\`\`\`text
+x_final = x_embedding + update_1 + update_2 + ... + update_24
+\`\`\`
+
+GPT-2 small has 12 blocks, each adding once from attention and once from the MLP: 24 additions. If each update has variance about $v$ and they are roughly independent:
+
+\`\`\`text
+Var(x_final) ≈ Var(x_embedding) + 24 × v      ← grows with depth
+\`\`\`
+
+**Scaling the residual-writing weights:** at initialization, the weights of [\`proj\`](#info:attention_output_linear_notes) (and the MLP's \`fc_out\`) are multiplied by $1/\\sqrt{24}$. An update is (approximately) linear in these weights: they are the last matrix the update passes through, so multiplying them by $c$ multiplies the update by $c$ (GPT-2 initializes biases to 0, so the bias does not get in the way). Each update therefore shrinks by $1/\\sqrt{24}$, and by rule 1 its variance becomes $v/24$:
+
+\`\`\`text
+Var(x_final) ≈ Var(x_embedding) + 24 × v/24
+             = Var(x_embedding) + v           ← no longer grows with depth
+\`\`\`
+
+That is where the square root in $1/\\sqrt{N}$ comes from: variance scales by $c^2$, so to make $N$ variances add up to one, each update is scaled by $1/\\sqrt{N}$.
+
+The GPT-2 paper and nanoGPT do this scaling; the code on this site does not (see [Attention output projection](#info:attention_output_linear_notes)).
+
+## Summary
+
+\`\`\`text
+h = one token's LayerNorm out    average of h[j]² = 1 (exact)
+W at initialization              Var(W) = 1/(3·768)
+q[i] = 768 terms W·h             Var ≈ 768 × 1/(3·768) = 1/3
+q[i]·k[i]                        Var = 1/3 × 1/3 = 1/9
+q·k = 64 terms                   Var = 64/9 ≈ 7.1, std 2.67
+divide by √64 = 8                Var = 1/9, std 0.33 (independent of hs)
+
+residual stream = 24 updates     variance grows with depth
+proj / fc_out weights × 1/√24    each update's variance ÷ 24; the total stops growing
+\`\`\`
+
+> All of this holds **only at initialization**, when the weights are random, symmetric and independent. Once training starts, the weights change and so do these variances. The point of these choices is to give training a starting point on a sensible scale.
 `,
   },
 
