@@ -154,15 +154,23 @@ export const mlpCode = `import torch.nn as nn
 class MLP(nn.Module):
     def __init__(self, n_embd, dropout):
         super().__init__()
+        # C = n_embd = 768, 4C = 3072
+        # fc_in: weight (4C, C), bias (4C,)
         self.fc_in = nn.Linear(n_embd, 4 * n_embd)
+        # GELU: element-wise, no weights
         try:
             self.act = nn.GELU(approximate="tanh")
         except TypeError:
             self.act = nn.GELU()
+        # fc_out: weight (C, 4C), bias (C,)
         self.fc_out = nn.Linear(4 * n_embd, n_embd)
         self.drop = nn.Dropout(dropout)
 
-    def forward(self, x):
+    def forward(self, x):                              # x: (B, T, C)
+        # fc_in:  (B, T, C)  -> (B, T, 4C)
+        # act:    (B, T, 4C) -> (B, T, 4C)
+        # fc_out: (B, T, 4C) -> (B, T, C)
+        # drop:   (B, T, C)  -> (B, T, C)    (output)
         return self.drop(self.fc_out(self.act(self.fc_in(x))))
 `;
 

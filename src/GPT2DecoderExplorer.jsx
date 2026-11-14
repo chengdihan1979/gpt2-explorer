@@ -226,65 +226,281 @@ where $W \\in \\mathbb{R}^{\\text{out}\\times\\text{in}},\\ b \\in \\mathbb{R}^{
   gelu: {
     title: "GELU",
     md: `
-**GELU (Gaussian Error Linear Unit)**
+**GELU (Gaussian Error Linear Unit) is the non-linearity between \`fc_in\` and \`fc_out\` in the MLP. It decides how much of each of the 3072 pattern scores is let through.**
+
+\`\`\`python
+self.act = nn.GELU(approximate="tanh")
+\`\`\`
+
+GELU acts on **each number separately**, so the shape does not change: $(B,\\ T,\\ 3072) \\to (B,\\ T,\\ 3072)$.
+
+## Why the MLP needs a non-linearity
+
+Without GELU, \`fc_out(fc_in(h))\` would be two linear maps in a row, and two linear maps combine into one (biases left out for simplicity):
+
+\`\`\`text
+fc_out(fc_in(h)) = W2 (W1 h) = (W2 W1) h      ← W2 W1 is just one 768 × 768 matrix
+\`\`\`
+
+Then the 3072 detectors would be wasted: a single 768 × 768 matrix could do exactly the same thing. GELU lets each detector "fire" or "not fire", which is what lets the MLP express [if … then write … rules](#info:mlp_fc_out_notes).
 
 ## The formula
 
-$$
-\\mathrm{GELU}(x) = x \\, \\Phi(x)
-$$
+\`\`\`text
+GELU(x) = x × Φ(x)
+\`\`\`
 
-where $\\Phi(x)$ is the [CDF of the standard normal distribution](#cdf).
+$\\Phi(x)$ is the [CDF of the standard normal distribution](#hover:cdf): if you draw a random number from a normal distribution with mean 0 and standard deviation 1, $\\Phi(x)$ is the probability that it is smaller than $x$.
 
-> The GELU comes from the paper [Hendrycks & Gimpel (2016) ↗](https://arxiv.org/abs/1606.08415).
+- When $x$ is large, $\\Phi(x) \\approx 1$, so GELU(x) ≈ x: the number passes almost unchanged.
+- When $x$ is very negative, $\\Phi(x) \\approx 0$, so GELU(x) ≈ 0: the number is almost switched off.
+- Near 0, $\\Phi(x)$ is between 0 and 1, so the number passes partly.
+
+Think of $\\Phi(x)$ as a "pass-through fraction": the larger $x$, the more of it gets through.
+
+> GELU comes from the paper [Hendrycks & Gimpel (2016) ↗](https://arxiv.org/abs/1606.08415).
+
+## Concrete values
+
+Computed in PyTorch:
+
+| x | −3 | −2 | −1 | −0.75 | −0.5 | 0 | 0.5 | 1 | 2 | 3 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Φ(x) | 0.001 | 0.023 | 0.159 | 0.227 | 0.309 | 0.5 | 0.691 | 0.841 | 0.977 | 0.999 |
+| GELU(x) | −0.004 | −0.046 | −0.159 | −0.170 | −0.154 | 0 | 0.346 | 0.841 | 1.954 | 2.996 |
+
+Each GELU value is $x \\times \\Phi(x)$, e.g. GELU(2) = 2 × 0.977 = 1.954.
+
+![GELU curve from −3.5 to 3.5 with the line y = x for comparison](/gpt2-explorer/notes/gelu.svg)
+
+- **Positive inputs** pass almost unchanged: GELU(2) = 1.95.
+- **Negative inputs** are pushed close to 0, but not exactly 0. The lowest point is at $x \\approx -0.75$, where GELU ≈ −0.17.
+- The curve is **smooth**, with no corner.
+
+This is where the values in the [MLP worked example](#info:mlp_fc_out_notes) come from: GELU(3) ≈ 3.00, GELU(−1) ≈ −0.16, GELU(2) ≈ 1.95.
 
 ## Tanh approximation (used in GPT-2)
 
-$$
-\\mathrm{GELU}(x) \\approx 0.5\\,x\\,\\left(1 + \\tanh\\!\\left(\\sqrt{\\tfrac{2}{\\pi}}\\,(x + 0.044715\\,x^3)\\right)\\right)
-$$
+Computing $\\Phi(x)$ exactly needs the erf function. GPT-2 used a faster approximation built from tanh:
 
-The reason behind the approximation comes from this [GitHub issue ↗](https://github.com/pytorch/pytorch/issues/39853).
+\`\`\`text
+GELU(x) ≈ 0.5 · x · (1 + tanh( √(2/π) · (x + 0.044715 · x³) ))
+\`\`\`
 
-Historically, evaluating erf (needed by exact GELU) was slower than a few multiplies + a tanh, especially on older GPU kernels and before [common fusions ↗](https://arikpoz.github.io/posts/2025-05-07-faster-models-with-graph-fusion-how-deep-learning-frameworks-optimize-your-computation/). So many models (including GPT-2) used the Hendrycks-Gimpel tanh approximation for speed.
+The difference is tiny: at the points in the table above it is at most about 0.0004. The site's code uses \`approximate="tanh"\` so that its outputs match the original GPT-2 weights. The \`try/except\` around it is there because older PyTorch versions' \`nn.GELU\` has no \`approximate\` argument and only offers the exact version.
+
+Why approximate at all? Historically, evaluating erf was slower than a few multiplications plus a tanh, especially on older GPU kernels and before [common fusions ↗](https://arikpoz.github.io/posts/2025-05-07-faster-models-with-graph-fusion-how-deep-learning-frameworks-optimize-your-computation/). See also this [GitHub issue ↗](https://github.com/pytorch/pytorch/issues/39853).
 
 ### Today
 
-- **TensorFlow:** \`tf.nn.gelu(x, approximate=False)\` computes the exact erf form; \`approximate=True\` uses the tanh form. With modern TF/XLA, both paths are vectorized and often fused; the exact version is usually fast enough unless you're ultra latency-sensitive.
-- **PyTorch:** \`torch.nn.GELU()\` / \`F.gelu\` support \`approximate='none'\` (exact) or \`approximate='tanh'\`. Same idea: exact is generally fine; tanh can be a tiny bit faster on some hardware. Some transformer libraries also have a "FastGELU", which is just the tanh form.
+- **PyTorch:** \`torch.nn.GELU()\` / \`F.gelu\` support \`approximate='none'\` (exact) or \`approximate='tanh'\`. The exact version is generally fast enough; tanh can be slightly faster on some hardware. Some transformer libraries have a "FastGELU", which is just the tanh form.
+- **TensorFlow:** \`tf.nn.gelu(x, approximate=False)\` computes the exact erf form; \`approximate=True\` uses the tanh form.
 
-## Why does GPT-2 use GELU instead of ReLU?
+## Why GELU instead of ReLU?
 
-ReLU is defined as:
+ReLU is defined as
 
-$$
-\\mathrm{ReLU}(x) = \\max(0, x)
-$$
+\`\`\`text
+ReLU(x) = max(0, x)
+\`\`\`
 
-So the gradient behavior of ReLU is:
+Its gradient is:
 
-- For $x > 0$: gradient = 1 (flows without scaling).
-- For $x < 0$: gradient = 0 (dies out).
+- for $x > 0$: 1 (the gradient flows through unscaled);
+- for $x < 0$: 0 (the gradient dies out).
 
-This makes optimization straightforward and avoids the vanishing gradients that plagued sigmoid/tanh in deep nets in the early days of deep learning.
+This makes optimization simple and avoids the vanishing gradients that sigmoid and tanh caused in early deep networks.
 
-But it also introduces the **"dying ReLU"** problem: if a neuron's weights push it into negative inputs too often, its gradient is always zero, so it can "die" and never update again.
+But it also causes the **"dying ReLU"** problem: if a neuron's weights push its input negative too often, its gradient is always 0, so it can "die" and never update again.
 
-> GELU doesn't discard negatives outright. It smoothly scales them down using the normal CDF.
+> GELU does not discard negative inputs outright. It scales them down smoothly using the normal CDF.
 `,
   },
   cdf: {
     title: "CDF",
     md: `
-**CDF of the standard normal distribution** $(\\mu = 0, \\sigma = 1)$
+**The standard normal CDF, step by step**
 
-The CDF is
+### 1. The standard normal distribution
 
-$$
-\\Phi(x) = \\frac{1}{\\sqrt{2\\pi}} \\int_{-\\infty}^{x} e^{-t^{2}/2} \\, dt
-$$
+\`torch.randn\` draws random numbers from the standard normal distribution. Ten draws:
 
-with properties: $\\Phi(0)=0.5$, it is monotonically increasing, and its derivative is the standard normal PDF $\\phi(x)$.
+\`\`\`text
+-1.13, -1.15, -0.25, -0.43, 0.85, 0.69, -0.32, -2.12, 0.32, -1.26
+\`\`\`
+
+- **Mean 0:** the numbers are centered on 0, with as many positive as negative ones.
+- **Standard deviation 1:** most numbers fall between −1 and 1, few go beyond ±2, almost none beyond ±3:
+
+| Range | Share of numbers |
+| --- | --- |
+| between −1 and 1 | 68.3% |
+| between ±1 and ±2 (both sides together) | 27.2% |
+| between ±2 and ±3 (both sides together) | 4.3% |
+| beyond ±3 | 0.3% |
+| *cumulative:* between −2 and 2 | 95.4% (= 68.3% + 27.2%) |
+| *cumulative:* between −3 and 3 | 99.7% (= 95.4% + 4.3%) |
+
+"Standard" means exactly these two parameters: mean 0, standard deviation 1.
+
+### 2. The PDF: where the numbers are dense
+
+The PDF (probability density function), written φ(x), is the bell curve. The higher the curve at a point, the more likely a draw lands near it:
+
+\`\`\`text
+x        0      0.5    1      1.5    2
+φ(x)    0.399  0.352  0.242  0.130  0.054     ← highest at 0, lower toward both sides
+\`\`\`
+
+![Bell curve of the standard normal PDF, with φ(0), φ(1) and φ(2) marked](/gpt2-explorer/notes/normal_pdf.svg)
+
+**The formula of the PDF:**
+
+\`\`\`text
+φ(x) = 1/√(2π) × e^(−x²/2)
+\`\`\`
+
+It has two parts.
+
+*e^(−x²/2) gives the bell shape:*
+
+\`\`\`text
+x            0      1       2       3
+x²/2         0      0.5     2       4.5
+e^(−x²/2)    1      0.607   0.135   0.011
+\`\`\`
+
+- It is largest (1) at x = 0.
+- The farther x is from 0, the larger x², the more negative the exponent, and the faster the value drops.
+- Because of the square, x and −x give the same value, so the curve is symmetric.
+
+*1/√(2π) ≈ 0.399 makes the total area 1:* probabilities must add up to 1, so the area under the curve must be 1. The area under e^(−x²/2) alone is √(2π) ≈ 2.507 (a famous result called the Gaussian integral). Multiplying by 1/√(2π) brings the area to exactly 1.
+
+Multiplying the two parts gives the PDF values in the table above:
+
+\`\`\`text
+φ(0) = 0.399 × 1     = 0.399
+φ(1) = 0.399 × 0.607 = 0.242
+φ(2) = 0.399 × 0.135 = 0.054
+\`\`\`
+
+**The general normal distribution** with mean μ and standard deviation σ:
+
+\`\`\`text
+φ(x) = 1/(σ√(2π)) × e^(−(x−μ)²/(2σ²))
+\`\`\`
+
+- **x − μ** moves the center from 0 to μ.
+- **Dividing by σ²**: the larger σ, the wider the curve.
+- **The 1/σ in front** makes the wider curve correspondingly lower, so the area stays 1.
+
+With μ = 0 and σ = 1 this is the standard normal formula again.
+
+### 3. The CDF: the area to the left of x
+
+The CDF (cumulative distribution function), written Φ(x), answers one question:
+
+> If you draw one random number, what is the probability that it is **smaller than x**?
+
+On the plot, it is the **area under the bell curve to the left of x**. The total area under the whole curve is 1.
+
+Φ(1) is the shaded area:
+
+![PDF with the area left of x = 1 shaded: Φ(1) ≈ 0.841](/gpt2-explorer/notes/normal_cdf_area.svg)
+
+Drawing 100,000 numbers and counting the fraction below x matches Φ(x) closely:
+
+| x | −2 | −1 | 0 | 1 | 2 |
+| --- | --- | --- | --- | --- | --- |
+| Φ(x), from the formula | 0.023 | 0.159 | 0.5 | 0.841 | 0.977 |
+| fraction of 100,000 draws | 0.023 | 0.161 | 0.500 | 0.842 | 0.978 |
+
+How to read them:
+
+- **Φ(0) = 0.5:** half the numbers are below 0, because the distribution is symmetric around 0.
+- **Φ(1) = 0.841:** 84% are below 1, so only 16% are above 1.
+- **Φ(−1) = 0.159:** only 16% are below −1.
+- **Φ(2) = 0.977:** almost all (97.7%) are below 2.
+
+Properties:
+
+- **It goes from 0 to 1:** Φ ≈ 0 for very negative x, Φ ≈ 1 for large x.
+- **It only increases:** moving x right can only add area.
+- **Symmetry:** Φ(−x) = 1 − Φ(x). For example Φ(−1) = 1 − 0.841 = 0.159.
+- **Its derivative is the PDF:** Φ grows fastest where the bell is tallest (around 0) and barely moves at the far ends.
+
+Plotting Φ(x) itself gives an S-shaped curve that rises from 0 to 1, steepest at 0:
+
+![S-shaped curve of the standard normal CDF Φ(x)](/gpt2-explorer/notes/normal_cdf_curve.svg)
+
+Two handy facts (the same 100,000 draws confirm them):
+
+\`\`\`text
+between -1 and 1:  Φ(1) - Φ(-1) = 0.841 - 0.159 = 0.683   (draws: 0.681)
+between -2 and 2:  Φ(2) - Φ(-2) = 0.977 - 0.023 = 0.954   (draws: 0.955)
+\`\`\`
+
+### 4. The connection to GELU
+
+\`\`\`text
+GELU(x) = x × Φ(x)
+\`\`\`
+
+The idea in the GELU paper resembles dropout: **keep the input x with probability Φ(x), otherwise set it to 0**. The larger x, the closer Φ(x) is to 1 and the more surely it is kept. GELU does not actually draw anything random; it takes the **average** outcome:
+
+\`\`\`text
+average output = Φ(x) × x  +  (1 − Φ(x)) × 0  =  x × Φ(x)
+                  kept          set to 0
+\`\`\`
+
+For x = 1: 84.1% of the time the output is 1, 15.9% of the time it is 0, so the average is 0.841, exactly GELU(1).
+
+Why the normal CDF? After LayerNorm, a neuron's inputs are roughly spread around 0 with a scale of about 1. Φ(x) then asks "how high does this input rank within a typical distribution?", and the higher it ranks, the more of it is kept.
+
+### Is there a formula for the CDF?
+
+It depends on what "formula" means.
+
+**1. A definition: yes.** The CDF is the area under the PDF from −∞ to x:
+
+\`\`\`text
+Φ(x) = ∫ from −∞ to x of  1/√(2π) × e^(−t²/2) dt
+\`\`\`
+
+This is exact, but it contains an integral: computing Φ(1) means actually finding an area.
+
+**2. A simple closed form: no.** A closed form would write Φ(x) using only basic functions: + − × ÷, powers, roots, eˣ, log, sin and so on. It has been **proved** that the integral of e^(−t²/2) cannot be written this way. Nobody is still looking; it is impossible.
+
+**3. So it got its own name: erf.** Since no basic formula exists, mathematicians defined the integral as a new function, the error function erf:
+
+\`\`\`text
+erf(z) = 2/√π × ∫ from 0 to z of  e^(−t²) dt
+
+Φ(x) = 0.5 × (1 + erf(x / √2))
+\`\`\`
+
+This is like sin(x): it cannot be written with + − × ÷ either, but it has a name and every computer has an implementation. \`torch.erf\` and \`math.erf\` give exact values:
+
+\`\`\`python
+0.5 * (1 + math.erf(1 / math.sqrt(2)))    # 0.8413 = Φ(1)
+\`\`\`
+
+Internally, erf is computed with series or piecewise polynomial approximations, accurate to the limit of floating-point precision.
+
+**4. Approximate formulas: many.** GPT-2's tanh version of GELU is really **a tanh approximation of Φ(x)**:
+
+\`\`\`text
+Φ(x) ≈ 0.5 × (1 + tanh( √(2/π) × (x + 0.044715 × x³) ))
+\`\`\`
+
+Multiply both sides by x and you get GELU's tanh formula.
+
+| Question | Answer |
+| --- | --- |
+| An exact definition? | Yes: the integral of the PDF |
+| Only basic functions? | No, proved impossible |
+| How is it computed? | With erf: Φ(x) = 0.5 × (1 + erf(x/√2)) |
+| A form without erf? | Approximations, e.g. the tanh one in GELU |
 `,
   },
 

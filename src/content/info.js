@@ -381,66 +381,343 @@ $$
   mlp_fc_in_notes: {
     title: "MLP expansion: nn.Linear(n_embd, 4 * n_embd)",
     md: `
-## What this layer does
+**\`fc_in\` is the first layer of the MLP. It turns each token's 768-dimensional vector into 3072 numbers, and each of those numbers measures how well the token matches one learned pattern.**
 
-- Projects each token's hidden vector from size $n\\_embd$ up to a larger **feed-forward** size $4 \\times n\\_embd$.
-- This is the first linear layer in the Transformer block's MLP (a.k.a. FFN):
+## Where it sits
 
-  $$
-  h' = \\phi(\\underbrace{W_1 h + b_1}_{\\text{this layer}}), \\quad y = W_2 h' + b_2
-  $$
+\`\`\`python
+self.fc_in = nn.Linear(n_embd, 4 * n_embd)    # 768 → 3072
+...
+return self.drop(self.fc_out(self.act(self.fc_in(x))))
+\`\`\`
 
-## Why 4x? (a common design in Transformers)
+The MLP's input is \`ln2(x)\`, the residual stream after LayerNorm, with shape $(B,\\ T,\\ C)$ where $C$ = \`n_embd\` = 768. The full MLP is:
 
-- The MLP is the main place where non-linearity and per-token mixing capacity live.
-- Using a wider hidden dimension increases expressive power at modest depth.
-- Empirically, 4x is a strong trade-off between quality and compute/memory for GPT-2 style models. Larger ratios (e.g., 8x) can improve quality but cost more; smaller ones (2x) may underfit.
+\`\`\`text
+input        (B, T, 768)
+→ fc_in      (B, T, 3072)   ← this layer: widen 4×
+→ GELU       (B, T, 3072)   non-linearity, shape unchanged
+→ fc_out     (B, T, 768)    back to 768
+→ dropout    (B, T, 768)
+\`\`\`
 
-## Shapes
+\`nn.Linear\` only acts on the **last** dimension. Every token goes through the same weights, but separately: the MLP never mixes information between tokens. (Mixing between tokens is attention's job.)
 
-- **Input per token:** $h \\in \\mathbb{R}^{n\\_embd}$
-- **After this layer:** $h_1 = W_1 h + b_1 \\in \\mathbb{R}^{4 n\\_embd}$
-- **After activation (GELU):** same shape, $(4 \\times n\\_embd)$
-- **Second linear maps back:** $(4 \\times n\\_embd) \\to (n\\_embd)$
+## Each output is a pattern detector
 
-## Parameter count (this layer only)
+[\`nn.Linear\` stores its weight as (out, in)](#hover:linear_weight_notes), so \`fc_in.weight\` has shape (3072, 768): 3072 rows, each with 768 numbers. For one token, let $h$ be its 768-dimensional input vector, i.e. \`ln2(x)[b, t, :]\`. Output number $j$ is
 
-- **Weights:** $4 \\times n\\_embd \\times n\\_embd = 4 \\times n\\_embd^2$
-- **Bias:** $4 \\times n\\_embd$
-- **Total:** $\\sim 4 \\times n\\_embd^2 + 4 \\times n\\_embd$
+\`\`\`text
+out[j] = row_j · h + bias[j]      (dot product, j = 0 … 3071)
+\`\`\`
 
-## Alternatives / notes
+A dot product measures **how similar** two vectors are: large and positive when they point the same way, near 0 when unrelated, negative when they point opposite ways. So each row is a **pattern**, and \`out[j]\` is "how well this token matches pattern j". The rows are learned during training.
 
-- Some variants use ratios other than 4, gated linear units (GEGLU/SwiGLU), or different activations; the idea is similar: widen, apply a nonlinearity, project back.
-- In Pre-LN GPT-2 blocks, this comes after LayerNorm (\`ln2\`) and runs after the attention sublayer, inside its own residual branch. (Running attention and MLP in parallel is a later variant, e.g. GPT-J / PaLM.)
+**A small example** with $C = 4$, bias 0, and input \`h = [1, 0, 2, -1]\`:
+
+\`\`\`text
+row 0 = [ 1, 0, 1, 0]   →  1×1 + 0×0 + 1×2 + 0×(-1) =  3    strong match
+row 1 = [ 0, 1, 0, 1]   →  0×1 + 1×0 + 0×2 + 1×(-1) = -1    weak mismatch
+row 2 = [-1, 0, 0, 1]   → -1×1 + 0×0 + 0×2 + 1×(-1) = -2    opposite
+\`\`\`
+
+In GPT-2 there are 3072 such detectors, so every token gets 3072 match scores.
+
+## Why wider than 768
+
+- The 768 dimensions are the [bandwidth of the residual stream](#hover:proj_residual_stream_notes): the shared "whiteboard" that every layer reads from and writes to.
+- The model wants to recognize far more than 768 patterns: "this is a plural noun", "the previous word is *the*", "we are inside a code block", "this is the second half of a person's name", and so on.
+- Widening to 3072 gives each layer 3072 detectors to check at the same time. Afterwards [\`fc_out\`](#info:mlp_fc_out_notes) compresses the results back to 768 dimensions and writes them onto the whiteboard.
+
+\`\`\`text
+768  ──fc_in──→  3072 match scores  ──GELU──→  ──fc_out──→  768
+read whiteboard   wide "workspace"                          write back
+\`\`\`
+
+> The widening only helps because of the [GELU](#info:gelu) in the middle. Without it, \`fc_out(fc_in(h))\` would be two linear maps in a row, which equal a single 768 × 768 linear map, and the 3072 detectors would add nothing.
+
+## Why exactly 4×
+
+There is no derivation; it is an empirical choice. The original Transformer paper used 512 → 2048, which is 4×. A wider layer gives the model more capacity but costs more parameters and compute; 4× was a good trade-off in their experiments, and GPT-2 kept it.
+
+> 🆕 LLaMA and many later models use **SwiGLU** instead of GELU. SwiGLU has 3 weight matrices instead of 2, so the width is reduced to about 8/3 × to keep the parameter count similar. For example, LLaMA-7B uses 4096 → 11008 (8/3 × 4096 ≈ 10923, rounded up to a multiple of 256).
+
+## Parameters
+
+For this layer: weight $3072 \\times 768$ plus bias $3072$:
+
+\`\`\`text
+768 × 3072 + 3072 = 2,362,368
+\`\`\`
+
+Compared with attention, the MLP has about **twice** as many parameters per block:
+
+| Part | Layers | Parameters |
+| --- | --- | --- |
+| MLP | \`fc_in\`: 768 × 3072 + 3072 | 2,362,368 |
+| | \`fc_out\`: 3072 × 768 + 768 | 2,360,064 |
+| | **total** | **4,722,432** (≈ 4.72M) |
+| Attention | \`c_attn\`: 768 × 2304 + 2304 | 1,771,776 |
+| | \`proj\`: 768 × 768 + 768 | 590,592 |
+| | **total** | **2,362,368** (≈ 2.36M) |
+
+## Variants
+
+- 🆕 Gated variants (GEGLU, SwiGLU) replace "Linear → GELU" with two parallel Linears whose outputs are multiplied; the idea is still widen → non-linearity → project back.
+- GPT-2 runs attention first and the MLP second, each in its own residual branch. 🆕 Some later models (e.g. GPT-J, PaLM) run the attention and MLP branches in parallel on the same input.
 `,
   },
+
   mlp_fc_out_notes: {
     title: "MLP projection back: nn.Linear(4 * n_embd, n_embd)",
     md: `
-## What this layer does
+**\`fc_out\` is the last layer of the MLP. It turns the 3072 numbers from GELU back into a 768-dimensional vector, the update that is added to the residual stream.**
 
-- Projects features back from $4 \\times n\\_embd$ to $n\\_embd$ so the residual add aligns with the block input.
-- FFN pattern recap:
+## Where it sits
 
-  $$
-  h' = \\phi(W_1 h + b_1), \\quad y = \\underbrace{W_2 h' + b_2}_{\\text{this layer}}
-  $$
+\`\`\`python
+self.fc_out = nn.Linear(4 * n_embd, n_embd)    # 3072 → 768
+...
+return self.drop(self.fc_out(self.act(self.fc_in(x))))
+\`\`\`
 
-## Why project back?
+\`\`\`text
+input        (B, T, 768)
+→ fc_in      (B, T, 3072)   widen: 3072 pattern scores
+→ GELU       (B, T, 3072)   decide which patterns "fire"
+→ fc_out     (B, T, 768)    ← this layer: back to 768
+→ dropout    (B, T, 768)
+\`\`\`
 
-Residual connections need matching dimensions; compressing to $n\\_embd$ keeps compute stable across layers.
+The result must be 768-dimensional because the block adds it to the residual stream, which is 768-dimensional: \`x = x + mlp(ln2(x))\`. Adding vectors only works when their shapes match.
 
-## Shapes
+## How nn.Linear computes
 
-- **Input:** $h' \\in \\mathbb{R}^{4 n\\_embd}$
-- **Output:** $y \\in \\mathbb{R}^{n\\_embd}$
+\`nn.Linear(in_features, out_features)\` computes
 
-## Parameter count (this layer only)
+\`\`\`text
+y = x @ weight.T + bias
+\`\`\`
 
-- **Weights:** $n\\_embd \\times (4 \\times n\\_embd) = 4 \\times n\\_embd^2$
-- **Bias:** $n\\_embd$
-- **Total:** $\\sim 4 \\times n\\_embd^2 + n\\_embd$
+where \`weight\` is **stored** with shape (out, in). For \`fc_out = nn.Linear(3072, 768)\`, \`weight\` is (768, 3072), and the multiplication uses its transpose (3072, 768):
+
+\`\`\`text
+(B, T, 3072) @ (3072, 768) → (B, T, 768)
+\`\`\`
+
+More on \`nn.Linear\`: [why (out, in), why \`x @ W.T\` instead of \`W x\`, and what actually runs](#hover:linear_weight_notes).
+
+## A worked example: 2 → 4 → 2
+
+The real sizes 768 → 3072 → 768 cannot be computed by hand, so shrink them to **2 → 4 → 2**. It widens 2× instead of 4×, but the process is the same: first wider, then narrower. All biases are 0.
+
+### Step 1: fc_in, 2 → 4
+
+Input \`h = [1, 2]\`. \`fc_in.weight\` has shape (out, in) = (4, 2). Each of its 4 rows is a pattern detector, and each output is a dot product:
+
+\`\`\`text
+row 0 = [ 1,  1]  →  1×1 + 1×2    =  3
+row 1 = [ 1, -1]  →  1×1 + (-1)×2 = -1
+row 2 = [-1,  0]  → -1×1 + 0×2    = -1
+row 3 = [ 0,  1]  →  0×1 + 1×2    =  2
+
+scores = [3, -1, -1, 2]       ← 2 numbers became 4
+\`\`\`
+
+### Step 2: GELU, one number at a time
+
+[GELU](#info:gelu) acts on each number separately, so the shape does not change. Roughly, it keeps positive numbers and pushes negative ones close to 0:
+
+\`\`\`text
+GELU(3)  ≈  3.00    pattern 0 fires
+GELU(-1) ≈ -0.16    almost off
+GELU(-1) ≈ -0.16    almost off
+GELU(2)  ≈  1.95    pattern 3 fires
+
+a = [3.00, -0.16, -0.16, 1.95]
+\`\`\`
+
+### Step 3: fc_out, 4 → 2
+
+\`fc_out = nn.Linear(4, 2)\`. Its stored \`weight\` is (out, in) = (2, 4); the multiplication uses \`weight.T\`, which is (4, 2):
+
+\`\`\`text
+weight (2×4):              weight.T (4×2):
+[ 1, 0, 1,  0 ]            [ 1,  0 ]   ← row 0
+[ 0, 1, 1, -1 ]            [ 0,  1 ]   ← row 1
+                           [ 1,  1 ]   ← row 2
+                           [ 0, -1 ]   ← row 3
+\`\`\`
+
+\`a\` has shape [(4,)](#hover:vector_1d_notes), so \`a @ weight.T\` is (4,) @ (4, 2) → (2,). Multiplying a vector by a matrix from the left means: **use the vector's numbers as weights, and add up the matrix's rows**:
+
+\`\`\`text
+ 3.00 × [1,  0] = [ 3.00,  0   ]
+-0.16 × [0,  1] = [ 0,    -0.16]
+-0.16 × [1,  1] = [-0.16, -0.16]
+ 1.95 × [0, -1] = [ 0,    -1.95]
+                  ──────────────
+out             = [ 2.84, -2.27]    ← 4 numbers back to 2
+\`\`\`
+
+Computing one output number at a time gives the same result. Each output number is a row of the stored \`weight\` dotted with \`a\`:
+
+\`\`\`text
+out[0] = [1, 0, 1,  0] · a = 3.00 − 0.16         =  2.84
+out[1] = [0, 1, 1, -1] · a = −0.16 − 0.16 − 1.95 = −2.27
+\`\`\`
+
+Checked in PyTorch:
+
+\`\`\`python
+fc_out = nn.Linear(4, 2, bias=False)
+fc_out.weight.shape        # torch.Size([2, 4])
+# after setting weight = [[1, 0, 1, 0], [0, 1, 1, -1]]:
+a = torch.tensor([3.00, -0.16, -0.16, 1.95])
+fc_out(a)                  # tensor([ 2.8400, -2.2700])
+a @ fc_out.weight.T        # tensor([ 2.8400, -2.2700])  same
+\`\`\`
+
+### The whole example
+
+\`\`\`text
+h = [1, 2]
+  → fc_in  → [3, -1, -1, 2]               2 → 4: 4 detectors score the input
+  → GELU   → [3.00, -0.16, -0.16, 1.95]   patterns 0 and 3 fire; 1 and 2 are nearly off
+  → fc_out → [2.84, -2.27]                4 → 2: the firing patterns write their rows
+\`\`\`
+
+The output comes mostly from rows 0 and 3 of \`weight.T\`, because only patterns 0 and 3 fired.
+
+## The MLP as "if … then write …" rules
+
+The example suggests a way to read the whole MLP. Rule $j$ consists of:
+
+- **row $j$ of \`fc_in.weight\`**: the pattern to check ("if the token looks like this …");
+- **GELU of the score**: how strongly the rule fires (near 0 means it did not fire);
+- **row $j$ of \`fc_out.weight.T\`** (the same numbers as column $j$ of the stored \`fc_out.weight\`): the 768-dimensional vector to write ("… then write this").
+
+With the real sizes:
+
+\`\`\`text
+a: the 3072 numbers after GELU, a[j] = how much rule j fired
+fc_out.weight.T: (3072, 768), row j = what rule j writes
+
+out = a[0] × row 0 + a[1] × row 1 + … + a[3071] × row 3071 + bias
+    = one 768-dimensional vector
+\`\`\`
+
+After GELU most \`a[j]\` are close to 0, so in practice only the few rules that fired write into the output.
+
+So 3072 is the **number of rules per block**, and 768 is the **width of what gets written**. These are separate: many rules can write into the same directions, which is why the MLP can have far more rules than the residual stream has dimensions. Each of the 12 blocks has its own MLP with its own 3072 rules.
+
+> 🆕 This view comes from the 2021 paper *Transformer Feed-Forward Layers Are Key-Value Memories* (Geva et al.): the rows of \`fc_in\` are keys and the rows of \`fc_out.weight.T\` are values. Later work such as ROME edits facts a model has memorized by changing MLP weights.
+
+## Parameters
+
+Weight 768 × 3072 plus bias 768:
+
+\`\`\`text
+3072 × 768 + 768 = 2,360,064
+\`\`\`
+
+Together with [\`fc_in\`](#info:mlp_fc_in_notes) (2,362,368), the MLP has 4,722,432 parameters per block.
+`,
+  },
+
+  linear_weight_notes: {
+    title: "How nn.Linear computes (hover)",
+    md: `
+**How \`nn.Linear\` computes**
+
+\`nn.Linear(in_features, out_features)\` computes
+
+\`\`\`text
+y = x @ weight.T + bias
+\`\`\`
+
+- \`weight\` is **stored** as (out, in). For \`nn.Linear(4, 2)\` it is (2, 4).
+- The multiplication uses the transpose \`weight.T\`, which is (in, out) = (4, 2), with \`x\` on the left:
+
+\`\`\`text
+x       @  weight.T  =  y
+(4,)       (4, 2)       (2,)
+\`\`\`
+
+**Why store it as (out, in)? One output = one row.** Row $i$ of \`weight\` holds all the weights used by output $i$:
+
+\`\`\`text
+weight[0] = [1, 0, 1,  0]  → only used for out[0] = weight[0] · x
+weight[1] = [0, 1, 1, -1]  → only used for out[1] = weight[1] · x
+\`\`\`
+
+So \`weight[i]\` gives output $i$'s weights directly. This is why each row of \`fc_in.weight\` can be read as one pattern detector. Stored as (in, out), the same weights would be a column, \`weight[:, i]\`. The results would be identical; (out, in) is a convention that matches the math y = W x.
+
+**Why \`x @ W.T\` and not \`W x\`?** They give the same numbers; only the direction of the vectors differs. Math writes $x$ as a column, PyTorch stores each token as a **row**, and the two forms are transposes of each other: (W x)ᵀ = xᵀ Wᵀ.
+
+| | Vector direction | Formula |
+| --- | --- | --- |
+| Math / papers | column | y = W x |
+| PyTorch | row (one row per token) | y = x @ W.T |
+
+Since \`x\` is (B, T, in) with one token per row, the matrix has to go on the right. \`x @ W.T\` works directly, while \`W @ x\` fails on the shapes.
+
+**Leading dimensions are kept.** \`@\` only acts on the last dimension of \`x\`. If \`x\` is (B, T, 4), think of it as B × T separate rows of 4 numbers, each multiplied by the same (4, 2) matrix:
+
+\`\`\`text
+(B, T, 4) @ (4, 2) → (B, T, 2)
+\`\`\`
+
+**What actually runs.** \`out[i] = weight[i] · x\` is the mathematical definition, not the order of execution:
+
+- \`.T\` copies nothing. It only swaps the strides, so \`weight.T\` reads the same memory in a different order.
+- The whole layer is **one** matrix multiplication (\`addmm\`: bias + x @ weight.T). The library (BLAS on CPU, cuBLAS on GPU) splits it into tiles and computes all tokens and all outputs in parallel, not one output after another.
+- The (out, in) layout is convenient: both \`x[t]\` and \`weight[i]\` are contiguous along the "in" dimension that the dot product sums over. But the libraries are fast with other layouts too, so the main reason for (out, in) is convention, not speed.
+
+In GPT-2:
+
+| Layer | Stored weight | Multiplication |
+| --- | --- | --- |
+| \`fc_in = nn.Linear(768, 3072)\` | (3072, 768) | (B, T, 768) @ (768, 3072) → (B, T, 3072) |
+| \`fc_out = nn.Linear(3072, 768)\` | (768, 3072) | (B, T, 3072) @ (3072, 768) → (B, T, 768) |
+`,
+  },
+
+  vector_1d_notes: {
+    title: "(4,) vs (1, 4) (hover)",
+    md: `
+**\`(4,)\` is a 1-D tensor, not a 1×4 matrix**
+
+\`(4,)\` means one dimension of length 4. It is neither 1 × 4 nor 4 × 1:
+
+\`\`\`text
+(4,)     1-D, 4 numbers                      a.dim() = 1
+(1, 4)   2-D, 1 row and 4 columns (row)      a.dim() = 2
+(4, 1)   2-D, 4 rows and 1 column (column)   a.dim() = 2
+\`\`\`
+
+The comma is Python syntax: a tuple with one element is written \`(4,)\`, because \`(4)\` is just the number 4.
+
+**How \`(4,) @ (4, 2)\` works.** For \`@\`, PyTorch temporarily treats a 1-D tensor on the **left** as a row (1, 4), multiplies, then removes the extra 1:
+
+\`\`\`text
+(4,)  →  treated as (1, 4)  @ (4, 2)  =  (1, 2)  →  drop the 1  →  (2,)
+\`\`\`
+
+The numbers are the same as with a 1 × 4 matrix; only the shape lacks the 1. Checked in PyTorch, with \`W\` the (4, 2) matrix \`weight.T\` from the example:
+
+\`\`\`python
+a.shape                        # torch.Size([4])
+(a @ W).shape                  # torch.Size([2])     1-D in, 1-D out
+(a.reshape(1, 4) @ W).shape    # torch.Size([1, 2])  2-D in, 2-D out
+a.reshape(4, 1) @ W            # error: 4x1 and 4x2 cannot be multiplied
+\`\`\`
+
+The last line shows that a column (4, 1) would not work here. On the left of \`@\`, a 1-D tensor behaves like a row.
+
+A 1-D tensor on the **right** of \`@\` is treated as a column instead: \`W.T @ a\` is (2, 4) @ (4,) → (2,).
+
+In the real model, \`x\` is (B, T, 3072) rather than 1-D. Each token's 3072 numbers play the role of \`a\`.
 `,
   },
 
@@ -1250,22 +1527,92 @@ GPT-2 uses the same \`nn.Dropout\` in several places: [embedding dropout](#info:
   resid_dropout_notes: {
     title: "Residual dropout in Causal Self-Attention",
     md: `
-**Causal residual dropout (a.k.a. dropout on the attention branch's residual update)**
+**\`resid_drop\` randomly zeros part of the attention output during training, right before that output is added to the residual stream.** It is the last step of causal self-attention.
 
-See the [MLP residual-dropout notes](#info:mlp_dropout_notes) for what dropout is, why residual dropout is useful, train vs. eval behavior, and an example. Everything below focuses on what's specific to causal self-attention.
+## Where it sits
 
-## What it does
+\`\`\`python
+self.resid_drop = nn.Dropout(dropout)    # in __init__; this site uses dropout = 0.1
+...
+y = self.resid_drop(self.proj(y))        # end of forward; y: (B, T, C)
+return y
+\`\`\`
 
-Causal residual dropout is applied to the mixed feature vector after the heads are concatenated and projected by \`W_O\`, right before the residual add. At this point, all attention heads have been combined into a single update vector for each position.
+The returned \`y\` is what the block adds to the residual stream \`x\`:
 
-## Why it is useful
+\`\`\`python
+x = x + self.attn(self.ln1(x))           # self.attn(...) is the y above
+\`\`\`
 
-Heads can become spiky (e.g., lock onto one token path). Even if the attention pattern is spiky, the written features still pass through \`W_O\` before being added to the original stream. Randomly muting parts of that write:
+So the order is: [output projection](#info:attention_output_linear_notes) \`proj\` → \`resid_drop\` → add to \`x\`. The name "resid" comes from this position: it sits directly before the residual add.
 
-- discourages dependence on a single head/channel's features;
-- encourages redundant cues across heads.
+## Same rule as attention dropout
 
-> Think of \`Q/K/V\` as the "read side" of the attention mechanism. Then \`W_O\` is the "write side". Attention dropout perturbs the read-side pattern, while residual dropout regularizes the learned write directions, encouraging more robust, distributed writes and reducing reliance on any single head/channel even if the read pattern is spiky.
+\`resid_drop\` is the same \`nn.Dropout\` as [attention dropout](#info:attn_dropout_notes) (\`attn_drop\`), with the same rule:
+
+- **Training** (\`model.train()\`): each number is independently set to 0 with probability $p = 0.1$; every number that survives is multiplied by $1/(1-p) = 1/0.9 \\approx 1.11$. The multiplication keeps the **average** output equal to the input (why this works is explained in the attention dropout note).
+- **Inference** (\`model.eval()\`): it does nothing; the output equals the input.
+
+The only difference is **what it acts on**:
+
+| | Acts on | Shape |
+| --- | --- | --- |
+| \`attn_drop\` | the attention weights after softmax ("how much to look at each token") | $(B,\\ n\\_head,\\ T,\\ T)$ |
+| \`resid_drop\` | the output of \`proj\`: the update this attention layer is about to write into the residual stream | $(B,\\ T,\\ C)$ |
+
+## A worked example
+
+Continue the $C = 4$ example from the output projection note, for the token \`black\`. The first number 1.17 is the \`out[0]\` computed there; the other numbers, and the residual stream \`x\`, are made up for illustration:
+
+\`\`\`text
+dimension:           0      1      2      3
+x (residual stream): [0.20, -0.50,  1.00,  0.30]
+update = proj(y):    [1.17,  0.40, -0.30,  0.80]
+\`\`\`
+
+**Without dropout** (inference), the whole update is added:
+
+\`\`\`text
+x + update         = [1.37, -0.10,  0.70,  1.10]
+\`\`\`
+
+**With dropout** (training), suppose this time dimension 1 is drawn to be dropped:
+
+\`\`\`text
+dimension 1 → 0:     [1.17,  0,    -0.30,  0.80]
+survivors × 1/0.9:   [1.30,  0,    -0.33,  0.89]    ← 1.17/0.9 = 1.30, -0.30/0.9 = -0.33, 0.80/0.9 = 0.89
+x + dropped update = [1.50, -0.50,  0.67,  1.19]    ← 0.20+1.30, -0.50+0, 1.00-0.33, 0.30+0.89
+\`\`\`
+
+Look at dimension 1: the update was dropped, but \`x\`'s original **−0.50 is still there**. Dropout acts only on this layer's update; the residual stream \`x\` itself is untouched. The effect is "this time, attention did not write anything into dimension 1", not "the information in dimension 1 is lost".
+
+The next training step draws a new random mask, so a different set of dimensions is dropped.
+
+## Why use it
+
+### 1. Regularization
+
+Like every dropout, it prevents the model from relying on any single dimension of the attention output. Every number in the update may disappear in a given training step, so later layers learn not to depend on one particular write. The information has to be spread over several dimensions (and several heads), which generalizes better to unseen text.
+
+The two dropouts in attention perturb different things:
+
+- \`attn_drop\` perturbs the **read** side: which tokens each token takes information from.
+- \`resid_drop\` perturbs the **write** side: what the layer writes back into the residual stream. Even if one head always attends to the same token, what it writes is still randomly dropped sometimes.
+
+### 2. It does not damage the main path
+
+Dropout is placed on the **branch** (\`attn(...)\`), not on \`x\`. The residual path, \`x\` passing straight through \`x + ...\`, always stays complete.
+
+Suppose instead dropout were applied to \`x\` itself in every block. Then each of the 12 blocks would randomly erase part of everything the earlier layers had accumulated, and the losses would compound with depth. Deep networks would become much harder to train. Dropping only the branch update means each step loses at most this one layer's contribution.
+
+## Not only in attention
+
+The MLP branch has the same residual dropout at the same position: \`x = x + mlp(ln2(x))\`, where the MLP output also goes through dropout before the add. See [Residual Dropout in MLP](#info:mlp_dropout_notes).
+
+## Choosing p
+
+- GPT-2 uses $p = 0.1$.
+- 🆕 Many recent LLMs (e.g. LLaMA) pretrain with dropout 0 here too: the training data is huge and usually seen about once, so overfitting is not the main problem.
 `,
   },
 

@@ -285,3 +285,12 @@ body {
 .chunk-space {
   color: #818cf8;
 }
+
+/* Figures in notes and popups (SVGs under public/notes/) scale down on narrow screens. */
+.note-body img,
+.note-popup img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.75em 0;
+}
