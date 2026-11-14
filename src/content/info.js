@@ -721,6 +721,227 @@ In the real model, \`x\` is (B, T, 3072) rather than 1-D. Each token's 3072 numb
 `,
   },
 
+  erf_derivation_notes: {
+    title: "Deriving Φ(x) = ½(1 + erf(x/√2)) (hover)",
+    md: `
+**Deriving Φ(x) = ½(1 + erf(x/√2))**
+
+Start from the two definitions:
+
+$$
+\\Phi(x) = \\int_{-\\infty}^{x} \\frac{1}{\\sqrt{2\\pi}}\\, e^{-t^2/2}\\, dt, \\qquad \\operatorname{erf}(z) = \\frac{2}{\\sqrt{\\pi}} \\int_{0}^{z} e^{-u^2}\\, du
+$$
+
+They differ in two ways: the exponent ($-t^2/2$ vs. $-u^2$) and the lower limit ($-\\infty$ vs. 0). Fix them one at a time.
+
+*Step 1: split the integral at 0.*
+
+$$
+\\Phi(x) = \\int_{-\\infty}^{0} \\frac{1}{\\sqrt{2\\pi}}\\, e^{-t^2/2}\\, dt + \\int_{0}^{x} \\frac{1}{\\sqrt{2\\pi}}\\, e^{-t^2/2}\\, dt
+$$
+
+The first part is $\\tfrac{1}{2}$: the total area under the PDF is 1, and the curve is symmetric around 0, so exactly half lies left of 0. (This is $\\Phi(0) = 0.5$.)
+
+*Step 2: substitute $t = \\sqrt{2}\\, u$ to turn the exponent into $-u^2$.* Three things change:
+
+- exponent: $t^2/2 = (\\sqrt{2}\\,u)^2/2 = u^2$;
+- differential: $dt = \\sqrt{2}\\, du$ (the derivative of $t = \\sqrt{2}\\,u$ is $\\sqrt{2}$);
+- limits: $t = 0 \\Rightarrow u = 0$, and $t = x \\Rightarrow u = x/\\sqrt{2}$ (from $u = t/\\sqrt{2}$).
+
+$$
+\\int_{0}^{x} \\frac{1}{\\sqrt{2\\pi}}\\, e^{-t^2/2}\\, dt
+= \\int_{0}^{x/\\sqrt{2}} \\frac{1}{\\sqrt{2\\pi}}\\, e^{-u^2} \\sqrt{2}\\, du
+= \\frac{1}{\\sqrt{\\pi}} \\int_{0}^{x/\\sqrt{2}} e^{-u^2}\\, du
+$$
+
+using $\\dfrac{\\sqrt{2}}{\\sqrt{2\\pi}} = \\dfrac{\\sqrt{2}}{\\sqrt{2}\\,\\sqrt{\\pi}} = \\dfrac{1}{\\sqrt{\\pi}}$.
+
+*Step 3: match erf.* erf has $\\tfrac{2}{\\sqrt{\\pi}}$ in front, and we have $\\tfrac{1}{\\sqrt{\\pi}}$, exactly half:
+
+$$
+\\frac{1}{\\sqrt{\\pi}} \\int_{0}^{x/\\sqrt{2}} e^{-u^2}\\, du
+= \\frac{1}{2} \\cdot \\underbrace{\\frac{2}{\\sqrt{\\pi}} \\int_{0}^{x/\\sqrt{2}} e^{-u^2}\\, du}_{\\operatorname{erf}(x/\\sqrt{2})}
+= \\frac{1}{2} \\operatorname{erf}\\!\\left(\\frac{x}{\\sqrt{2}}\\right)
+$$
+
+*Step 4: add the two parts.*
+
+$$
+\\Phi(x) = \\frac{1}{2} + \\frac{1}{2} \\operatorname{erf}\\!\\left(\\frac{x}{\\sqrt{2}}\\right) = \\frac{1}{2}\\left(1 + \\operatorname{erf}\\!\\left(\\frac{x}{\\sqrt{2}}\\right)\\right)
+$$
+
+*Check with x = 1:* erf(1/√2) = erf(0.7071) = 0.6827, so Φ(1) = 0.5 × (1 + 0.6827) = 0.8413 ✓.
+
+- **Negative x works too.** The second integral then runs from 0 to the left and is negative; erf is negative for negative inputs too: erf(−z) = −erf(z). For example Φ(−1) = 0.5 × (1 − 0.6827) = 0.159.
+- **erf(x/√2) has its own meaning:** it is the share of numbers between −x and x. The 0.6827 above is the 68.3% between −1 and 1 from the CDF popup. Reason: the second integral is the area from 0 to x, which equals ½ erf(x/√2); by symmetry the area from −x to x is twice that, erf(x/√2).
+- **Why 2/√π in front of erf:** it makes erf(∞) = 1, i.e. 100% of the numbers lie between −∞ and ∞.
+`,
+  },
+
+  gelu_backprop_notes: {
+    title: "Backward through GELU: a worked example (hover)",
+    md: `
+**Backward through GELU: a worked example**
+
+How does the gradient actually travel back from the loss, through GELU, to the weights of fc_in? Here is a tiny MLP, 2 → 4 → 2, computed step by step. All numbers come from PyTorch autograd and were checked by hand. It uses the exact GELU (GPT-2 uses the tanh version, which differs only in the 4th decimal).
+
+## The setup
+
+- input \`x = [1, 2]\` (one token, 2 features instead of 768)
+- fc_in: \`W1\` is (4, 2), 4 detectors instead of 3072; its rows are \`[1, 1]\`, \`[1, −1]\`, \`[−1, 0]\`, \`[0, 1]\`
+- fc_out: \`W2\` is (2, 4): \`[[1, 0, 1, 0], [0, 1, 1, −1]]\`
+- no biases, to keep the arithmetic short
+- a target \`y = [2, −2]\` and a simple loss, the squared error: \`loss = ½ × Σ (out − y)²\`. (GPT-2 uses cross entropy instead; the backward mechanism is the same.)
+
+## Forward
+
+\`\`\`text
+h    = W1 · x     = [3, -1, -1, 2]
+a    = GELU(h)    = [2.996, -0.159, -0.159, 1.954]
+out  = W2 · a     = [2.837, -2.272]
+loss = ½ × (0.837² + 0.272²) = 0.387
+\`\`\`
+
+For example \`h[1] = [1, −1] · [1, 2] = 1 − 2 = −1\`, and \`out[0] = a[0] + a[2] = 2.996 − 0.159 = 2.837\`.
+
+## Backward: start at the loss, walk back one layer at a time
+
+The rule is the **chain rule**: each time you go back through a layer, multiply the gradient you are holding by that layer's local derivative. "\`g_v\`" below means "the gradient of the loss with respect to v": how much the loss changes when v increases by 1.
+
+### Step 1: the gradient of out
+
+The derivative of \`½ (out − y)²\` with respect to out is \`out − y\`:
+
+\`\`\`text
+g_out = [2.837 − 2, −2.272 + 2] = [0.837, −0.272]
+\`\`\`
+
+out[0] is 0.837 too high, so it should go down; out[1] is 0.272 too low, so it should go up.
+
+### Step 2: back through fc_out (out = W2 · a)
+
+This layer produces two things.
+
+**(a) The gradient of its weights W2**, used later to update W2. \`W2[i][j]\` affects the loss only through the term \`W2[i][j] × a[j]\` inside \`out[i]\`, so:
+
+\`\`\`text
+g_W2[i][j] = g_out[i] × a[j]
+
+g_W2 = [[ 2.509, -0.133, -0.133,  1.637],
+        [-0.814,  0.043,  0.043, -0.531]]
+\`\`\`
+
+For example \`g_W2[0][0] = 0.837 × 2.996 = 2.509\`.
+
+**(b) The gradient of a**, passed further back. Write fc_out out in full:
+
+\`\`\`text
+out[0] = a[0]        + a[2]
+out[1] =        a[1] + a[2] − a[3]
+\`\`\`
+
+One \`a[j]\` can appear in **several** outputs. The coefficient in front of \`a[j]\` in \`out[i]\` is \`W2[i][j]\`; going down the outputs, those coefficients are column j of W2. If \`a[j]\` increases by a small amount, every out[i] it appears in moves, and each of those moves changes the loss. So the gradient is the **sum over all paths**:
+
+\`\`\`text
+g_a[j] = Σ_i  g_out[i] × W2[i][j]
+\`\`\`
+
+Take \`a[2]\`, which appears in both outputs with coefficient 1. Increase it by 0.001:
+
+\`\`\`text
+via out[0]:  0.001 × 1 × 0.837    =  0.000837
+via out[1]:  0.001 × 1 × (−0.272) = −0.000272
+total                             =  0.000565
+\`\`\`
+
+So the loss changes 0.565 per unit of a[2], and \`g_a[2] = 0.565\`. All four:
+
+\`\`\`text
+g_a[0] = 0.837×1 + (−0.272)×0    =  0.837
+g_a[1] = 0.837×0 + (−0.272)×1    = −0.272
+g_a[2] = 0.837×1 + (−0.272)×1    =  0.565
+g_a[3] = 0.837×0 + (−0.272)×(−1) =  0.272
+\`\`\`
+
+\`a[3]\` is not in out[0] (coefficient 0), so that path contributes nothing; its coefficient in out[1] is −1, which flips −0.272 into +0.272. In matrix form this is \`g_a = W2ᵀ · g_out\`: transposing turns column j of W2 into row j.
+
+### Step 3: back through GELU (the key step)
+
+GELU acts on each number separately, so its backward is also one number at a time: multiply by the GELU gradient at that point (the values in the gradient table of the GELU note).
+
+\`\`\`text
+g_h[j] = g_a[j] × GELU'(h[j])
+\`\`\`
+
+| j | h[j] | GELU'(h[j]) | g_a[j] | g_h[j] |
+| --- | --- | --- | --- | --- |
+| 0 | 3 | 1.012 | 0.837 | 0.847 |
+| 1 | −1 | −0.083 | −0.272 | 0.023 |
+| 2 | −1 | −0.083 | 0.565 | −0.047 |
+| 3 | 2 | 1.085 | 0.272 | 0.295 |
+
+- Detectors 0 and 3 fired (h > 0): GELU' ≈ 1, so the gradient passes almost unchanged.
+- Detectors 1 and 2 did not fire (h = −1): GELU' = −0.083, so the gradient shrinks to about 1/12, but it is **not 0**.
+
+**With ReLU instead**, ReLU' at h = [3, −1, −1, 2] is [1, 0, 0, 1]:
+
+\`\`\`text
+g_h = [0.837, 0, 0, 0.272]
+\`\`\`
+
+Detectors 1 and 2 get exactly 0. This is where "dying ReLU" comes from: a detector that did not fire learns nothing from this step.
+
+### Step 4: back through fc_in (h = W1 · x)
+
+Same rule as step 2(a): \`W1[j][k]\` only acts through \`W1[j][k] × x[k]\` inside \`h[j]\`:
+
+\`\`\`text
+g_W1[j][k] = g_h[j] × x[k]          x = [1, 2]
+
+g_W1 = [[ 0.847,  1.695],
+        [ 0.023,  0.045],
+        [-0.047, -0.094],
+        [ 0.295,  0.590]]
+\`\`\`
+
+Row j of \`g_W1\` is \`g_h[j] × x\`. Rows 1 and 2 are small but nonzero, thanks to GELU; with ReLU they would be exactly 0, and those two detectors' weights would not move.
+
+In the real model the backward continues: it also computes \`g_x = W1ᵀ · g_h\` and passes it on to ln2, the residual stream, and back to the embeddings. This small example stops here.
+
+## Update the weights (learning rate 0.1)
+
+Each weight takes a small step against its gradient: \`w ← w − 0.1 × g_w\`.
+
+\`\`\`text
+W1 row 0: [1,  1] → [1 − 0.0847, 1 − 0.1695] = [0.915,  0.831]
+W1 row 1: [1, −1] → [1 − 0.0023, −1 − 0.0045] = [0.998, -1.005]
+W2 changes the same way.
+\`\`\`
+
+Forward again with the new weights:
+
+\`\`\`text
+loss: 0.387 → 0.163     ✓ smaller
+\`\`\`
+
+## The pattern
+
+Going back, every layer does two things:
+
+1. **Gradient of its own weights:** (gradient arriving here) × (the input this layer saw in the forward pass).
+2. **Gradient to pass back:** (gradient arriving here) × (this layer's local derivative).
+
+| Layer | Forward | Gradient passed back | Gradient of its weights |
+| --- | --- | --- | --- |
+| loss | ½ (out − y)² | out − y | none |
+| fc_out | W2 · a | W2ᵀ · g_out | g_out × a |
+| GELU | GELU(h), per number | g_a × GELU'(h), per number | none (no weights) |
+| fc_in | W1 · x | W1ᵀ · g_h | g_h × x |
+
+The backward needs values from the forward pass: \`a\` for W2's gradient, \`h\` for GELU', \`x\` for W1's gradient. PyTorch therefore keeps these intermediate values in memory after the forward pass, which is why training uses much more memory than inference.
+`,
+  },
+
   attn_residual_notes: {
     title: "Residual connection x = x + self.attn(self.ln1(x))",
     md: `

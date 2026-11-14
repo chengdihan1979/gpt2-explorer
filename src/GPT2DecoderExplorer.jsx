@@ -298,22 +298,60 @@ Why approximate at all? Historically, evaluating erf was slower than a few multi
 
 ## Why GELU instead of ReLU?
 
-ReLU is defined as
+### What ReLU is
 
 \`\`\`text
-ReLU(x) = max(0, x)
+ReLU(x) = max(0, x)      positive inputs pass unchanged, negative inputs become 0
 \`\`\`
 
-Its gradient is:
+Compared with GELU (computed in PyTorch):
 
-- for $x > 0$: 1 (the gradient flows through unscaled);
-- for $x < 0$: 0 (the gradient dies out).
+| x | −3 | −2 | −1 | −0.5 | 0 | 0.5 | 1 | 2 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ReLU(x) | 0 | 0 | 0 | 0 | 0 | 0.5 | 1 | 2 |
+| GELU(x) | −0.004 | −0.046 | −0.159 | −0.154 | 0 | 0.346 | 0.841 | 1.954 |
 
-This makes optimization simple and avoids the vanishing gradients that sigmoid and tanh caused in early deep networks.
+Overall they are similar: positive inputs mostly pass, negative inputs are mostly switched off. The difference is near 0: ReLU has a sharp **corner** at 0, GELU a **smooth** transition.
 
-But it also causes the **"dying ReLU"** problem: if a neuron's weights push its input negative too often, its gradient is always 0, so it can "die" and never update again.
+### The key difference: the gradient
 
-> GELU does not discard negative inputs outright. It scales them down smoothly using the normal CDF.
+During training, how a weight changes depends on the gradient: how much the output changes when the input changes a little. The gradients (derivatives) of the two:
+
+| x | −5 | −3 | −2 | −1 | −0.5 | 0 | 0.5 | 1 | 2 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ReLU gradient | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 | 1 |
+| GELU gradient | −0.000 | −0.012 | −0.085 | −0.083 | 0.133 | 0.5 | 0.867 | 1.083 | 1.085 |
+
+- **ReLU:** the gradient is **exactly 0** for every negative input, and jumps from 0 to 1 at 0. (PyTorch uses 0 at exactly x = 0.)
+- **GELU:** the gradient changes smoothly. Between −3 and 0 it is still nonzero; only far out, around −5, does it approach 0.
+
+### "Dying ReLU": what a zero gradient does
+
+Detector $j$ in the MLP computes \`h[j] = row_j · x + bias[j]\` (see [MLP expansion](#info:mlp_fc_in_notes)). Suppose one training step updates too aggressively and pushes \`bias[j]\` to −5, while \`row_j · x\` normally stays between −2 and 2:
+
+\`\`\`text
+h[j] is always between -7 and -3     ← negative for every token
+ReLU(h[j]) = 0                       ← the output is always 0
+ReLU gradient = 0                    ← the gradient sent back is always 0
+→ row_j and bias[j] never receive a gradient, so they never change again
+\`\`\`
+
+The detector is "dead": one of the 3072 is wasted, permanently.
+
+With GELU, at h[j] = −3 the gradient is −0.012. Small, but not 0, so the weights can still be pulled back slowly.
+
+To see these gradients at work, here is the whole backward pass through a tiny MLP, step by step: [worked example: backward through GELU vs. ReLU](#hover:gelu_backprop_notes).
+
+### Two more properties of GELU
+
+1. **Smooth:** no corner, so the gradient changes continuously and the optimizer does not hit a sudden jump near 0. This makes training a bit more stable.
+2. **A little output for negative inputs:** down to −0.17. Small negative inputs are not completely erased, so a bit of "how negative" still reaches the next layer.
+
+### How big is the difference in practice?
+
+**Small.** The GELU paper and the BERT and GPT experiments found it usually a little better than ReLU (slightly lower loss), so BERT and the GPT series chose it. It is not that ReLU does not work; GELU is just somewhat better.
+
+> 🆕 Most later models use **gated** activations instead, such as LLaMA's SwiGLU: two Linears, one computing a value and one computing a "gate", multiplied together. As mentioned in [MLP expansion](#info:mlp_fc_in_notes), this is why LLaMA's MLP is about 8/3 × wide instead of 4 ×. Some models use ReLU² (ReLU squared, from the Primer paper).
 `,
   },
   cdf: {
@@ -356,9 +394,9 @@ x        0      0.5    1      1.5    2
 
 **The formula of the PDF:**
 
-\`\`\`text
-φ(x) = 1/√(2π) × e^(−x²/2)
-\`\`\`
+$$
+\\varphi(x) = \\frac{1}{\\sqrt{2\\pi}}\\, e^{-x^2/2}
+$$
 
 It has two parts.
 
@@ -386,9 +424,9 @@ Multiplying the two parts gives the PDF values in the table above:
 
 **The general normal distribution** with mean μ and standard deviation σ:
 
-\`\`\`text
-φ(x) = 1/(σ√(2π)) × e^(−(x−μ)²/(2σ²))
-\`\`\`
+$$
+\\varphi(x) = \\frac{1}{\\sigma\\sqrt{2\\pi}}\\, e^{-\\frac{(x-\\mu)^2}{2\\sigma^2}}
+$$
 
 - **x − μ** moves the center from 0 to μ.
 - **Dividing by σ²**: the larger σ, the wider the curve.
@@ -463,9 +501,9 @@ It depends on what "formula" means.
 
 **1. A definition: yes.** The CDF is the area under the PDF from −∞ to x:
 
-\`\`\`text
-Φ(x) = ∫ from −∞ to x of  1/√(2π) × e^(−t²/2) dt
-\`\`\`
+$$
+\\Phi(x) = \\int_{-\\infty}^{x} \\frac{1}{\\sqrt{2\\pi}}\\, e^{-t^2/2}\\, dt
+$$
 
 This is exact, but it contains an integral: computing Φ(1) means actually finding an area.
 
@@ -473,11 +511,11 @@ This is exact, but it contains an integral: computing Φ(1) means actually findi
 
 **3. So it got its own name: erf.** Since no basic formula exists, mathematicians defined the integral as a new function, the error function erf:
 
-\`\`\`text
-erf(z) = 2/√π × ∫ from 0 to z of  e^(−t²) dt
+$$
+\\operatorname{erf}(z) = \\frac{2}{\\sqrt{\\pi}} \\int_{0}^{z} e^{-t^2}\\, dt, \\qquad \\Phi(x) = \\frac{1}{2}\\left(1 + \\operatorname{erf}\\!\\left(\\frac{x}{\\sqrt{2}}\\right)\\right)
+$$
 
-Φ(x) = 0.5 × (1 + erf(x / √2))
-\`\`\`
+How this formula follows from the definitions: [step-by-step derivation](#hover:erf_derivation_notes).
 
 This is like sin(x): it cannot be written with + − × ÷ either, but it has a name and every computer has an implementation. \`torch.erf\` and \`math.erf\` give exact values:
 
@@ -489,9 +527,9 @@ Internally, erf is computed with series or piecewise polynomial approximations, 
 
 **4. Approximate formulas: many.** GPT-2's tanh version of GELU is really **a tanh approximation of Φ(x)**:
 
-\`\`\`text
-Φ(x) ≈ 0.5 × (1 + tanh( √(2/π) × (x + 0.044715 × x³) ))
-\`\`\`
+$$
+\\Phi(x) \\approx \\frac{1}{2}\\left(1 + \\tanh\\!\\left(\\sqrt{\\tfrac{2}{\\pi}}\\,\\left(x + 0.044715\\, x^3\\right)\\right)\\right)
+$$
 
 Multiply both sides by x and you get GELU's tanh formula.
 

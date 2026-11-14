@@ -38,79 +38,151 @@ function NoteCode({ children, className, ...props }) {
   return <code className={className} {...props}>{children}</code>;
 }
 
+// One click popup (a "#hover:" note). Popups can stack: a "#hover:" link inside a popup opens another one on top.
+function Popup({ id, anchor, level, lang, components }) {
+  const ref = useRef(null);
+  const [pos, setPos] = useState(() => ({
+    top: Math.max(8, anchor.top - 16),
+    left: Math.max(8, Math.min(anchor.left, (typeof window !== "undefined" ? window.innerWidth : 1200) - 360)),
+  }));
+
+  // Place the popup next to its link: above, below, right or left, whichever fits first.
+  const place = useCallback(() => {
+    if (!ref.current) return;
+    const r = ref.current.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const ar = anchor;
+    const m = 8;
+    const clampLeft = (l) => Math.min(Math.max(l, m), vw - r.width - m);
+    const clampTop = (t) => Math.min(Math.max(t, m), vh - r.height - m);
+    const candidates = [
+      { top: ar.top - r.height - m, left: clampLeft(ar.left), fits: ar.top - r.height - m >= m },
+      { top: ar.bottom + m, left: clampLeft(ar.left), fits: ar.bottom + r.height + m <= vh - m },
+      { top: clampTop(ar.top), left: ar.right + m, fits: ar.right + r.width + m <= vw - m },
+      { top: clampTop(ar.top), left: ar.left - r.width - m, fits: ar.left - r.width - m >= m },
+    ];
+    const c = candidates.find((c) => c.fits);
+    setPos(c
+      ? { top: Math.max(m, Math.min(c.top, vh - r.height - m)), left: Math.max(m, Math.min(c.left, vw - r.width - m)) }
+      : { top: Math.max(m, Math.min(ar.bottom + m, vh - r.height - m)), left: Math.max(m, Math.min(ar.left, vw - r.width - m)) });
+  }, [anchor]);
+
+  useLayoutEffect(() => {
+    place();
+    const ro = new ResizeObserver(place);
+    if (ref.current) ro.observe(ref.current);
+    window.addEventListener("resize", place);
+    return () => { ro.disconnect(); window.removeEventListener("resize", place); };
+  }, [place]);
+
+  return (
+    <div
+      ref={ref}
+      data-popup-level={level}
+      className="note-popup prose prose-slate prose-sm fixed overflow-auto rounded-xl border border-slate-200 bg-white p-4 shadow-xl"
+      style={{ zIndex: 50 + level, top: pos.top, left: pos.left, maxWidth: "min(720px, calc(100vw - 16px))", maxHeight: "70vh", minWidth: "min(360px, calc(100vw - 16px))" }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <ReactMarkdown
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={[[rehypeKatex, { trust: (ctx) => ctx.command === "\\href", strict: "ignore", fleqn: true }], rehypeSlug]}
+        components={components}
+      >
+        {getNote(id, lang).md || "_No content_"}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 export default function InfoPanel() {
   const { active, previous, close, open, back, lang } = useInfo();
   const bodyRef = useRef(null);
-  const [hoverInfoId, setHoverInfoId] = useState(null);
-  const [hoverPos, setHoverPos] = useState({ top: 0, left: 0 });
-  const popupRef = useRef(null);
-  const anchorRectRef = useRef(null);
+  // Open popups, bottom to top: [{ id, anchor }]. Index = level; the note body is level -1.
+  const [popups, setPopups] = useState([]);
 
-  const recomputePopup = useCallback(() => {
-    if (!hoverInfoId || !popupRef.current || !anchorRectRef.current) return;
-    const r = popupRef.current.getBoundingClientRect();
-    const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
-    const vh = typeof window !== "undefined" ? window.innerHeight : 800;
-    const ar = anchorRectRef.current;
-    const m = 8;
-    // Candidates: above, below, right, left
-    const candidates = [];
-    // Above
-    candidates.push({ top: ar.top - r.height - m, left: Math.min(Math.max(ar.left, m), vw - r.width - m), fits: () => ar.top - r.height - m >= m });
-    // Below
-    candidates.push({ top: ar.bottom + m, left: Math.min(Math.max(ar.left, m), vw - r.width - m), fits: () => ar.bottom + r.height + m <= vh - m });
-    // Right
-    candidates.push({ top: Math.min(Math.max(ar.top, m), vh - r.height - m), left: ar.right + m, fits: () => ar.right + r.width + m <= vw - m });
-    // Left
-    candidates.push({ top: Math.min(Math.max(ar.top, m), vh - r.height - m), left: ar.left - r.width - m, fits: () => ar.left - r.width - m >= m });
-    let placed = null;
-    for (const c of candidates) {
-      if (c.fits()) { placed = { top: Math.max(m, Math.min(c.top, vh - r.height - m)), left: Math.max(m, Math.min(c.left, vw - r.width - m)) }; break; }
-    }
-    if (!placed) {
-      placed = { top: Math.max(m, Math.min(ar.bottom + m, vh - r.height - m)), left: Math.max(m, Math.min(ar.left, vw - r.width - m)) };
-    }
-    setHoverPos(placed);
-  }, [hoverInfoId]);
-
-  useLayoutEffect(() => { recomputePopup(); }, [recomputePopup]);
-
-  useLayoutEffect(() => {
-    if (!popupRef.current) return;
-    const ro = new ResizeObserver(() => recomputePopup());
-    ro.observe(popupRef.current);
-    const onResize = () => recomputePopup();
-    window.addEventListener('resize', onResize);
-    return () => { ro.disconnect(); window.removeEventListener('resize', onResize); };
-  }, [recomputePopup, popupRef]);
-  // Esc closes the drawer (or the hover popup first, if one is open).
+  // Esc closes the top popup first, then the drawer.
   useEffect(() => {
     if (!active) return;
     const onKey = (e) => {
       if (e.key !== "Escape") return;
-      if (hoverInfoId) setHoverInfoId(null);
+      if (popups.length) setPopups((ps) => ps.slice(0, -1));
       else close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, hoverInfoId, close]);
+  }, [active, popups.length, close]);
 
-  // A click outside the popup closes it (a click on its own link toggles it via the link's handler).
+  // A click inside a popup closes the popups above it; a click outside all popups closes them all.
+  // (A click on a "#hover:" link is handled by the link itself.)
   useEffect(() => {
-    if (!hoverInfoId) return;
+    if (!popups.length) return;
     const onDown = (e) => {
-      if (popupRef.current?.contains(e.target) || e.target.closest?.('a[href^="#hover:"]')) return;
-      setHoverInfoId(null);
+      if (e.target.closest?.('a[href^="#hover:"]')) return;
+      const el = e.target.closest?.("[data-popup-level]");
+      const level = el ? Number(el.dataset.popupLevel) : -1;
+      setPopups((ps) => ps.slice(0, level + 1));
     };
     document.addEventListener("pointerdown", onDown);
     return () => document.removeEventListener("pointerdown", onDown);
-  }, [hoverInfoId]);
+  }, [popups.length]);
 
-  // Each new note starts at the top, and any hover popup from the previous note goes away.
+  // Each new note starts at the top, and popups from the previous note go away.
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = 0;
-    setHoverInfoId(null);
+    setPopups([]);
   }, [active]);
+
+  // Markdown components for the note body (level -1) or a popup at the given level.
+  const makeComponents = (level) => ({
+    code: NoteCode,
+    a: ({ href, children, ...props }) => {
+      delete props.node;
+      if (href && href.startsWith("#info:")) {
+        const id = href.slice("#info:".length);
+        return (
+          <a href={href} onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (INFO[id]) open(id); }} className="note-link" {...props}>
+            {children}
+          </a>
+        );
+      }
+      if (href && href.startsWith("#hover:")) {
+        const id = href.slice("#hover:".length);
+        return (
+          <a
+            href={href}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const anchor = e.currentTarget.getBoundingClientRect();
+              // Keep the popups up to this level; toggle the one directly above it.
+              setPopups((ps) => {
+                const base = ps.slice(0, level + 1);
+                return ps[level + 1]?.id === id ? base : [...base, { id, anchor }];
+              });
+            }}
+            className="note-link"
+            {...props}
+          >
+            {children}
+          </a>
+        );
+      }
+      if (href === "#cdf") {
+        return (
+          <a href={href} onClick={(e) => { e.preventDefault(); e.stopPropagation(); open("cdf"); }} className="note-link" {...props}>
+            {children}
+          </a>
+        );
+      }
+      const isExternal = /^https?:\/\//.test(href || "");
+      return (
+        <a href={href} className="note-link" {...(isExternal ? { target: "_blank", rel: "noopener noreferrer" } : {})} {...props}>
+          {children}
+        </a>
+      );
+    },
+  });
 
   if (!active) return null;
 
@@ -159,75 +231,12 @@ export default function InfoPanel() {
       <ReactMarkdown
         remarkPlugins={REMARK_PLUGINS}
         rehypePlugins={[[rehypeKatex, { trust: (ctx) => ctx.command === "\\href", strict: "ignore", fleqn: true }], rehypeSlug]}
-        components={{
-          code: NoteCode,
-          a: ({ href, children, ...props }) => {
-            if (href && href.startsWith("#info:")) {
-              const id = href.slice("#info:".length);
-              return (
-                <a href={href} onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (INFO[id]) open(id); }} className="note-link" {...props}>
-                  {children}
-                </a>
-              );
-            }
-            if (href && href.startsWith("#hover:")) {
-              const id = href.slice("#hover:".length);
-              return (
-                <a
-                  href={href}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    anchorRectRef.current = rect;
-                    // Seed a provisional position; final position will be adjusted by recomputePopup
-                    const left = Math.min(rect.left, (typeof window !== "undefined" ? window.innerWidth : 1200) - 360);
-                    const top = Math.max(8, rect.top - 16);
-                    setHoverPos({ top, left });
-                    anchorRectRef.current = rect;
-                    setHoverInfoId((prev) => (prev === id ? null : id));
-                    // In next frame, recompute with actual popup size
-                    setTimeout(() => recomputePopup(), 0);
-                  }}
-                  className="note-link"
-                  {...props}
-                >
-                  {children}
-                </a>
-              );
-            }
-            if (href === "#cdf") {
-              return (
-                <a href={href} onClick={(e) => { e.preventDefault(); e.stopPropagation(); open("cdf"); }} className="note-link" {...props}>
-                  {children}
-                </a>
-              );
-            }
-            const isExternal = /^https?:\/\//.test(href || "");
-            return (
-              <a href={href} className="note-link" {...(isExternal ? { target: "_blank", rel: "noopener noreferrer" } : {})} {...props}>
-                {children}
-              </a>
-            );
-          },
-        }}
+        components={makeComponents(-1)}
       >
         {note.md || "_No content_"}
       </ReactMarkdown>
-      {hoverInfoId && INFO[hoverInfoId] && (
-        <div
-          ref={popupRef}
-          className="note-popup prose prose-slate prose-sm fixed z-50 overflow-auto rounded-xl border border-slate-200 bg-white p-4 shadow-xl"
-          style={{ top: hoverPos.top, left: hoverPos.left, maxWidth: 'min(720px, calc(100vw - 16px))', maxHeight: '70vh', minWidth: 'min(360px, calc(100vw - 16px))' }}
-          onClick={(e) => { e.stopPropagation(); }}
-        >
-          <ReactMarkdown
-            remarkPlugins={REMARK_PLUGINS}
-            rehypePlugins={[[rehypeKatex, { trust: (ctx) => ctx.command === "\\href", strict: "ignore", fleqn: true }], rehypeSlug]}
-          >
-            {getNote(hoverInfoId, lang).md || "_No content_"}
-          </ReactMarkdown>
-        </div>
+      {popups.map((pp, i) =>
+        INFO[pp.id] ? <Popup key={`${i}:${pp.id}`} id={pp.id} anchor={pp.anchor} level={i} lang={lang} components={makeComponents(i)} /> : null
       )}
       </div>
     </aside>
