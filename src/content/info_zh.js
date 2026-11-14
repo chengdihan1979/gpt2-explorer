@@ -1202,7 +1202,7 @@ dropout 放在**分支**（\`attn(...)\`）上，而不是放在 \`x\` 上。残
 
 ## 不只在 attention 里
 
-MLP 分支在同样的位置也有 residual dropout：\`x = x + mlp(ln2(x))\`，其中 MLP 的输出在相加之前也要经过 dropout。见 [Residual Dropout in MLP](#info:mlp_dropout_notes)。
+MLP 分支在同样的位置也有 residual dropout：\`x = x + mlp(ln2(x))\`，其中 MLP 的输出在相加之前也要经过 dropout。见 [MLP 里的 residual dropout](#info:mlp_dropout_notes)。
 
 ## p 怎么选
 
@@ -1991,15 +1991,7 @@ out[1] =        a[1] + a[2] − a[3]
 g_a[j] = Σ_i  g_out[i] × W2[i][j]
 \`\`\`
 
-以 \`a[2]\` 为例，它在两个输出里的系数都是 1。把它增加 0.001：
-
-\`\`\`text
-经过 out[0]：0.001 × 1 × 0.837    =  0.000837
-经过 out[1]：0.001 × 1 × (−0.272) = −0.000272
-合计                              =  0.000565
-\`\`\`
-
-所以 a[2] 每增加 1，loss 大约增加 0.565，即 \`g_a[2] = 0.565\`。四个全部算出来：
+代入数字，四个全部算出来：
 
 \`\`\`text
 g_a[0] = 0.837×1 + (−0.272)×0    =  0.837
@@ -2084,6 +2076,318 @@ loss：0.387 → 0.163     ✓ 变小了
 | fc_in | W1 · x | W1ᵀ · g_h | g_h × x |
 
 backward 要用到 forward 时的中间值：算 W2 的梯度要用 \`a\`，算 GELU' 要用 \`h\`，算 W1 的梯度要用 \`x\`。所以 forward 之后 PyTorch 会把这些中间值留在内存里，这也是训练比推理占内存多得多的原因。
+`,
+  },
+  mlp_dropout_notes: {
+    title: "MLP 里的 residual dropout",
+    md: `
+**\`self.drop\` 在训练时随机把 MLP 输出的一部分置成 0，然后这个输出才加到残差流上。** 它是 MLP 的最后一步，和 attention 末尾的 \`resid_drop\` 是同一种 residual dropout。
+
+## 位置
+
+\`\`\`python
+self.drop = nn.Dropout(dropout)                       # 在 __init__ 里；本站用 dropout = 0.1
+...
+return self.drop(self.fc_out(self.act(self.fc_in(x))))  # forward 的最后；输出 (B, T, C)
+\`\`\`
+
+返回值就是 block 加到残差流上的东西：
+
+\`\`\`python
+x = x + self.mlp(self.ln2(x))
+\`\`\`
+
+所以顺序是：[fc_out](#info:mlp_fc_out_notes) → \`drop\` → 加到 \`x\` 上。
+
+这里出现了两个不同的 \`x\`，很容易混：
+
+- **block 里的 \`x\`** 是残差流：每个 token 一个 768 维向量，起点是 token embedding + 位置 embedding，之后每个子层的更新量都加了上去。
+- **\`MLP.forward\` 里的 \`x\`** 只是它的参数，也就是 \`ln2(x)\`：残差流做过 LayerNorm 的一个副本。MLP 读这个副本、算出更新量，再由 block 把更新量加回残差流。
+
+## 它做什么
+
+规则和所有 \`nn.Dropout\` 一样（细节见 [Residual dropout in Causal Self-Attention](#info:resid_dropout_notes)）：
+
+- **训练**（\`model.train()\`）：\`fc_out\` 输出的每个数各自以 $p = 0.1$ 的概率被置成 0；留下来的数都乘以 $1/(1-p) = 1/0.9 \\approx 1.111$，这样平均值保持不变。
+- **推理**（\`model.eval()\`）：什么都不做，输出等于输入。
+
+它作用在 \`fc_out\` 的输出上，形状是 $(B,\\ T,\\ C)$，也就是 MLP 准备写进残差流的更新量。它**不**作用在 MLP 内部那 3072 个 GELU 输出上。
+
+## 具体例子
+
+一个 token，只看 768 维里的前 4 维。数字是为了演示编的：
+
+\`\`\`text
+dim                    0      1      2      3
+x                    [0.20, -0.50,  1.00,  0.30]   ← 残差流
+update = fc_out(...) [0.50, -0.20,  0.90,  0.10]   ← 更新量
+\`\`\`
+
+**不 dropout**（推理）时，整个更新量都加上去：
+
+\`\`\`text
+x + update           [0.70, -0.70,  1.90,  0.40]
+\`\`\`
+
+**dropout**（训练）时，假设这次抽中第 2 维被丢掉：
+
+\`\`\`text
+mask                 [ 1,     1,     0,     1   ]
+update × mask/0.9    [0.556, -0.222, 0,    0.111]   ← 0.50/0.9, -0.20/0.9, 0, 0.10/0.9
+new x                [0.756, -0.722, 1.00, 0.411]   ← x + 丢过的更新量
+\`\`\`
+
+第 2 维的更新量没了，但 \`x\` 原来的 **1.00 还在**。效果是"这一次 MLP 没往第 2 维写东西"，而不是"第 2 维的信息丢了"。下一步训练会重新抽一个 mask。
+
+## 对 backward 的影响
+
+forward 时被丢掉的数乘了 0，留下来的乘了 1.111，所以 backward 时梯度也乘以完全相同的数（链式法则，见[穿过 GELU 的 backward 例子](#hover:gelu_backprop_notes)）：
+
+\`\`\`text
+[g0,        g1,        g2, g3       ]   ← 从后面传回来的梯度
+[1.111×g0,  1.111×g1,  0,  1.111×g3 ]   ← 穿过 dropout 之后
+\`\`\`
+
+这一步里，更新量的第 2 维对 loss 没有影响，所以它的梯度是 0。输出的第 2 维是由 **\`fc_out.weight\` 的第 2 行**（和 \`fc_out.bias[2]\`）写出来的，所以这一步里这一行从这个 token 收不到梯度，也不会因为它而改变。下一步换另一批行被跳过。
+
+## 为什么要用
+
+### 1. 正则化：不能依赖某一个维度
+
+没有 dropout 时，MLP 可能学会走捷径，比如总把某个重要信号写在固定的一维上，后面的层也只学会读这一维。有了 dropout，更新量的任何一维在某一步都可能消失，所以必须在少了一部分的情况下照样得到对的结果。信息因此分散到多个维度上，对没见过的文本泛化得更好。
+
+这对 MLP 尤其重要：它占了每个 block 大约三分之二的参数（4.7M，attention 是 2.4M），参数越多，越有能力死记训练数据。
+
+### 2. 不伤害主路径
+
+dropout 放在**分支**（\`mlp(...)\`）上，而不是 \`x\` 上。残差流穿过 \`x + ...\` 时始终是完整的。如果每个 block 都对 \`x\` 本身做 dropout，12 个 block 每一个都会随机抹掉前面所有层积累下来的一部分信息，层数越深损失越多。
+
+## p 怎么选
+
+- GPT-2 用 $p = 0.1$。
+- 🆕 现在很多大模型（比如 LLaMA）预训练时把 dropout 设成 0：数据量非常大，每条数据基本只看一遍，过拟合不是主要问题，dropout 反而会拖慢学习。
+
+## 参考资料
+
+1. **Transformer 原论文（residual dropout 的出处）**
+
+   Vaswani et al., "Attention Is All You Need," §5.4 "Regularization"：在每个子层的输出加回残差之前做 dropout（embedding 和 attention 概率上也有）。
+
+   [Attention Is All You Need ↗](https://arxiv.org/pdf/1706.03762v2)
+
+2. **GPT-2 的具体配置和术语**
+
+   Hugging Face 文档列出了 GPT-2 的三种 dropout：\`resid_pdrop\`（残差分支）、\`attn_pdrop\`（attention 概率）、\`embd_pdrop\`（embedding）。
+
+   [GPT-2 Configs ↗](https://huggingface.co/docs/transformers/main/model_doc/gpt2)
+
+3. **dropout 的一般理论（为什么有效）**
+
+   Srivastava et al., "Dropout: A Simple Way to Prevent Neural Networks from Overfitting" (JMLR 2014)。
+
+   [Dropout: A Simple Way to Prevent Neural Networks from Overfitting ↗](https://www.jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf)
+
+4. **对比：整条残差分支一起丢掉**
+
+   Huang et al., "Deep Networks with Stochastic Depth" (CVPR 2016)：训练时随机丢掉整个残差 block（"drop-path"），可以和逐元素的 residual dropout 对比。
+
+   [Deep Networks with Stochastic Depth ↗](https://arxiv.org/abs/1603.09382)
+`,
+  },
+  mlp_residual_notes: {
+    title: "MLP 残差",
+    md: `
+**代码：** \`x = x + self.mlp(self.ln2(x))\`
+
+**这一行是 Transformer block 的后半段：先把残差流归一化，让 MLP 给每个 token 算一个更新量，再把更新量加回去。** 这一行之后，block 就结束了，\`x\` 进入下一个 block。
+
+## 位置
+
+\`\`\`python
+def forward(self, x):                    # x: (B, T, C)，残差流
+    x = x + self.attn(self.ln1(x))       # 前半段：attention
+    x = x + self.mlp(self.ln2(x))        # 后半段：MLP  ← 这一行
+    return x
+\`\`\`
+
+它和 [attention 残差](#info:attn_residual_notes)那一行结构完全一样，只是子层不同。
+
+这里的 \`x\` 是**残差流**：每个 token 一个 768 维向量。它的起点是 token embedding + 位置 embedding，之后每个子层（12 个 block × 2 = 24 个）都往上加自己的更新量。比如在第 5 个 block 运行这一行时，\`x\` 已经包含了 embedding、前 4 个 block 的全部更新量，以及第 5 个 block attention 的更新量。
+
+## 三个步骤
+
+1. **\`self.ln2(x)\`，先归一化（pre-LN）。** [LayerNorm](#info:layernorm) 把每个 token 的 768 个数调整到均值约 0、方差约 1，让 MLP 每次看到的输入尺度都差不多。它产生的是一个归一化的**副本**，\`x\` 本身不变。
+2. **\`self.mlp(...)\`，算更新量。** 对每个 token 单独计算（token 之间不混合）：[fc_in](#info:mlp_fc_in_notes) 768 → 3072，[GELU](#info:gelu)，[fc_out](#info:mlp_fc_out_notes) 3072 → 768，[dropout](#info:mlp_dropout_notes)。
+3. **\`x + ...\`，加回去。** 更新量逐个数地加到残差流上。
+
+形状必须一致才能相加：
+
+\`\`\`text
+x                 (B, T, C)
+self.ln2(x)       (B, T, C)
+self.mlp(...)     (B, T, C)
+x + ...           (B, T, C)
+\`\`\`
+
+## Forward：具体例子
+
+一个 token，只看前 4 维，接着 [MLP dropout notes](#info:mlp_dropout_notes) 里的例子（训练中，第 2 维被丢掉）：
+
+\`\`\`text
+x            = [0.20,  -0.50,  1.00, 0.30]    ← 残差流
+mlp(ln2(x))  = [0.556, -0.222, 0,    0.111]   ← 更新量，已经过 dropout
+new x        = [0.756, -0.722, 1.00, 0.411]   ← 新的 x
+\`\`\`
+
+\`x\` 原来的信息都保留着，MLP 只是在上面加了一个修正。
+
+## Backward：梯度遇到"+"会复制成两份
+
+把这一行写成 \`新x = 旧x + 分支\`，其中 \`分支 = mlp(ln2(旧x))\`。
+
+- \`旧x\` 增加 0.001，\`新x\` 就增加 0.001。
+- \`分支\` 增加 0.001，\`新x\` 也增加 0.001。
+
+所以"+"对两边的局部导数**都是 1**，传到 \`新x\` 的梯度会原样分给两边。假设从后面传回来的梯度是 \`g = [0.3, −0.1, 0.2, 0.05]\`：
+
+\`\`\`text
+      ┌──→ [0.3, -0.1, 0.2, 0.05]   直接给旧x：原样，乘 1
+g  ───┤
+      └──→ [0.3, -0.1, 0.2, 0.05]   给分支 mlp(ln2)：也原样；之后再往里穿过
+                                    dropout、fc_out、GELU、fc_in、ln2
+\`\`\`
+
+进入分支的那一份穿过 MLP 和 ln2（过程和[穿过 GELU 的 backward 例子](#hover:gelu_backprop_notes)一样），最后也回到 \`旧x\` 身上，记作 \`g_分支\`。所以：
+
+\`\`\`text
+旧x 的梯度 = g（直接路径） + g_分支（穿过 MLP 的路径）
+\`\`\`
+
+这就是"所有路径的贡献加起来"：\`旧x\` 通过两条路径影响 loss（直接进入 \`新x\`，以及经过 ln2 和 MLP），所以两份梯度相加。
+
+## 为什么重要：梯度高速公路
+
+GPT-2 有 12 个 block，也就是 24 个 \`x = x + 分支\`。
+
+- **有残差：** 沿着这 24 个"+"的直接路径，从 loss 出发的梯度可以**原封不动**地一路传回 embedding。每个分支在上面加上自己的那份，但不会挡住直接路径。
+- **没有残差**（\`x = mlp(ln2(x))\`）：梯度必须依次穿过全部 24 个子层，每穿过一层就乘一次这一层的局部导数。假设每层平均把梯度缩小一半，24 层之后就是 0.5²⁴ ≈ 0.00000006，前面几层几乎学不到东西。这就是**梯度消失**。（如果每层平均放大一倍，就会梯度爆炸。）
+
+训练刚开始时还有一个相关的好处：权重很小，更新量 \`mlp(ln2(x))\` 接近 0，所以 \`新x ≈ 旧x\`。每个 block 一开始都接近"什么都不做"，整个深层网络表现得像一个浅层网络，直到各个 block 学会有用的更新量。这让深层网络的训练更容易起步。
+
+同样的论证用 Jacobian 的形式写出来，以及为什么把 LayerNorm 放在子层**之前**（pre-LN，就是这里的写法）能让直接路径保持干净，而原始 Transformer 的 post-LN 做不到，见 [Prevents vanishing/exploding](#info:mlp_prevents_vanishing_exploding_notes)。
+
+## 总结
+
+| | Forward | Backward |
+| --- | --- | --- |
+| 直接路径（\`x\`） | 原来的信息完整通过 | 梯度原样传回去 |
+| 分支（\`mlp(ln2(x))\`） | 加上一个逐 token 的修正 | 加上自己那份梯度 |
+
+残差连接是能把很多 block 堆起来的关键：forward 时信息不丢，backward 时梯度能到达每一层。
+`,
+  },
+  attn_residual_notes: {
+    title: "Attention 残差",
+    md: `
+**代码：** \`x = x + self.attn(self.ln1(x))\`
+
+**这一行是 Transformer block 的前半段：先把残差流归一化，让 attention 根据每个 token 和它前面的 token 算出一个更新量，再把更新量加回去。** 后半段 \`x = x + self.mlp(self.ln2(x))\` 结构相同（见 [MLP 残差](#info:mlp_residual_notes)）。
+
+## 位置
+
+\`\`\`python
+def forward(self, x):                    # x: (B, T, C)，残差流
+    x = x + self.attn(self.ln1(x))       # 前半段：attention  ← 这一行
+    x = x + self.mlp(self.ln2(x))        # 后半段：MLP
+    return x
+\`\`\`
+
+这里的 \`x\` 是**残差流**：每个 token 一个 768 维向量。在第 1 个 block 里，它就是 token embedding + 位置 embedding；之后每个子层（12 个 block × 2 = 24 个）都往上加自己的更新量。可以把它想成每个 token 的一本笔记：embedding 写下初稿，之后每个子层补充一点内容。
+
+## 三个步骤
+
+1. **\`self.ln1(x)\`，先归一化（pre-LN）。** [LayerNorm](#info:layernorm) 把每个 token 的 768 个数调整到均值约 0、方差约 1，让 attention 每次看到的输入尺度都差不多，q·k 分数和 softmax 也就保持在稳定的范围里。它产生的是一个归一化的**副本**，\`x\` 本身不变。
+2. **\`self.attn(...)\`，算更新量。** 因果自注意力让每个 token 从自己和它前面的 token 那里取信息（因为 causal mask，取不到后面的），返回形状为 $(B, T, C)$ 的更新量。最后两步是输出投影和 [residual dropout](#info:resid_dropout_notes)。
+3. **\`x + ...\`，加回去。** 更新量逐个数地加到残差流上。
+
+形状必须一致才能相加：
+
+\`\`\`text
+x                 (B, T, C)
+self.ln1(x)       (B, T, C)
+self.attn(...)    (B, T, C)
+x + ...           (B, T, C)
+\`\`\`
+
+和 MLP 那一半的区别：**attention 是 token 之间交换信息的唯一地方。** MLP 对每个 token 单独计算。所以这一行之后，"The cat sat" 里 "sat" 的 \`x\` 已经带上了从 "The" 和 "cat" 取来的信息。
+
+## Forward：具体例子
+
+一个 token，只看前 4 维，用 [residual dropout notes](#info:resid_dropout_notes) 里的数字（训练中，第 1 维被丢掉）：
+
+\`\`\`text
+x            = [0.20, -0.50,  1.00, 0.30]   ← 残差流
+attn(ln1(x)) = [1.30,  0,    -0.33, 0.89]   ← 更新量，已经过 dropout
+new x        = [1.50, -0.50,  0.67, 1.19]   ← 新的 x
+\`\`\`
+
+\`x\` 原来的信息都保留着，attention 只是在上面加了一个修正。第 1 维的更新量被丢掉了，\`x\` 的 −0.50 原样通过。
+
+## Backward：梯度遇到"+"会复制成两份
+
+把这一行写成 \`新x = 旧x + 分支\`，其中 \`分支 = attn(ln1(旧x))\`。
+
+- \`旧x\` 增加 0.001，\`新x\` 就增加 0.001。
+- \`分支\` 增加 0.001，\`新x\` 也增加 0.001。
+
+所以"+"对两边的局部导数**都是 1**，传到 \`新x\` 的梯度会原样分给两边。假设从后面传回来的梯度是 \`g = [0.3, −0.1, 0.2, 0.05]\`：
+
+\`\`\`text
+      ┌──→ [0.3, -0.1, 0.2, 0.05]   直接给旧x：原样，乘 1
+g  ───┤
+      └──→ [0.3, -0.1, 0.2, 0.05]   给分支 attn(ln1)：也原样；之后再往里穿过
+                                    dropout、proj、attention、ln1
+\`\`\`
+
+进入分支的那一份穿过 attention 和 ln1，最后也回到 \`旧x\` 身上，记作 \`g_分支\`。按照"所有路径的贡献加起来"（见[穿过 GELU 的 backward 例子](#hover:gelu_backprop_notes)）：
+
+\`\`\`text
+旧x 的梯度 = g（直接路径） + g_分支（穿过 attention 的路径）
+\`\`\`
+
+和 MLP 的一个区别：attention 在 forward 时混合了 token，所以 backward 时分支的梯度也会流回它读过的**前面的 token**。"cat" 的 \`x\` 的梯度里，有一部分来自 "sat" 的更新量，因为 "sat" 从 "cat" 那里取过信息。
+
+## 为什么残差重要：梯度高速公路
+
+GPT-2 一共有 24 个 \`x = x + 分支\`。
+
+- **有残差：** 沿着这 24 个"+"的直接路径，从 loss 出发的梯度可以**原封不动**地一路传回 embedding。每个分支在上面加上自己的那份，但不会挡住直接路径。
+- **没有残差**（\`x = attn(ln1(x))\`）：梯度必须依次穿过全部 24 个子层，每穿过一层就乘一次这一层的局部导数。假设每层平均把梯度缩小一半，24 层之后就是 0.5²⁴ ≈ 0.00000006，前面几层几乎学不到东西（**梯度消失**）。如果每层平均放大一倍，就会爆炸。
+
+训练刚开始时还有一个相关的好处：权重很小，更新量接近 0，所以 \`新x ≈ 旧x\`。每个 block 一开始都接近"什么都不做"，整个深层网络像浅层网络一样容易训练，直到各个 block 学会有用的更新量。
+
+## 为什么 LayerNorm 放在分支里（pre-LN）
+
+LayerNorm 和残差有两种组合方式：
+
+\`\`\`text
+pre-LN  (GPT-2):                  x = x + attn(LN(x))     ← LN 只在分支上
+post-LN (original Transformer):   x = LN(x + attn(x))     ← LN 在相加之后，位于主路径上
+\`\`\`
+
+- **pre-LN：** 直接路径 \`x → x + ...\` 上只有"+"，所以沿这条路径的梯度在每个 block 里都正好乘以 1。
+- **post-LN：** 直接路径在每次相加之后都要穿过 LN，所以沿这条路径的梯度要乘 24 次 LN 的局部导数。这些因子会累积，让梯度变小或变大。post-LN 的模型通常需要仔细的学习率 warmup 才训练得起来，层数一深就很难训练。
+
+GPT-2（2019）改用了 pre-LN，并在最后一个 block 之后多加了一个 LayerNorm \`ln_f\`，因为在 pre-LN 里，主路径上的残差流本身从来没有被归一化过。用 Jacobian 写出来的同一个论证，见 [Prevents vanishing/exploding](#info:prevents_vanishing_exploding_notes)。
+
+> 🆕 现在 pre-LN 已经是标准做法。很多新模型（比如 LLaMA）保持同样的结构，但把 LayerNorm 换成了 RMSNorm：只做缩放，不减均值，计算更省一点。
+
+## 总结
+
+| | Forward | Backward |
+| --- | --- | --- |
+| 直接路径（\`x\`） | 原来的信息完整通过 | 梯度原样传回去 |
+| 分支（\`attn(ln1(x))\`） | 加上一个由本 token 和前面 token 算出的更新量 | 加上自己那份梯度，也会传给前面的 token |
 `,
   },
 };

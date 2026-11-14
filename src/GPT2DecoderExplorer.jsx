@@ -753,108 +753,117 @@ for all $i$ (padding shorter shapes with $1$ on the left if needed).
   },
 
   mlp_dropout_notes: {
-    title: "Residual Dropout in MLP",
+    title: "Residual dropout in MLP",
     md: `
-**Residual dropout** is applied to the output of each sublayer (attention branch and MLP branch) before adding it back via the residual path.
+**\`self.drop\` randomly zeros part of the MLP output during training, right before that output is added to the residual stream.** It is the last step of the MLP, and it is the same residual dropout as \`resid_drop\` at the end of attention.
 
-## Reminder: what happens in the MLP step
+## Where it sits
 
-Inside a Transformer block, the feed-forward MLP is:
+\`\`\`python
+self.drop = nn.Dropout(dropout)                       # in __init__; this site uses dropout = 0.1
+...
+return self.drop(self.fc_out(self.act(self.fc_in(x))))  # end of forward; output: (B, T, C)
+\`\`\`
 
-$$
-\\text{MLP}(x) = W_2 \\cdot \\phi(W_1 x + b_1) + b_2
-$$
+The returned value is what the block adds to the residual stream:
 
-where:
+\`\`\`python
+x = x + self.mlp(self.ln2(x))
+\`\`\`
 
-- $W_1, W_2$ are weight matrices;
-- $b_1, b_2$ are bias vectors;
-- $\\phi$ is a non-linear activation function (e.g. GELU in GPT-2).
+So the order is: [fc_out](#info:mlp_fc_out_notes) → \`drop\` → add to \`x\`.
 
-This expands the hidden dimension with $W_1$, applies the non-linearity $\\phi$, and then projects back down with $W_2$.
+Two different \`x\` appear here, which is easy to mix up:
 
-## Why residual dropout
+- **\`x\` in the block** is the residual stream: each token's 768-number vector that started as token embedding + position embedding and has had every earlier sublayer's update added to it.
+- **\`x\` inside \`MLP.forward\`** is just its argument, \`ln2(x)\`: a normalized copy of the residual stream. The MLP reads that copy, computes an update, and the block adds the update back.
 
-### 1. Regularization
+## What it does
 
-The MLP produces high-dimensional features after the nonlinearity. Dropout prevents overfitting by randomly zeroing activations:
+The same rule as every \`nn.Dropout\` (details in [Residual dropout in Causal Self-Attention](#info:resid_dropout_notes)):
 
-$$
-h' = h \\odot m \\cdot \\frac{1}{1-p}
-$$
+- **Training** (\`model.train()\`): each number of the \`fc_out\` output is independently set to 0 with probability $p = 0.1$; every number that survives is multiplied by $1/(1-p) = 1/0.9 \\approx 1.111$, which keeps the average output unchanged.
+- **Inference** (\`model.eval()\`): it does nothing; the output equals the input.
 
-where $h$ is the activation, $m$ is a Bernoulli mask, and $p$ is the dropout probability (e.g. $p = 0.1$ for GPT-2).
+It acts on the \`fc_out\` output, shape $(B,\\ T,\\ C)$: the update the MLP is about to write into the residual stream. It does **not** act on the 3072 GELU outputs inside the MLP.
 
-### 2. Preventing co-adaptation
+## A worked example
 
-Without dropout, neurons may rely on specific others. Residual dropout prevents the model from over-relying on any one feature/channel, encouraging redundant, distributed cues. The network learns to succeed even when some of its "favorite" features are momentarily missing.
+One token, first 4 of the 768 dimensions. The numbers are made up for illustration:
 
-### 3. Stabilizing optimization
+\`\`\`text
+dimension:              0      1      2      3
+x (residual stream):  [0.20, -0.50,  1.00,  0.30]
+update = fc_out(...): [0.50, -0.20,  0.90,  0.10]
+\`\`\`
 
-During training, dropout randomly zeros parts of the activations, making any single neuron or path unreliable. As a result, the model learns backup cues and spreads information across features instead of cranking a few channels way up.
+**Without dropout** (inference), the whole update is added:
 
-In the residual branches specifically, this "residual dropout" doesn't cap weights directly: it injects stochastic noise into the branch update, which discourages overly aggressive weight growth. To perform well under this noise, the network develops redundant, distributed representations and typically ends up with smaller, more balanced weights.
+\`\`\`text
+x + update          = [0.70, -0.70,  1.90,  0.40]
+\`\`\`
 
-> This regularization helps both the attention and MLP residual branches, and is especially valuable for the feed-forward MLP, which usually has many more parameters than the attention layer.
+**With dropout** (training), suppose this time dimension 2 is drawn to be dropped:
 
-## Example
+\`\`\`text
+mask:                 [ 1,     1,     0,     1   ]
+dropped, × 1/0.9:     [0.556, -0.222, 0,    0.111]   ← 0.50/0.9, -0.20/0.9, 0, 0.10/0.9
+x + dropped update  = [0.756, -0.722, 1.00, 0.411]
+\`\`\`
 
-If the MLP output for one token is
+In dimension 2 the update is gone, but \`x\`'s original **1.00 is still there**. The effect is "this time the MLP wrote nothing into dimension 2", not "the information in dimension 2 is lost". The next training step draws a new mask.
 
-$$
-h = [0.8,\\; -0.5,\\; 1.2,\\; 0.0,\\; -0.3,\\; 0.9],
-$$
+## What it does to the backward pass
 
-suppose the 3rd dimension (1.2) is consistently high for certain tokens. The next projection layer $W_2$ could just learn to "look at" the 3rd neuron and ignore the rest.
+In the forward pass a dropped number is multiplied by 0 and a surviving one by 1.111, so in the backward pass the gradient is multiplied by exactly the same numbers (the chain rule; see the [worked backward example](#hover:gelu_backprop_notes)):
 
-In other words, the model develops a shortcut: "dimension 3 tells me what I need."
+\`\`\`text
+gradient arriving from later layers:  [g0,        g1,        g2, g3       ]
+after passing back through dropout:   [1.111×g0,  1.111×g1,  0,  1.111×g3 ]
+\`\`\`
 
-### How dropout disrupts this shortcut
+Dimension 2 of the update had no effect on the loss this step, so its gradient is 0. Dimension 2 of the output is written by **row 2 of \`fc_out.weight\`** (and \`fc_out.bias[2]\`), so in this step that row gets no gradient from this token and does not change because of it. Next step a different set of rows is skipped.
 
-With dropout ($p = 0.5$), a random mask $m$ is applied:
+## Why use it
 
-$$
-m = [1,\\; 0,\\; 0,\\; 1,\\; 1,\\; 1],
-$$
+### 1. Regularization: no single dimension can be relied on
 
-and the output becomes
+Without dropout, the MLP could learn a shortcut, such as always writing one important signal into one particular dimension, with later layers learning to read only that dimension. With dropout, any dimension of the update may vanish in a given step, so the result has to come out right even with part of it missing. Information gets spread across several dimensions, which generalizes better to text the model has not seen.
 
-$$
-h' = h \\odot m \\cdot \\frac{1}{1-p} = [1.6,\\; 0.0,\\; 0.0,\\; 0.0,\\; -0.6,\\; 1.8].
-$$
+This matters especially for the MLP: it holds about two thirds of each block's parameters (4.7M vs. 2.4M for attention), and more parameters mean more capacity to memorize the training data.
 
-Here the third neuron has been dropped. As a result, $W_2$ cannot always depend on $h_3$ being active, so it must learn to combine information from multiple dimensions.
+### 2. It does not damage the main path
 
-> This encourages redundancy and more robust feature representations.
+Dropout is on the **branch** (\`mlp(...)\`), not on \`x\`. The residual stream passes through \`x + ...\` complete. If dropout were applied to \`x\` itself in every block, each of the 12 blocks would randomly erase part of everything the earlier layers had accumulated, and the losses would compound with depth.
 
-## Train vs. eval
+## Choosing p
 
-- In **train** mode, dropout is active, so the model sees different activations each batch.
-- In **eval** mode, dropout is disabled.
+- GPT-2 uses $p = 0.1$.
+- 🆕 Many recent LLMs (e.g. LLaMA) pretrain with dropout 0: the training data is huge and usually seen about once, so overfitting is not the main problem, and dropout would only slow learning down.
 
 ## References
 
 1. **Original Transformer paper (where residual dropout is defined)**
 
-   Vaswani et al., "Attention Is All You Need," §5.4 "Regularization": applies dropout to the output of each sublayer before adding it to the residual (and also to embeddings/attention probs). Good primary citation for what and where dropout is applied.
+   Vaswani et al., "Attention Is All You Need," §5.4 "Regularization": applies dropout to the output of each sublayer before adding it to the residual (and also to embeddings/attention probs).
 
    [Attention Is All You Need ↗](https://arxiv.org/pdf/1706.03762v2)
 
 2. **GPT-2 specifics (configs & terminology)**
 
-   Hugging Face docs show GPT-2's three dropouts: \`resid_pdrop\` (residual branches), \`attn_pdrop\` (attention probs), \`embd_pdrop\` (embeddings). Useful for mapping concepts to code.
+   Hugging Face docs show GPT-2's three dropouts: \`resid_pdrop\` (residual branches), \`attn_pdrop\` (attention probs), \`embd_pdrop\` (embeddings).
 
    [GPT-2 Configs ↗](https://huggingface.co/docs/transformers/main/model_doc/gpt2)
 
 3. **General dropout theory (why it helps)**
 
-   Srivastava et al., "Dropout: A Simple Way to Prevent Neural Networks from Overfitting" (JMLR 2014): canonical reference for dropout as stochastic regularization/model averaging intuition.
+   Srivastava et al., "Dropout: A Simple Way to Prevent Neural Networks from Overfitting" (JMLR 2014).
 
    [Dropout: A Simple Way to Prevent Neural Networks from Overfitting ↗](https://www.jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf)
 
 4. **Related/contrastive regularizer (dropping whole residual paths)**
 
-   Huang et al., "Deep Networks with Stochastic Depth" (CVPR 2016): drops entire residual blocks during training ("drop-path"). A useful contrast with residual element-wise dropout.
+   Huang et al., "Deep Networks with Stochastic Depth" (CVPR 2016): drops entire residual blocks during training ("drop-path"), a contrast with element-wise residual dropout.
 
    [Deep Networks with Stochastic Depth ↗](https://arxiv.org/abs/1603.09382)
 `,

@@ -846,15 +846,7 @@ One \`a[j]\` can appear in **several** outputs. The coefficient in front of \`a[
 g_a[j] = Σ_i  g_out[i] × W2[i][j]
 \`\`\`
 
-Take \`a[2]\`, which appears in both outputs with coefficient 1. Increase it by 0.001:
-
-\`\`\`text
-via out[0]:  0.001 × 1 × 0.837    =  0.000837
-via out[1]:  0.001 × 1 × (−0.272) = −0.000272
-total                             =  0.000565
-\`\`\`
-
-So the loss changes 0.565 per unit of a[2], and \`g_a[2] = 0.565\`. All four:
+Plugging in the numbers for all four:
 
 \`\`\`text
 g_a[0] = 0.837×1 + (−0.272)×0    =  0.837
@@ -943,42 +935,107 @@ The backward needs values from the forward pass: \`a\` for W2's gradient, \`h\` 
   },
 
   attn_residual_notes: {
-    title: "Residual connection x = x + self.attn(self.ln1(x))",
+    title: "Attention residual",
     md: `
-**This line is the pre-norm residual attention block. It does three things in one.**
+**Code:** \`x = x + self.attn(self.ln1(x))\`
 
-## 1. Normalize before attention (pre-LN)
+**This line is the first half of a Transformer block: normalize the residual stream, let attention compute an update for each token from the tokens before it, and add that update back.** The second half, \`x = x + self.mlp(self.ln2(x))\`, has the same shape (see [MLP residual](#info:mlp_residual_notes)).
 
-\`self.ln1(x)\` applies LayerNorm to each token's features so the attention sees a well-conditioned input (zero-mean, unit-variance per token). This stabilizes training.
+## Where it sits
 
-## 2. Compute a context-dependent update
+\`\`\`python
+def forward(self, x):                    # x: (B, T, C), the residual stream
+    x = x + self.attn(self.ln1(x))       # first half: attention  ← this line
+    x = x + self.mlp(self.ln2(x))        # second half: MLP
+    return x
+\`\`\`
 
-\`self.attn(...)\` (masked multi-head self-attention) looks at other tokens and returns an update with the same shape as $x$, $(B, T, C)$. You can think of it as a learned correction $\\Delta x$ telling each token what to borrow from its context.
+\`x\` here is the **residual stream**: each token's 768-number vector. In block 1 it is token embedding + position embedding; after that, every sublayer (12 blocks × 2 = 24 of them) adds its update to it. A useful picture is a notebook per token: the embedding writes the first draft, and every sublayer adds a note.
 
-## 3. Residual (skip) connection
+## The three steps
 
-\`x = x + (...)\` adds that update onto the original stream. The residual path:
+1. **\`self.ln1(x)\`, normalize first (pre-LN).** [LayerNorm](#info:layernorm) rescales each token's 768 numbers to roughly mean 0 and variance 1, so attention always sees inputs on a similar scale, which keeps the q·k scores and the softmax in a stable range. It produces a normalized **copy**; \`x\` itself is not changed.
+2. **\`self.attn(...)\`, compute the update.** Causal self-attention lets each token take information from itself and the tokens before it (never after it, because of the causal mask), and returns an update of shape $(B, T, C)$. It ends with the output projection and [residual dropout](#info:resid_dropout_notes).
+3. **\`x + ...\`, add it back.** The update is added number by number to the residual stream.
 
-1. gives a **gradient highway**: there's an identity path, so gradients flow even if the attention sublayer is poorly scaled early in training;
-2. lets the block learn a **small perturbation around identity**: if the attention output is near zero, the block behaves like a no-op, which makes deep stacks much easier to optimize.
-
-## Why GPT-2 uses pre-LN
-
-GPT-2 uses pre-LN, $x + \\mathrm{Attn}(\\mathrm{LN}(x))$, instead of post-LN, $\\mathrm{LN}(x + \\mathrm{Attn}(x))$:
-
-- Pre-LN keeps the residual path's [gradient](#info:gradient_notes) close to 1, which [prevents vanishing/exploding](#info:prevents_vanishing_exploding_notes) and enables training many layers more reliably.
-- Attention also receives a normalized input, which helps its softmax and projections operate in a stable range.
-
-## Shape check (so the add works)
+Shapes, which must match for the add:
 
 \`\`\`text
 x                 (B, T, C)
 self.ln1(x)       (B, T, C)
 self.attn(...)    (B, T, C)
-sum (elementwise) (B, T, C)
+x + ...           (B, T, C)
 \`\`\`
 
-> **Big picture:** the line implements "take your current token representations, normalize them, compute a context-aware adjustment via attention, and add that adjustment back": a stabilized, residual refinement step.
+The difference from the MLP half: **attention is the only place where tokens exchange information.** The MLP works on each token separately. So after this line, the token "sat" in "The cat sat" has information from "The" and "cat" in its \`x\`.
+
+## Forward: a worked example
+
+One token, first 4 dimensions, using the numbers from the [residual dropout note](#info:resid_dropout_notes) (training, dimension 1 dropped):
+
+\`\`\`text
+x (residual stream):      [0.20, -0.50,  1.00, 0.30]
+attn(ln1(x)):             [1.30,  0,    -0.33, 0.89]   ← the update, after dropout
+new x:                    [1.50, -0.50,  0.67, 1.19]
+\`\`\`
+
+The original information in \`x\` is kept; attention only adds a correction. In dimension 1 the update was dropped, and \`x\`'s −0.50 passes through unchanged.
+
+## Backward: at the "+", the gradient is copied to both sides
+
+Write the line as \`new_x = old_x + branch\`, where \`branch = attn(ln1(old_x))\`.
+
+- If \`old_x\` increases by 0.001, \`new_x\` increases by 0.001.
+- If \`branch\` increases by 0.001, \`new_x\` also increases by 0.001.
+
+So the local derivative of "+" is **1 for both sides**, and the gradient arriving at \`new_x\` is passed to both sides unchanged. Suppose the gradient arriving from later layers is \`g = [0.3, −0.1, 0.2, 0.05]\`:
+
+\`\`\`text
+      ┌──→ straight to old_x:  [0.3, -0.1, 0.2, 0.05]   ← unchanged, × 1
+g  ───┤
+      └──→ into the branch:    [0.3, -0.1, 0.2, 0.05]   ← also unchanged; then back through
+                                                           dropout, proj, attention, ln1
+\`\`\`
+
+The copy that enters the branch passes back through attention and ln1 and arrives at \`old_x\` as well; call it \`g_branch\`. So, by the "sum over paths" rule (see the [worked backward example](#hover:gelu_backprop_notes)):
+
+\`\`\`text
+gradient of old_x = g  (straight path)  +  g_branch  (path through attention)
+\`\`\`
+
+One difference from the MLP: attention mixed tokens in the forward pass, so in the backward pass the branch's gradient also flows back to the **earlier tokens** it read from. The gradient of token "cat"'s \`x\` includes a share from "sat"'s update, because "sat" took information from "cat".
+
+## Why the residual matters: a gradient highway
+
+GPT-2 has 24 lines of the form \`x = x + branch\`.
+
+- **With residuals:** along the straight paths of all 24 "+", the gradient from the loss reaches the embeddings **unchanged**. Each branch adds its own contribution on top, but never blocks the straight path.
+- **Without residuals** (\`x = attn(ln1(x))\`): the gradient would have to pass through all 24 sublayers one after another, multiplied by each one's local derivative. Suppose each sublayer happened to halve it on average: after 24 sublayers it would be 0.5²⁴ ≈ 0.00000006, and the first layers would learn almost nothing (**vanishing gradients**). If each doubled it, it would explode.
+
+A related benefit at the start of training: the weights are small, so the update is close to 0 and \`new_x ≈ old_x\`. Every block starts close to "do nothing", and the deep stack trains like a shallow one until the blocks learn useful updates.
+
+## Why LayerNorm goes inside the branch (pre-LN)
+
+There are two ways to combine LayerNorm with the residual:
+
+\`\`\`text
+pre-LN  (GPT-2):                  x = x + attn(LN(x))     ← LN only on the branch
+post-LN (original Transformer):   x = LN(x + attn(x))     ← LN after the add, on the main path
+\`\`\`
+
+- **Pre-LN:** the straight path \`x → x + ...\` contains only the "+", so the gradient along it is multiplied by exactly 1 in every block.
+- **Post-LN:** the straight path goes through LN after every add, so the gradient along it is multiplied by LN's local derivative 24 times. These factors can compound and shrink or grow the gradient. Post-LN models are known to need a careful learning-rate warmup to train at all, and become hard to train when deep.
+
+GPT-2 (2019) switched to pre-LN, and adds one extra LayerNorm, \`ln_f\`, after the last block, because with pre-LN the stream itself is never normalized on the main path. For the same argument written with Jacobians, see [Prevents vanishing/exploding](#info:prevents_vanishing_exploding_notes).
+
+> 🆕 Pre-LN is now the standard. Many recent models (e.g. LLaMA) keep the same layout but use RMSNorm instead of LayerNorm: it only rescales and does not subtract the mean, which is a little cheaper.
+
+## Summary
+
+| | Forward | Backward |
+| --- | --- | --- |
+| Straight path (\`x\`) | information passes through complete | gradient passes back unchanged |
+| Branch (\`attn(ln1(x))\`) | adds an update read from earlier tokens | adds its gradient, also to earlier tokens |
 `,
   },
 
@@ -1828,7 +1885,7 @@ Suppose instead dropout were applied to \`x\` itself in every block. Then each o
 
 ## Not only in attention
 
-The MLP branch has the same residual dropout at the same position: \`x = x + mlp(ln2(x))\`, where the MLP output also goes through dropout before the add. See [Residual Dropout in MLP](#info:mlp_dropout_notes).
+The MLP branch has the same residual dropout at the same position: \`x = x + mlp(ln2(x))\`, where the MLP output also goes through dropout before the add. See [Residual dropout in MLP](#info:mlp_dropout_notes).
 
 ## Choosing p
 
@@ -1842,37 +1899,91 @@ The MLP branch has the same residual dropout at the same position: \`x = x + mlp
     md: `
 **Code:** \`x = x + self.mlp(self.ln2(x))\`
 
-## 1. Normalize before the MLP (pre-LN)
+**This line is the second half of a Transformer block: normalize the residual stream, let the MLP compute an update for each token, and add that update back.** After it, the block is finished and \`x\` goes on to the next block.
 
-\`self.ln2(x)\` applies LayerNorm per token (across embedding dimensions) so the MLP sees a well-conditioned input (roughly zero-mean, unit-variance per token). This stabilizes training.
+## Where it sits
 
-## 2. Position-wise MLP transforms features
-
-The feed-forward sublayer is applied independently at each time step (no token mixing). Typically:
-
-\`\`\`text
-x → Linear(n_embd → 4×n_embd) → GELU → Linear(4×n_embd → n_embd) → (Dropout)
+\`\`\`python
+def forward(self, x):                    # x: (B, T, C), the residual stream
+    x = x + self.attn(self.ln1(x))       # first half: attention
+    x = x + self.mlp(self.ln2(x))        # second half: MLP  ← this line
+    return x
 \`\`\`
 
-This expand → nonlinearity → project back pattern builds rich, non-linear feature interactions per token.
+It has exactly the same shape as the [attention residual](#info:attn_residual_notes) line; only the sublayer differs.
 
-## 3. Residual (skip) connection
+\`x\` here is the **residual stream**: each token's 768-number vector. It starts as token embedding + position embedding, and every sublayer (12 blocks × 2 = 24 of them) adds its update to it. By the time this line runs in block 5, \`x\` already contains the embedding plus the updates of 4 full blocks and of block 5's attention.
 
-\`x + (...)\` adds the MLP's output back to the original stream. Benefits:
+## The three steps
 
-1. **Gradient highway:** there is an identity path, helping [prevent vanishing/exploding](#info:mlp_prevents_vanishing_exploding_notes) gradients early in training.
-2. **Small refinements:** if the MLP output is near zero, the block behaves like a near-identity map.
+1. **\`self.ln2(x)\`, normalize first (pre-LN).** [LayerNorm](#info:layernorm) rescales each token's 768 numbers to roughly mean 0 and variance 1, so the MLP always sees inputs on a similar scale. This produces a normalized **copy**; \`x\` itself is not changed.
+2. **\`self.mlp(...)\`, compute the update.** For each token separately (no mixing between tokens): [fc_in](#info:mlp_fc_in_notes) 768 → 3072, [GELU](#info:gelu), [fc_out](#info:mlp_fc_out_notes) 3072 → 768, [dropout](#info:mlp_dropout_notes).
+3. **\`x + ...\`, add it back.** The update is added number by number to the residual stream.
 
-## Shapes (so the add is valid)
+Shapes, which must match for the add:
 
 \`\`\`text
 x                 (B, T, C)
 self.ln2(x)       (B, T, C)
 self.mlp(...)     (B, T, C)
-elementwise sum   (B, T, C)
+x + ...           (B, T, C)
 \`\`\`
 
-> **Big picture:** normalize token features → compute a per-token non-linear update with the MLP → add that update back. This is the pre-norm residual MLP block that improves stability and optimization in deep Transformers.
+## Forward: a worked example
+
+One token, first 4 dimensions, continuing the example from the [MLP dropout note](#info:mlp_dropout_notes) (training, dimension 2 dropped):
+
+\`\`\`text
+x (residual stream):  [0.20,  -0.50,  1.00, 0.30]
+mlp(ln2(x)):          [0.556, -0.222, 0,    0.111]   ← the update, after dropout
+new x:                [0.756, -0.722, 1.00, 0.411]
+\`\`\`
+
+The original information in \`x\` is kept; the MLP only adds a correction on top of it.
+
+## Backward: at the "+", the gradient is copied to both sides
+
+Write the line as \`new_x = old_x + branch\`, where \`branch = mlp(ln2(old_x))\`.
+
+- If \`old_x\` increases by 0.001, \`new_x\` increases by 0.001.
+- If \`branch\` increases by 0.001, \`new_x\` also increases by 0.001.
+
+So the local derivative of "+" is **1 for both sides**, and the gradient arriving at \`new_x\` is passed to both sides unchanged. Suppose the gradient arriving from later layers is \`g = [0.3, −0.1, 0.2, 0.05]\`:
+
+\`\`\`text
+      ┌──→ straight to old_x:  [0.3, -0.1, 0.2, 0.05]   ← unchanged, × 1
+g  ───┤
+      └──→ into the branch:    [0.3, -0.1, 0.2, 0.05]   ← also unchanged; then back through
+                                                           dropout, fc_out, GELU, fc_in, ln2
+\`\`\`
+
+The copy that enters the branch passes back through the MLP and ln2 (as in the [worked backward example](#hover:gelu_backprop_notes)) and finally also arrives at \`old_x\`; call it \`g_branch\`. So:
+
+\`\`\`text
+gradient of old_x = g  (straight path)  +  g_branch  (path through the MLP)
+\`\`\`
+
+This is the "sum over paths" rule: \`old_x\` affects the loss along two paths (directly into \`new_x\`, and through ln2 and the MLP), so the two gradients are added.
+
+## Why this matters: a gradient highway
+
+GPT-2 has 12 blocks, so 24 lines of the form \`x = x + branch\`.
+
+- **With residuals:** along the straight paths of all 24 "+", the gradient from the loss reaches the embeddings **unchanged**. Each branch adds its own contribution on top, but never blocks the straight path.
+- **Without residuals** (\`x = mlp(ln2(x))\`): the gradient would have to pass through all 24 sublayers one after another, multiplied by each one's local derivative. Suppose each sublayer happened to halve it on average: after 24 sublayers it would be 0.5²⁴ ≈ 0.00000006, and the first layers would learn almost nothing. This is the **vanishing gradient** problem. (If each one doubled it instead, it would explode.)
+
+A related benefit shows up at the start of training: the weights are small, so the update \`mlp(ln2(x))\` is close to 0 and \`new_x ≈ old_x\`. Every block starts out close to "do nothing", and the deep stack behaves like a shallow one until the blocks learn useful updates. That makes deep networks much easier to start training.
+
+For the same argument in Jacobian form, and why putting LayerNorm **before** the sublayer (pre-LN, as here) keeps the straight path clean while the original Transformer's post-LN does not, see [Prevents vanishing/exploding](#info:mlp_prevents_vanishing_exploding_notes).
+
+## Summary
+
+| | Forward | Backward |
+| --- | --- | --- |
+| Straight path (\`x\`) | the original information passes through complete | the gradient passes back unchanged |
+| Branch (\`mlp(ln2(x))\`) | adds a per-token correction | adds its own gradient contribution |
+
+The residual connection is what makes it possible to stack many blocks: forward, nothing is lost; backward, the gradient reaches every layer.
 `,
   },
 

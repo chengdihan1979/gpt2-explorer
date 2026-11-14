@@ -128,9 +128,7 @@ export function buildCodeHtml({ component, selectedId }) {
   // 4) Contextual replacements for info links
   html = html.replace(/nn\.Dropout\(dropout\) # embedding dropout/g, '<span data-action="open:emb_dropout_notes" style="text-decoration: underline; cursor: pointer;">nn.Dropout(dropout) # embedding dropout</span>');
   
-  if (selectedId === "mlp_dropout") {
-    html = html.replace(/nn\.Dropout\(dropout\)/g, '<span data-action="open:mlp_dropout_notes" style="text-decoration: underline; cursor: pointer;">nn.Dropout(dropout)</span>');
-  }
+  html = html.replace(/self\.drop\s*=\s*nn\.Dropout\(dropout\)(?!\s*#\s*embedding)/g, '<span data-action="open:mlp_dropout_notes" style="text-decoration: underline; cursor: pointer;">self.drop = nn.Dropout(dropout)</span>');
 
   // 5) Add links on phrases
   html = html.replace(/Dimension\s+changes\s+during\s+forward/g, '<span data-action="open:dimension_change_notes" style="text-decoration: underline; cursor: pointer;">Dimension changes during forward</span>');
