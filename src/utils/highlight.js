@@ -130,6 +130,9 @@ export function buildCodeHtml({ component, selectedId }) {
   
   html = html.replace(/self\.drop\s*=\s*nn\.Dropout\(dropout\)(?!\s*#\s*embedding)/g, '<span data-action="open:mlp_dropout_notes" style="text-decoration: underline; cursor: pointer;">self.drop = nn.Dropout(dropout)</span>');
 
+  html = html.replace(/(<mark>)?logits = self\.lm_head\(x\)(<\/mark>)?/g, (m) => `<span data-action="open:lm_head_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
+  html = html.replace(/(<mark>)?x = self\.ln_f\(x\)(<\/mark>)?/g, (m) => `<span data-action="open:final_ln_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
+
   // 5) Add links on phrases
   html = html.replace(/Dimension\s+changes\s+during\s+forward/g, '<span data-action="open:dimension_change_notes" style="text-decoration: underline; cursor: pointer;">Dimension changes during forward</span>');
   html = html.replace(/weight\s+tying/g, '<span data-action="open:weight_tying_notes" style="text-decoration: underline; cursor: pointer;">weight tying</span>');

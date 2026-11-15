@@ -63,42 +63,49 @@ loss = F.cross_entropy((B*T, V), (B*T))
   lm_head_notes: {
     title: "lm_head",
     md: `
-**\`lm_head\`** turns each final hidden vector into a score for every token in the vocabulary.
+**\`lm_head\` gives every word in the vocabulary a score (a logit) at every position.**
 
-## What it is conceptually
+\`\`\`python
+self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)   # 768 → 50304
+logits = self.lm_head(x)                                   # x comes from ln_f
+\`\`\`
 
-A linear map that converts each final hidden vector of size $n\\_embd$ into a logits vector of the vocabulary size (\`vocab_size\`). Each logit is the score for predicting a particular token in the vocabulary.
+## The weight matrix: one row per word
+
+\`lm_head.weight\` has shape **(50304, 768)**: one row per vocabulary word, each row a 768-dim vector. Because of [weight tying](#hover:weight_tying_notes), this is the very same matrix as the token embedding table \`tok_emb.weight\`.
+
+## One logit = one dot product
+
+For each position, \`lm_head\` takes the dot product of $x$ (the output of \`ln_f\`) with every row:
+
+\`\`\`text
+logits[word i] = x · W[i]  =  Σ_j  x[j] × W[i][j]      (i = 0 … 50303, j = 0 … 767)
+\`\`\`
+
+The more a word's vector points in the same direction as $x$, the bigger the dot product and the higher its score. So in effect \`lm_head\` asks: **which word does $x$ look most like?**
 
 ## Shapes
 
-- **Hidden states:** $x \\in \\mathbb{R}^{B \\times T \\times n\\_embd}$
-- **\`lm_head.weight\`:** $\\mathbb{R}^{\\text{vocab\\_size} \\times n\\_embd}$ (the \`lm_head\` weight matrix is tied to the \`tok_emb\` weight matrix)
-- **Logits:** \`logits = lm_head(x)\` $\\in \\mathbb{R}^{B \\times T \\times \\text{vocab\\_size}}$
+\`\`\`text
+x:       (B, T, 768)
+W:       (50304, 768)
+logits:  (B, T, 50304)      ← a score for every word, at every position
+\`\`\`
 
-> The \`lm_head\` weight matrix is just the vocabulary's token embedding matrix because of [weight tying](#info:weight_tying_notes).
+**Every position** gets its own 50304 scores. The logits at position t predict token t+1.
 
-## What it does intuitively
+- **During training,** all T sets of logits go into the [cross-entropy](#hover:cross_entropy_notes) loss, each compared with its true next token. This is done for all positions of the whole batch in one batched matmul.
+- **During generation,** only the last position's logits are used to pick the next token.
 
-Each row of the weight matrix is a learned embedding vector for one vocabulary token.
+> [Why does a dot product with the word vectors predict the next token? Deeper insights](#hover:lm_head_insights_notes)
 
-The logit for token $v$ at position $t$ is the dot product between the hidden state $x$ at that position and the embedding row for token $v$.
+## Details
 
-- **During training,** the logits are compared with the ground-truth next token to compute the cross-entropy loss. This is done for all positions across the whole batch, against all vocabulary tokens, in one single batched matmul.
-- **During inference,** the logits are turned into probabilities and used to pick the next token.
-
-> [Why do the logits predict the next token during inference? Deeper insights!](#info:lm_head_insights_notes)
-
-## Why no bias (\`bias=False\`)
-
-1. **Weight tying.** GPT-2 ties the output weights to the input embedding table:
-
-   \`\`\`python
-   self.lm_head.weight = self.tok_emb.weight  # same parameters
-   \`\`\`
-
-   This saves parameters and often improves perplexity. The tied matrix matches in shape, but a separate output bias isn't needed (and is commonly omitted).
-
-2. **Little benefit, lots of params.** A bias would add \`vocab_size\` more parameters; in practice it yields negligible gains here, so many implementations drop it.
+- **Parameters:** 768 × 50304 = 38,633,472, about 38.6M, roughly 30% of GPT-2 small (about 124M). With weight tying they are stored only once.
+- **Why 50304 and not GPT-2's 50257?** This is a nanoGPT trick: the vocabulary is padded up to a multiple of 64 (50304 = 64 × 786), which makes GPU matmuls faster. The 47 extra "words" never appear in the training data, so training pushes their logits down.
+- **Why \`bias=False\`?**
+  1. *Weight tying.* The output weights are the input embedding table (\`self.lm_head.weight = self.tok_emb.weight\`). The embedding has no bias, and a separate output bias isn't needed.
+  2. *Little benefit.* A bias would add \`vocab_size\` more parameters for negligible gain, so the logits are pure dot products.
 `,
   },
 

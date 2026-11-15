@@ -3088,7 +3088,7 @@ $$
 $$
 
 - $\\mu, \\sigma^2$ are the mean and variance over the last (feature) dimension.
-- $\\gamma, \\beta \\in \\mathbb{R}^{d}$ are a learned scale and shift. [Shared by all tokens? One per block?](#info:layernorm_params_notes)
+- $\\gamma, \\beta \\in \\mathbb{R}^{d}$ are a learned scale and shift. [Shared by all tokens? One per block?](#hover:layernorm_params_notes)
 - $\\epsilon$ is a small constant for numerical safety ($10^{-5}$ by default in PyTorch).
 
 > It applies to **each token individually**, across its embedding dimensions. GPT-2 uses it in three places: \`ln1\` and \`ln2\` inside every block, and the **final layer norm** \`ln_f\` before the output projection (\`lm_head\`).
@@ -3121,7 +3121,7 @@ $$
 
 ## Why it's used in GPT-style models
 
-Each sublayer reads from the residual stream, which only ever accumulates: $x_{24} = x_0 + \\Delta_1 + \\cdots + \\Delta_{24}$ over the 24 sublayers ([why residual](#info:residual_why_notes)). Every token's vector has the same 768 dimensions, but its **magnitude** (norm) differs:
+Each sublayer reads from the residual stream, which only ever accumulates: $x_{24} = x_0 + \\Delta_1 + \\cdots + \\Delta_{24}$ over the 24 sublayers ([why residual](#hover:residual_why_notes)). Every token's vector has the same 768 dimensions, but its **magnitude** (norm) differs:
 
 - the embedding rows already differ in size (in real GPT-2, the norm of position 0's row is 9.88; position 1023's is 0.12);
 - each sublayer adds a different amount to each token;
@@ -3129,7 +3129,7 @@ Each sublayer reads from the residual stream, which only ever accumulates: $x_{2
 
 Why does that matter? Attention and the MLP apply the **same fixed weights** to every token in a layer. Without normalization, the size of what they receive would keep changing: from token to token within a layer, and from layer to layer as the stream grows. And size alone changes what they compute: a larger input can push attention's softmax into saturation and make GELU behave differently, even if its direction (its "meaning") is the same.
 
-[Why? Examples: attention, GELU, and a moving target](#info:layernorm_scale_notes)
+[Why? Examples: attention, GELU, and a moving target](#hover:layernorm_scale_notes)
 
 ### 1. Stabilizes training by controlling magnitude
 
@@ -3140,13 +3140,13 @@ After $x \\rightarrow \\hat{x} = \\frac{x - \\mu}{\\sigma}$, the softmax in atte
 - scores $[2, 1, 0]$ → softmax $\\approx [0.665, 0.245, 0.090]$: attention is spread out;
 - scores $[8, 4, 0]$ → softmax $\\approx [0.982, 0.018, 0.0003]$: almost all weight on one position, and gradients through the softmax nearly vanish.
 
-[Why? A tiny numeric example](#info:stabilize_training_notes)
+[Why? A tiny numeric example](#hover:stabilize_training_notes)
 
 ### 2. Improves gradient flow
 
 The Jacobian around normalized activations is better conditioned (roughly scaled by $\\frac{1}{\\sigma}$), which curbs exploding/vanishing gradients and reduces sensitivity to the learning-rate choice.
 
-[Why? A tiny numeric example](#info:improves_gradient_flow_notes)
+[Why? A tiny numeric example](#hover:improves_gradient_flow_notes)
 
 ### 3. Provides scale invariance
 
@@ -3195,7 +3195,7 @@ In pre-norm, LN is applied to a **copy** of the stream. In \`x = x + self.attn(s
 
 > The main reason pre-norm is widely used is that the residual gives gradients an identity path: $\\frac{\\partial y}{\\partial x} = I + \\dots$ This makes deep stacks train stably.
 
-See a [tiny numeric example](#info:post_norm_gradient_example_notes) that illustrates the issue with post-norm.
+See a [tiny numeric example](#hover:post_norm_gradient_example_notes) that illustrates the issue with post-norm.
 
 ## Recent developments: RMSNorm
 
@@ -3208,7 +3208,7 @@ Among recent open-weight LLMs, **RMSNorm** is the default more often than LayerN
 - **Qwen:** model cards list the architecture as "transformers with RoPE, SwiGLU, RMSNorm …" (e.g. Qwen2.5-1.5B). [Qwen2.5-1.5B ↗](https://huggingface.co/Qwen/Qwen2.5-1.5B)
 - **Gemma:** Hugging Face's Gemma docs describe the model as using GeGLU activations and RMSNorm. [Gemma docs ↗](https://huggingface.co/docs/transformers/en/model_doc/gemma)
 
-See a [tiny numeric example](#info:rmsnorm_gradient_example_notes) of how RMSNorm works.
+See a [tiny numeric example](#hover:rmsnorm_gradient_example_notes) of how RMSNorm works.
 
 ## References
 
@@ -3400,7 +3400,7 @@ Softmax over $[1.732, -1.732]$ $\\Rightarrow \\approx [0.9696, 0.0304]$: **not s
   },
 
   stabilize_training_no_layernorm_backprop_notes: {
-    title: "Why satuated softmax leads to vanishing gradients",
+    title: "Why saturated softmax leads to vanishing gradients",
     md: `
 **Why a saturated softmax (the no-LayerNorm case) starves earlier layers of gradient, step by step.**
 
@@ -3535,7 +3535,7 @@ This is non-zero, so the weights still get updated.
 
 5. **Calibration context**
 
-   Guo et al., On Calibration of Modern Neural Networks (ICML 2017). Why model confidence is not calibrated and how label smoothing helps.
+   Guo et al., On Calibration of Modern Neural Networks (ICML 2017). Shows that modern networks tend to be overconfident (their confidence is higher than their accuracy) and proposes temperature scaling as a fix. Useful background for why reducing overconfidence, as label smoothing does, matters.
 
    [On Calibration of Modern Neural Networks ↗](https://arxiv.org/pdf/1706.04599)
 `,
@@ -3561,7 +3561,7 @@ $$
 \\log p_i = z_i - \\log \\sum_{k=1}^C e^{z_k}
 $$
 
-Plug it into the loss:
+(take the log of both sides of the softmax definition). Plug it into the loss:
 
 $$
 L = -\\sum_{i=1}^C y_i \\log p_i = -\\sum_{i=1}^C y_i \\left(z_i - \\log \\sum_{k=1}^C e^{z_k}\\right) = -\\sum_{i=1}^C y_i z_i + \\sum_{i=1}^C y_i \\log \\sum_{k=1}^C e^{z_k}
@@ -3573,7 +3573,7 @@ $$
 L = -\\sum_{i=1}^C y_i z_i + \\log \\sum_{k=1}^C e^{z_k}
 $$
 
-Differentiate w.r.t. $z_j$:
+Differentiate w.r.t. $z_j$ (in the first sum only the $i = j$ term contains $z_j$; for the second term use the rule that the derivative of $\\log u$ is $u'/u$):
 
 $$
 \\frac{\\partial L}{\\partial z_j} = -y_j + \\frac{e^{z_j}}{\\sum_{k=1}^C e^{z_k}} = p_j - y_j
@@ -3775,7 +3775,7 @@ $$
 ### Step 2: normalize by the RMS
 
 $$
-x = \\frac{x}{\\mathrm{RMS}(x)} = \\begin{bmatrix}2/1.8708, -1/1.8708, 3/1.8708, 0/1.8708\\end{bmatrix} = \\begin{bmatrix}1.0690, -0.5345, 1.6036, 0.0000\\end{bmatrix}
+\\hat{x} = \\frac{x}{\\mathrm{RMS}(x)} = \\begin{bmatrix}2/1.8708, -1/1.8708, 3/1.8708, 0/1.8708\\end{bmatrix} = \\begin{bmatrix}1.0690, -0.5345, 1.6036, 0.0000\\end{bmatrix}
 $$
 
 ### Step 3: apply per-feature scaling
@@ -3785,6 +3785,8 @@ y = \\begin{bmatrix}1.0690 \\cdot 1.0, -0.5345 \\cdot 0.5, 1.6036 \\cdot 2.0, 0.
 $$
 
 This is the RMSNorm output.
+
+Compared with LayerNorm, RMSNorm skips two things: it does not subtract the mean (the $x$ above is divided directly, with no centering), and it has no shift $\\beta$.
 
 ## Why do we need the scale factor $\\gamma$?
 
@@ -4982,6 +4984,75 @@ $$
   &= (0.2966312, -0.2963911)
   \\end{aligned}
   $$
+`,
+  },
+  final_ln_notes: {
+    title: "Final LayerNorm (ln_f)",
+    md: `
+**After the 12 blocks and before \`lm_head\`, GPT-2 normalizes the residual stream once more:**
+
+\`\`\`python
+for blk in self.blocks:
+    x = blk(x)
+x = self.ln_f(x)          # ← this line
+logits = self.lm_head(x)
+\`\`\`
+
+### Why it is needed
+
+GPT-2 is **pre-LN**. \`ln1\` and \`ln2\` normalize only a **copy** of the stream that goes into attention or the MLP. The residual stream $x$ itself is never normalized: it just keeps receiving 24 updates (12 attention + 12 MLP). So by the end, the size of $x$ differs from token to token, and is usually large.
+
+\`lm_head\` takes the dot product of $x$ with each word's vector to get the logits (in GPT-2 those vectors are the rows of the token embedding, see [weight tying](#info:weight_tying_notes)). A dot product grows in proportion to the size of $x$. So if $x$ went in directly, **the bigger $x$ is, the sharper the softmax**.
+
+### Worked example
+
+To keep it small: 4 dimensions instead of 768, and a vocabulary of 3 words.
+
+\`\`\`text
+word vectors E:  word 0 = [ 0.5, 0,   0.5, 0  ]
+                 word 1 = [ 0,   0.5, 0,   0.5]
+                 word 2 = [-0.5, 0,   0.5, 0  ]
+\`\`\`
+
+Two tokens whose $x$ points in the **same direction**, but token B is 8× larger (say, it collected bigger updates in the stream).
+
+**Without \`ln_f\`:**
+
+\`\`\`text
+           x                   logits = x · E        softmax
+token A:   [1, -0.5, 1.5, 0]   [1.25, -0.25, 0.25]   [0.63,   0.14, 0.23  ]
+token B:   [8, -4,   12,  0]   [10,   -2,    2   ]   [0.9997, 0.00, 0.0003]
+\`\`\`
+
+Each logit is a dot product, e.g. for token A and word 0: 1×0.5 + (−0.5)×0 + 1.5×0.5 + 0×0 = 1.25. Token B's logits are exactly 8× token A's.
+
+Same direction, same "meaning", yet B is almost 100% sure of word 0. Its confidence comes only from $x$ happening to be large.
+
+**With \`ln_f\`** (γ = 1, β = 0, ε ignored), step by step for token A:
+
+1. Mean: (1 − 0.5 + 1.5 + 0) / 4 = 0.5
+2. Subtract the mean: [0.5, −1, 1, −0.5]
+3. Variance: (0.25 + 1 + 1 + 0.25) / 4 = 0.625, so std = √0.625 ≈ 0.791
+4. Divide by std: [0.632, −1.265, 1.265, −0.632]
+
+For token B, the mean is 4 and the std is 8 × 0.791. Both scale by 8, so the 8 cancels and B gives **the same vector**:
+
+\`\`\`text
+ln_f(A) = ln_f(B) = [0.632, -1.265, 1.265, -0.632]
+logits  = [0.949, -0.949, 0.316]   →   softmax = [0.59, 0.09, 0.32]
+\`\`\`
+
+Now the prediction depends only on the **direction** of $x$, not on how much the stream happened to accumulate. (Numbers checked in PyTorch.)
+
+### What if the model wants to be more confident?
+
+\`ln_f\` has its own learnable γ and β (768 each), the last of GPT-2's 25 LayerNorms (2 per block × 12, plus \`ln_f\`). During training γ learns a suitable overall scale, which sets how sharp the logits are. The difference: this scale is **learned and shared by all tokens**, instead of being set by how large each token's stream happened to get.
+
+### Why the original Transformer has no \`ln_f\`
+
+The original Transformer is post-LN: after every sublayer, $x$ itself is replaced by $\\text{LN}(x + \\text{sublayer}(x))$, so the stream leaving the last layer is already normalized. GPT-2 moved to pre-LN, so it has to add this one normalization at the end. The GPT-2 paper: "an additional layer normalization was added after the final self-attention block". See [LayerNorm](#info:layernorm) for pre-LN vs post-LN.
+
+> 🆕 Modern models such as LLaMA keep this final norm but use RMSNorm instead of LayerNorm (no mean subtraction, no β).
 `,
   },
 };

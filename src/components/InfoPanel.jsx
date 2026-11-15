@@ -121,7 +121,9 @@ export default function InfoPanel() {
       if (e.target.closest?.('a[href^="#hover:"]')) return;
       const el = e.target.closest?.("[data-popup-level]");
       const level = el ? Number(el.dataset.popupLevel) : -1;
-      setPopups((ps) => ps.slice(0, level + 1));
+      // Return the same array when nothing closes: a re-render here would replace the link
+      // being clicked (components are rebuilt each render), and its click would be lost.
+      setPopups((ps) => (ps.length > level + 1 ? ps.slice(0, level + 1) : ps));
     };
     document.addEventListener("pointerdown", onDown);
     return () => document.removeEventListener("pointerdown", onDown);
