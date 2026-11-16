@@ -4278,15 +4278,15 @@ This note follows the history: each optimizer fixes a problem of the one before.
 
 ## Two problems with plain SGD
 
-The simplest rule, [SGD](#info:sgd_notes), moves every parameter against its gradient by a fixed learning rate: \`w = w − lr × grad\`. It has two problems, and the optimizers below were invented to fix them:
+The simplest rule, [SGD](#info:sgd_notes), moves every parameter against its gradient $g$ by a fixed learning rate $\\eta$ (\`lr\` in PyTorch): $w \\leftarrow w - \\eta \\cdot g$. It has two problems, and the optimizers below were invented to fix them:
 
 1. **Gradients are noisy.** Each step estimates the gradient from one small batch, so part of every step is noise and the path zigzags. Fix: **momentum**, an average of recent gradients, so the noise cancels and the consistent direction remains.
-2. **One learning rate for all parameters.** Parameters can have gradients of very different sizes. With \`lr = 0.01\`, a parameter whose gradient is about 100 moves 1 per step (it may oscillate), while one whose gradient is about 0.01 moves 0.0001 (it barely learns). Fix: a **per-parameter step size** that shrinks for parameters with consistently large gradients and grows for those with small ones.
+2. **One learning rate for all parameters.** Parameters can have gradients of very different sizes. With $\\eta = 0.01$, a parameter whose gradient is about 100 moves 1 per step (it may oscillate), while one whose gradient is about 0.01 moves 0.0001 (it barely learns). Fix: a **per-parameter step size** that shrinks for parameters with consistently large gradients and grows for those with small ones.
 
 \`\`\`text
 SGD
  ├─ problem 1 (noise)            → Momentum
- └─ problem 2 (one lr for all)   → Adagrad → RMSProp
+ └─ problem 2 (one η for all)    → Adagrad → RMSProp
                                                ↓
                      Momentum + RMSProp  =  Adam
                                                ↓
@@ -4461,6 +4461,22 @@ $$
 - $b = 0.45 - 0.1 \\cdot (-0.75) = 0.525$
 
 > You can see the loss decreasing at each step (4.5 → 1.125 → 0.28125). That's the optimizer using backprop's gradients to move $w, b$ toward better values.
+
+## Two problems with plain SGD
+
+SGD works, but it has two problems, and the optimizers that followed were invented to fix them:
+
+1. **Gradients are noisy.** In real training each step estimates the gradient from one small batch (in this site's code, 4 × 32 = 128 tokens), so part of every step is noise, and the path zigzags instead of heading straight downhill. Fix: [momentum](#info:sgd_momentum_notes), which averages recent gradients so the noise cancels.
+2. **One learning rate for all parameters.** Parameters can have gradients of very different sizes. Take two parameters whose gradients are about 100 and about 0.01, with $\\eta = 0.01$:
+
+   \`\`\`text
+   parameter A:  moves 0.01 × 100  = 1       per step   ← may be too large and oscillate
+   parameter B:  moves 0.01 × 0.01 = 0.0001  per step   ← too small, barely learns
+   \`\`\`
+
+   Raise $\\eta$ and A diverges; lower it and B stops learning. No single learning rate suits both. Fix: give each parameter its own step size, as [Adagrad](#info:adagrad_notes) does.
+
+> The example above has a single data point, so its gradient has no noise, and $w$ and $b$ have gradients of similar size. That is why plain SGD does so well there.
 `,
   },
 
@@ -4656,53 +4672,108 @@ With a constant gradient of 1, this $v$ settles at $\\frac{1}{1 - \\beta} = 10$ 
   adagrad_notes: {
     title: "Adagrad",
     md: `
-**Adagrad (Adaptive gradient)** is an optimizer that gives each parameter its own learning rate and automatically adjusts it based on that parameter's past gradients.
+**Adagrad (Adaptive gradient)** gives each parameter its own learning rate, set automatically from that parameter's past gradients.
 
-> Parameters with large/frequent past gradients get smaller future steps; parameters with small/rare gradients get larger future steps.
+It fixes the second of the [two problems of SGD](#info:sgd_notes) (see the end of the SGD note): one learning rate for all parameters.
 
 ## Update rule
 
-Adagrad keeps a running **sum of squared gradients** for each parameter:
+Adagrad keeps a running **sum of squared gradients** for each parameter $i$:
 
 $$
-s_i \\leftarrow s_i + g_i \\odot g_i
+s_i \\leftarrow s_i + g_i^2
 $$
 
-where $g_i$ is the gradient of the $i$-th parameter and $s_i$ is the running sum of squared gradients for the $i$-th parameter.
-
-Adagrad then divides the learning rate by the square root of the sum of squared gradients plus a small constant $\\epsilon$ to get the learning rate for the $i$-th parameter:
+where $g_i$ is the gradient of parameter $i$ (a single number) and $s_i$ starts at 0. It then updates the parameter with the learning rate divided by $\\sqrt{s_i}$:
 
 $$
 \\theta_i \\leftarrow \\theta_i - \\frac{\\eta}{\\sqrt{s_i} + \\epsilon} \\cdot g_i
 $$
 
-This way, parameters with large/frequent past gradients get smaller future steps, and parameters with small/rare gradients get larger future steps.
+$\\epsilon$ is a tiny constant (e.g. $10^{-8}$) that only prevents division by zero.
+
+Two quantities are worth keeping apart:
+
+- **Effective learning rate** $\\eta_{\\text{eff},\\,i} = \\frac{\\eta}{\\sqrt{s_i} + \\epsilon}$: parameter $i$'s own learning rate. It depends on how much squared gradient the parameter has **accumulated so far**.
+- **Actual step** $\\eta_{\\text{eff},\\,i} \\cdot g_i$: how far the parameter really moves. It is the effective learning rate times the current gradient.
+
+### Vector form and the $\\odot$ symbol
+
+Written for all parameters at once, as vectors, the accumulator is $s \\leftarrow s + g \\odot g$. The symbol $\\odot$ means **element-wise multiplication**: multiply the numbers in matching positions; the result is a vector of the same shape. For example, $(-3, 2) \\odot (-3, 2) = (9, 4)$. (Unlike the dot product $(-3, 2) \\cdot (-3, 2) = 9 + 4 = 13$, nothing is added up.) So $g \\odot g$ squares each parameter's gradient separately: each parameter accumulates only its own squared gradients, which is why each one gets its own learning rate. In PyTorch this is \`g * g\`.
+
+## Effect 1: the step size does not depend on the gradient's scale
+
+Take two parameters: A's gradient is always 100, B's is always 0.01, and $\\eta = 0.01$.
+
+**SGD** moves each by $\\eta \\cdot g$:
+
+\`\`\`text
+A: 0.01 × 100  = 1      per step
+B: 0.01 × 0.01 = 0.0001 per step      ← 10,000× apart
+\`\`\`
+
+**Adagrad, step 1:**
+
+\`\`\`text
+A: s = 100²  = 10000,   √s = 100   →  moves 0.01 × 100  / 100  = 0.01
+B: s = 0.01² = 0.0001,  √s = 0.01  →  moves 0.01 × 0.01 / 0.01 = 0.01
+\`\`\`
+
+Both take the **same** step, 0.01. A's effective learning rate is much smaller than B's, but multiplied by its much larger gradient, the actual step comes out the same.
+
+The reason: the numerator is $g$, and the denominator $\\sqrt{s}$ is proportional to the size of $g$. Scale the gradient by 10,000 and both scale together, so their ratio does not change. Each step moves about $\\eta$, in the direction given by the gradient's sign; how large the gradient is no longer matters.
+
+At step $t$, with a constant gradient $g$:
+
+$$
+s = t\\, g^2, \\qquad \\sqrt{s} = \\sqrt{t}\\, |g|, \\qquad \\text{step} = \\frac{\\eta\\, g}{\\sqrt{t}\\, |g|} = \\pm\\frac{\\eta}{\\sqrt{t}}
+$$
+
+The same for A and B.
+
+## Effect 2: a parameter that rarely gets a gradient takes larger steps
+
+What matters is not only how **large** a parameter's gradients are, but how **often** it gets one. $s$ records the total accumulated so far, so a parameter that rarely gets a gradient keeps a small $s$.
+
+Example: a common word's embedding row gets a gradient of 1 every step; a rare word's row gets a gradient of 1 only once every 100 steps. At step 10,000:
+
+\`\`\`text
+common word:  10,000 gradients so far,  s = 10,000,  √s = 100
+              step now:  η × 1 / 100 = 0.01 η
+
+rare word:    100 gradients so far,     s = 100,     √s = 10
+              step when it appears:  η × 1 / 10 = 0.1 η
+\`\`\`
+
+The gradients are the same size (1), yet when the rare word appears it moves **10 times** as far as the common word. A rare word gets few chances to learn, so each chance counts for more; a common word, updated almost every step, takes small steps instead of being pushed around again and again. This is why Adagrad became popular for word vectors.
+
+The same situation exists in GPT-2: the [token embedding](#info:embedding_tok) row of a rare token receives an input-side gradient only when that token is in the batch.
 
 ## Why the square root?
 
-Because $s_i$ is a cumulative sum, it grows about linearly over time for stationary gradients ($s_i \\propto t$). Using $\\sqrt{s_i}$ in the denominator makes the effective learning rate decay like
+**It is what makes Effect 1 work.** The step is $\\frac{g}{\\sqrt{s}}$ times $\\eta$, and $\\sqrt{s}$ grows in proportion to the size of $g$, so the two cancel. Dividing by $s$ instead would give $\\frac{g}{t\\, g^2} = \\frac{1}{t\\, g}$: larger gradients would get *smaller* steps, the opposite of what we want.
+
+**It gives a gentle decay.** When the gradients keep a similar size, $s_i$ grows about linearly with time, $s_i \\approx t\\, g_i^2$, so
 
 $$
-\\eta_{\\text{effective},\\,i} = \\frac{\\eta}{\\sqrt{s_i}} \\approx \\frac{\\eta}{\\sqrt{t}}.
+\\eta_{\\text{eff},\\,i} \\approx \\frac{\\eta}{|g_i| \\sqrt{t}}
 $$
 
-The $\\frac{1}{\\sqrt{t}}$ decay is gentle: it shrinks steps over time steadily, but not so fast that learning dies early. If we divided by $s_i$, we'd get $\\frac{1}{t}$ decay, which becomes tiny too quickly and can stall progress.
+and the actual step shrinks like $\\frac{\\eta}{\\sqrt{t}}$. This decay is steady but not so fast that learning dies early. Dividing by $s_i$ would instead give a $\\frac{1}{t}$ decay, which becomes tiny too quickly.
 
-> This is also tied to classic online convex optimization results, where $\\frac{1}{\\sqrt{t}}$ yields good regret/convergence bounds.
+> The $\\frac{1}{\\sqrt{t}}$ rate also matches classic results in online convex optimization, where it gives good regret/convergence bounds.
 
-## Tiny numeric example
+## Worked example
 
 ### Setup
 
 - **Parameters:** $\\theta = (\\theta_1, \\theta_2)$
-- **Loss:** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$
+- **Loss:** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$, smallest at $\\theta = (3, -2)$
 - **Gradients:** $g = (g_1, g_2) = (\\theta_1 - 3,\\; \\theta_2 + 2)$
-- **Adagrad accumulator:** $s \\leftarrow s + g \\odot g$, starting from $s_0 = (0, 0)$
-- **Update rule:** $\\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{s} + \\epsilon}\\, g$
-- **Hyperparameters:** $\\eta = 1.0$, $\\epsilon = 10^{-8}$ (tiny, so numerically negligible)
+- **Accumulator:** $s \\leftarrow s + g \\odot g$, starting from $s_0 = (0, 0)$
+- **Update:** $\\theta \\leftarrow \\theta - \\Delta$, with $\\Delta = \\eta_{\\text{eff}} \\cdot g$ and $\\eta_{\\text{eff}} = \\frac{\\eta}{\\sqrt{s} + \\epsilon}$
+- **Hyperparameters:** $\\eta = 1.0$, $\\epsilon = 10^{-8}$ (negligible here)
 - **Init:** $\\theta_0 = (0, 0)$
-
-Below we define $\\eta_{\\text{eff}} = \\frac{\\eta}{\\sqrt{s_t} + \\epsilon}$ as the effective learning rate at time $t$.
 
 ### Step 1
 
@@ -4710,10 +4781,10 @@ Below we define $\\eta_{\\text{eff}} = \\frac{\\eta}{\\sqrt{s_t} + \\epsilon}$ a
 - $g_1 = (-3, 2)$
 - $s_1 = (0, 0) + (-3, 2) \\odot (-3, 2) = (9, 4)$
 - $\\sqrt{s_1} = (3, 2) \\Rightarrow \\eta_{\\text{eff}} = (1/3,\\; 1/2)$
-- Update $\\triangledown = \\eta_{\\text{eff}} \\cdot g_1 = (1/3, 1/2) \\cdot (-3, 2) = (-1, 1)$
-- $\\theta_1 = \\theta_0 - \\triangledown = (0, 0) - (-1, 1) = (1, -1)$
+- $\\Delta = \\eta_{\\text{eff}} \\cdot g_1 = (1/3, 1/2) \\cdot (-3, 2) = (-1, 1)$
+- $\\theta_1 = \\theta_0 - \\Delta = (0, 0) - (-1, 1) = (1, -1)$
 
-Coordinate 1 and coordinate 2 now have different effective learning rates: $1/3$ vs $1/2$.
+The two coordinates have different effective learning rates, $1/3$ and $1/2$, yet the gradients were $-3$ and $2$ and **both coordinates moved exactly 1** $= \\eta$. This is Effect 1: on the first step $s = g^2$, so every coordinate moves $\\eta \\cdot \\frac{g}{|g|} = \\pm\\eta$.
 
 ### Step 2
 
@@ -4721,10 +4792,10 @@ Coordinate 1 and coordinate 2 now have different effective learning rates: $1/3$
 - $g_2 = (1 - 3,\\; -1 + 2) = (-2, 1)$
 - $s_2 = (9, 4) + (-2, 1) \\odot (-2, 1) = (13, 5)$
 - $\\sqrt{s_2} = (3.606, 2.236) \\Rightarrow \\eta_{\\text{eff}} = (0.277, 0.447)$
-- Update $\\triangledown = \\eta_{\\text{eff}} \\cdot g_2 \\approx (0.277, 0.447) \\cdot (-2, 1) = (-0.554, 0.447)$
-- $\\theta_2 = \\theta_1 - \\triangledown = (1, -1) - (-0.554, 0.447) = (1.554, -1.447)$
+- $\\Delta = \\eta_{\\text{eff}} \\cdot g_2 \\approx (0.277, 0.447) \\cdot (-2, 1) = (-0.554, 0.447)$
+- $\\theta_2 = \\theta_1 - \\Delta = (1, -1) - (-0.554, 0.447) = (1.554, -1.447)$
 
-Coordinate 1's step shrank from $1/3$ to $0.277$; coordinate 2's step shrank from $1/2$ to $0.447$.
+Both effective learning rates shrank: $1/3 \\to 0.277$ and $1/2 \\to 0.447$.
 
 ### Step 3
 
@@ -4732,16 +4803,42 @@ Coordinate 1's step shrank from $1/3$ to $0.277$; coordinate 2's step shrank fro
 - $g_3 = (1.554 - 3,\\; -1.447 + 2) = (-1.446, 0.553)$
 - $s_3 = (13, 5) + (-1.446, 0.553) \\odot (-1.446, 0.553) = (15.091, 5.306)$
 - $\\sqrt{s_3} = (3.885, 2.306) \\Rightarrow \\eta_{\\text{eff}} = (0.257, 0.434)$
-- Update $\\triangledown = \\eta_{\\text{eff}} \\cdot g_3 \\approx (0.257, 0.434) \\cdot (-1.446, 0.553) = (-0.372, 0.24)$
-- $\\theta_3 = \\theta_2 - \\triangledown = (1.554, -1.447) - (-0.372, 0.24) = (1.926, -1.687)$
+- $\\Delta = \\eta_{\\text{eff}} \\cdot g_3 \\approx (0.257, 0.434) \\cdot (-1.446, 0.553) = (-0.372, 0.24)$
+- $\\theta_3 = \\theta_2 - \\Delta = (1.554, -1.447) - (-0.372, 0.24) = (1.926, -1.687)$
 
-Coordinate 1's step shrank from $0.277$ to $0.257$; coordinate 2's step shrank from $0.447$ to $0.434$.
+They shrank again: $0.277 \\to 0.257$ and $0.447 \\to 0.434$.
 
-## Takeaways
+### What the example shows
 
-This example shows that each coordinate $i$ gets its own learning rate $\\eta_{\\text{eff},\\,i}$, which depends on the past gradients of the $i$-th coordinate. These learning rates shrink over time as $s_i$ accumulates past squared gradients.
+- Each coordinate has its own effective learning rate, and it only shrinks as $s$ accumulates.
+- $\\theta_1$ has the larger gradients, so it gets the **smaller** effective learning rate ($0.257$ vs $0.434$ by step 3). Its actual steps are not smaller, though: equal in step 1 (both 1), and after that even slightly larger ($0.554$ vs $0.447$, $0.372$ vs $0.24$), because its larger gradient makes up for the smaller learning rate. (Its gradients stay larger because it started farther from its target: 3 away vs 2.) Adagrad evens the coordinates out instead of letting the larger gradient dominate.
 
-> Coordinates with larger/frequent gradients (here $\\theta_1$) get faster shrinkage, so they get smaller steps, while coordinates with small/rare gradients (here $\\theta_2$) get slower shrinkage, so they get larger steps.
+## The problem: the steps only shrink
+
+$s$ is a running **sum**; it only grows, never shrinks. So the effective learning rate $\\frac{\\eta}{\\sqrt{s}}$ only gets smaller. With a gradient of constant size:
+
+\`\`\`text
+step      1:  moves η / 1
+step    100:  moves η / 10
+step 10,000:  moves η / 100
+\`\`\`
+
+Training a language model takes hundreds of thousands of steps; by then the steps are so small that learning stalls. And if a parameter's gradients were large early on and become small later, $s$ does not go down: the past keeps holding its steps down.
+
+\`\`\`text
+first 100 steps, gradient 10:   s = 100 × 10² = 10,000,  √s = 100
+step 101, gradient 1:           moves η × 1 / 100 = 0.01 η    ← held down by the past
+\`\`\`
+
+## Summary
+
+| Case | Actual step |
+|---|---|
+| Gradients always large vs always small | About the same size: Adagrad evens them out (Effect 1) |
+| Gradients frequent vs rare | Larger for the rare one, when it gets a gradient (Effect 2) |
+| Large gradients in the past, small now | Small now: held down by the past (the problem) |
+
+[RMSProp](#info:rmsprop_notes) fixes the problem: instead of summing the whole history, it averages only the recent past.
 `,
   },
 
@@ -5254,7 +5351,7 @@ loss.backward()     # compute gradients, store them in p.grad; weights unchanged
 optimizer.step()    # read p.grad, update the weights
 \`\`\`
 
-Check with one parameter: $w = 2$, $\\text{loss} = (3w)^2$, so the gradient is $18w = 36$. The optimizer is plain SGD with \`lr = 0.01\`:
+Check with one parameter: $w = 2$, $\\text{loss} = (3w)^2$, so the gradient is $18w = 36$. The optimizer is plain SGD with learning rate $\\eta = 0.01$:
 
 \`\`\`text
 before backward:  w = 2.0    w.grad = None
@@ -5270,7 +5367,7 @@ If \`backward()\` updated the parameters right away, none of these would be poss
 
 1. **Process the gradients before updating.** Between \`backward()\` and \`step()\` the code calls [\`clip_grad_norm_\`](#hover:clip_grad_norm_notes): it measures how large all the gradients are together and scales them down if they are too large. That needs every gradient to be computed first.
 2. **Gradient accumulation.** Several micro-batches each call \`backward()\`, their gradients add up in \`.grad\`, and \`step()\` runs once. See [zero_grad](#hover:zero_grad_notes).
-3. **Different update rules.** SGD does \`w = w − lr × grad\`. AdamW, used for GPT-2, also uses running averages of past gradients and adapts the step size per parameter. \`backward()\` only provides the gradient; the optimizer you choose decides how to use it.
+3. **Different update rules.** SGD does $w \\leftarrow w - \\eta \\cdot g$. AdamW, used for GPT-2, also uses running averages of past gradients and adapts the step size per parameter. \`backward()\` only provides the gradient; the optimizer you choose decides how to use it.
 
 So the work in each training step is split like this:
 
