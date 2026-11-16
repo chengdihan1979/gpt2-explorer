@@ -137,6 +137,8 @@ export function buildCodeHtml({ component, selectedId }) {
 
   html = html.replace(/loss\.backward\(\)/g, (m) => `<span data-action="open:backward_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
 
+  html = html.replace(/torch\.nn\.utils\.clip_grad_norm_\(model\.parameters\(\), 1\.0\)/g, (m) => `<span data-action="open:clip_grad_norm_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
+
   // 5) Add links on phrases
   html = html.replace(/Dimension\s+changes\s+during\s+forward/g, '<span data-action="open:dimension_change_notes" style="text-decoration: underline; cursor: pointer;">Dimension changes during forward</span>');
   html = html.replace(/weight\s+tying/g, '<span data-action="open:weight_tying_notes" style="text-decoration: underline; cursor: pointer;">weight tying</span>');

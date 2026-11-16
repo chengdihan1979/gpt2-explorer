@@ -5155,7 +5155,7 @@ So \`.grad\` has to be stored: it is how \`backward()\` hands its result to \`st
 
 If \`backward()\` updated the parameters right away, none of these would be possible:
 
-1. **Process the gradients before updating.** Between \`backward()\` and \`step()\` the code calls \`clip_grad_norm_\`: it measures how large all the gradients are together and scales them down if they are too large. That needs every gradient to be computed first.
+1. **Process the gradients before updating.** Between \`backward()\` and \`step()\` the code calls [\`clip_grad_norm_\`](#hover:clip_grad_norm_notes): it measures how large all the gradients are together and scales them down if they are too large. That needs every gradient to be computed first.
 2. **Gradient accumulation.** Several micro-batches each call \`backward()\`, their gradients add up in \`.grad\`, and \`step()\` runs once. See [zero_grad](#hover:zero_grad_notes).
 3. **Different update rules.** SGD does \`w = w − lr × grad\`. AdamW, used for GPT-2, also uses running averages of past gradients and adapts the step size per parameter. \`backward()\` only provides the gradient; the optimizer you choose decides how to use it.
 
@@ -5256,6 +5256,83 @@ The starting gradient $\\frac{(p - y)}{B \\times T}$ is derived in [Cross Entrop
 Layers **without parameters**, such as GELU, softmax and dropout, only do thing 2: they transform the gradient and pass it on.
 
 > The [weight tying](#hover:weight_tying_notes) example already used both things. Its "output side" gradient is \`lm_head\`'s thing 1 (parameter gradient); its "input side" gradient is \`lm_head\`'s thing 2: the $\\frac{\\partial L}{\\partial x}$ that flows back to the embedding row.
+`,
+  },
+  clip_grad_norm_notes: {
+    title: "clip_grad_norm_",
+    md: `
+**Gradient clipping: when the gradients are too large, scale them all down together.**
+
+\`\`\`python
+loss.backward()
+torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+optimizer.step()
+\`\`\`
+
+This line sits between \`backward()\` and \`step()\`. The gradients have been computed but not yet used to update the parameters, so this is the moment to check whether they are too large. (Why the two steps are separate: see [backward](#hover:backward_notes).)
+
+## What it does
+
+1. Treat the gradients of **all** parameters as one long vector (about 124M numbers for GPT-2) and compute its length, the norm: square every number, add them all up, take the square root.
+
+   $$
+   \\text{norm} = \\sqrt{\\sum_{\\text{all gradient entries } g} g^2}
+   $$
+
+2. If the norm is at most \`max_norm\` (here 1.0), do nothing.
+3. If the norm is larger, multiply **every** gradient by the same factor $\\frac{\\text{max\\_norm}}{\\text{norm}}$, so the total length becomes exactly \`max_norm\`.
+
+## Worked example
+
+Suppose the model had only two parameters, \`a\` and \`b\`, with 2 numbers each:
+
+\`\`\`text
+a.grad = [3, 0]
+b.grad = [0, 4]
+
+step 1:  total norm = √(3² + 0² + 0² + 4²) = √25 = 5
+step 3:  5 > 1.0, so the scale factor = 1.0 / 5 = 0.2
+
+a.grad = [3, 0] × 0.2 = [0.6, 0]
+b.grad = [0, 4] × 0.2 = [0, 0.8]
+
+total norm after clipping = √(0.6² + 0.8²) = 1.0
+\`\`\`
+
+If the gradients are already small, nothing changes:
+
+\`\`\`text
+a.grad = [0.3, 0],  b.grad = [0, 0.4]
+total norm = 0.5 ≤ 1.0   →  unchanged
+\`\`\`
+
+## Two key points
+
+**1. It changes the length, not the direction.** Every gradient is multiplied by the same factor, so the ratios between parameters stay the same (\`a\` and \`b\` are still 3 : 4). The update points the same way as before; the step is just shorter.
+
+**2. The norm is global, not per parameter.** If each parameter were clipped on its own, the ratio between \`a\` and \`b\` could change, and so would the direction of the update. Clipping by the global norm keeps the direction.
+
+## Why it is needed
+
+Most steps produce gradients of roughly similar size. Occasionally a "bad batch", such as an unusual stretch of data, produces a very large gradient. Without clipping, that one step would push the parameters far away and the loss would jump (a **loss spike**); in the worst case training never recovers.
+
+Clipping puts a cap on how far any single step can move: a bad batch still affects that step, but only by a limited amount.
+
+## The return value
+
+\`clip_grad_norm_\` returns the total norm **before** clipping (5.0 in the example). Many training scripts print it:
+
+\`\`\`python
+norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+print(f"step {step} loss {loss.item():.4f} norm {norm:.4f}")
+\`\`\`
+
+This number is worth watching: a sudden jump in the norm is an early sign that training is going wrong.
+
+## Details
+
+- The trailing \`_\` in the name is a PyTorch convention for **in-place** operations: it modifies \`.grad\` directly instead of returning new gradients.
+- The threshold 1.0 is the value used in the GPT-3 paper ("we clip the global norm of the gradient at 1.0"); most LLM training runs since then use 1.0 as well.
 `,
   },
 };

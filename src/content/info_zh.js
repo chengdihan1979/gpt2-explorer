@@ -7461,7 +7461,7 @@ step 之后:      w = 1.64   w.grad = 36      ← w 才变了：2 − 0.01 × 36
 
 如果 \`backward()\` 算完梯度就顺手更新参数，下面这些事情都做不了：
 
-1. **先处理梯度，再更新参数。** 代码里 \`backward()\` 和 \`step()\` 之间有一行 \`clip_grad_norm_\`：它先看所有梯度合起来有多大，太大就整体缩小。这一步要等全部梯度都算完才能做。
+1. **先处理梯度，再更新参数。** 代码里 \`backward()\` 和 \`step()\` 之间有一行 [\`clip_grad_norm_\`](#hover:clip_grad_norm_notes)：它先看所有梯度合起来有多大，太大就整体缩小。这一步要等全部梯度都算完才能做。
 2. **Gradient accumulation。** 几个小 batch 各 \`backward()\` 一次，梯度先在 \`.grad\` 里累加，最后只 \`step()\` 一次。见 [zero_grad](#hover:zero_grad_notes)。
 3. **更新规则不止一种。** SGD 是 \`w = w − lr × grad\`；GPT-2 用的 AdamW 还会用到过去很多步梯度的平均值，再按每个参数的情况调整步长。\`backward()\` 只负责提供梯度，怎么用由你选的 optimizer 决定。
 
@@ -7560,6 +7560,83 @@ tok_emb, pos_emb:  只做第 1 件事（它们是第一层，前面没有层了�
 GELU、softmax、dropout 这类**没有参数**的层，只做第 2 件事：把梯度变换一下，继续往前传。
 
 > 前面 [weight tying](#hover:weight_tying_notes) 的例子其实已经用到了这两件事。它的"输出端梯度"是 \`lm_head\` 的第 1 件事（参数梯度）；"输入端梯度"是 \`lm_head\` 的第 2 件事：算出 $\\frac{\\partial L}{\\partial x}$，传回 embedding 的那一行。
+`,
+  },
+  clip_grad_norm_notes: {
+    title: "clip_grad_norm_",
+    md: `
+**梯度裁剪：梯度太大时，把所有梯度一起缩小。**
+
+\`\`\`python
+loss.backward()
+torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+optimizer.step()
+\`\`\`
+
+这一行夹在 \`backward()\` 和 \`step()\` 之间。梯度已经算好了，但还没拿去更新参数，正好在这时检查一下梯度是不是太大。（为什么要分成两步，见 [backward](#hover:backward_notes)。）
+
+## 它做了什么
+
+1. 把**所有参数**的梯度拼成一个大向量（GPT-2 里约有 1.24 亿个数），算出它的长度，也就是 norm：每个数平方、全部加起来、再开根号。
+
+   $$
+   \\text{norm} = \\sqrt{\\sum_{\\text{所有梯度元素 } g} g^2}
+   $$
+
+2. 如果 norm 不超过 \`max_norm\`（这里是 1.0），什么都不做。
+3. 如果超过了，就把**所有**梯度乘以同一个系数 $\\frac{\\text{max\\_norm}}{\\text{norm}}$，让总长度正好变成 \`max_norm\`。
+
+## 算一遍
+
+假设模型只有两个参数 \`a\` 和 \`b\`，各 2 个数：
+
+\`\`\`text
+a.grad = [3, 0]
+b.grad = [0, 4]
+
+第 1 步：总 norm = √(3² + 0² + 0² + 4²) = √25 = 5
+第 3 步：5 > 1.0，所以缩放系数 = 1.0 / 5 = 0.2
+
+a.grad = [3, 0] × 0.2 = [0.6, 0]
+b.grad = [0, 4] × 0.2 = [0, 0.8]
+
+缩完之后的总 norm = √(0.6² + 0.8²) = 1.0
+\`\`\`
+
+如果梯度本来就小，就不变：
+
+\`\`\`text
+a.grad = [0.3, 0],  b.grad = [0, 0.4]
+总 norm = 0.5 ≤ 1.0   →  不变
+\`\`\`
+
+## 两个关键点
+
+**1. 只改长度，不改方向。** 所有梯度乘的是同一个系数，所以各个参数之间的比例不变（\`a\` 和 \`b\` 还是 3 : 4）。更新的方向和原来一样，只是步子变小了。
+
+**2. 算的是全局 norm，不是每个参数各算各的。** 如果每个参数单独裁剪，\`a\` 和 \`b\` 之间的比例就可能被打乱，更新方向也就变了。用全局 norm 裁剪，方向保持不变。
+
+## 为什么需要它
+
+大多数 step 的梯度大小都差不多。但偶尔会遇到一个"坏 batch"，比如一段很少见的数据，算出来的梯度特别大。不裁剪的话，这一步会把参数推得很远，loss 突然冲高（叫 **loss spike**），严重时训练就再也恢复不过来。
+
+裁剪相当于给每一步能走多远设了一个上限：坏 batch 还是会影响这一步，但影响有限。
+
+## 返回值
+
+\`clip_grad_norm_\` 返回**裁剪之前**的总 norm（上面例子里是 5.0）。很多训练脚本会把它打印出来：
+
+\`\`\`python
+norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+print(f"step {step} loss {loss.item():.4f} norm {norm:.4f}")
+\`\`\`
+
+训练时值得盯着这个数：如果 norm 突然变得很大，往往是训练要出问题的早期信号。
+
+## 细节
+
+- 名字结尾的 \`_\` 是 PyTorch 的惯例，表示**原地修改**（in-place）：它直接改 \`.grad\`，而不是返回新的梯度。
+- 阈值 1.0 是 GPT-3 论文里用的值（"we clip the global norm of the gradient at 1.0"），之后大部分 LLM 训练也沿用 1.0。
 `,
   },
 };
