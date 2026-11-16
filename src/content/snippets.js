@@ -70,7 +70,13 @@ class GPT2(nn.Module):
 # ----- Simple training loop -----
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = GPT2(vocab_size=50304, n_layer=12, n_embd=768, n_head=12, max_toks=1024, dropout=0.1).to(device)
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), weight_decay=0.1)
+# weight decay only on 2D weights (Linear, Embedding), not on biases or LayerNorm
+decay    = [p for p in model.parameters() if p.dim() >= 2]
+no_decay = [p for p in model.parameters() if p.dim() < 2]
+optimizer = torch.optim.AdamW([
+    {"params": decay,    "weight_decay": 0.1},
+    {"params": no_decay, "weight_decay": 0.0},
+], lr=3e-4, betas=(0.9, 0.95))
 
 batch_size = 4
 block_size = 32

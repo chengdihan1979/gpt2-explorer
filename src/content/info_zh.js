@@ -6643,52 +6643,107 @@ $$
 `,
   },
   optim_adamw_notes: {
-    title: "torch.optim.AdamW",
+    title: "Optimizer：从 SGD 到 AdamW",
     md: `
-## 它是什么
+**optimizer 负责把梯度变成参数的更新。**
 
-AdamW 是当前 LLM 预训练中占主导地位的 optimizer。optimizer 是预训练中负责做决策的算法。每一步，optimizer 都在回答这个问题："给定当前的参数和 gradient，我该如何更新参数来降低 loss？"所以：
+[\`loss.backward()\`](#hover:backward_notes) 算出每个参数的梯度；接着 \`optimizer.step()\` 决定每个参数往哪个方向、走多远。不同的 optimizer，区别只在这个规则。预训练和微调都要用 optimizer。
 
-- **gradient** 告诉我们 loss 对每个参数的局部斜率。
-- **optimizer** 给出把 gradient 变成一次更新的算法。
+这篇按历史顺序讲：每个 optimizer 都是为了解决上一个的某个问题。点名字可以看详细内容和数值例子。最后一节讲这个网站代码里 AdamW 的设置。
 
-## optimizer 的历史：从 SGD 到 AdamW
+## 普通 SGD 的两个问题
 
-从我自己的学习经验来看，不了解 optimizer 的发展历史，就很难真正理解 AdamW。所以下面是一条以语言模型为中心的 optimizer 时间线，附上关键思想，比如谁用了哪个 optimizer、为什么会被替换。点击每个 optimizer 下面的链接可以查看详细内容。
+最简单的规则是 [SGD](#info:sgd_notes)：每个参数都按一个固定的学习率，往梯度的反方向走一步：\`w = w − lr × grad\`。它有两个问题，下面这些 optimizer 就是为了解决它们而出现的：
 
-### 2010–2013：稀疏特征时代（词向量、经典 NLP）
+1. **梯度很"吵"。** 每一步只用一个小 batch 估算梯度，所以每一步的方向里都有一部分是噪声，走出来的路线是"之"字形的。解决办法：**momentum**，对最近几步的梯度求平均，噪声互相抵消，稳定的方向被保留下来。
+2. **所有参数共用一个学习率。** 不同参数的梯度大小可能差很多。\`lr = 0.01\` 时，梯度约为 100 的参数每步移动 1（可能来回震荡），梯度约为 0.01 的参数每步只移动 0.0001（几乎学不动）。解决办法：**给每个参数自己的步长**，梯度一直很大的参数步子自动缩小，梯度一直很小的步子自动放大。
 
-- **[SGD](#info:sgd_notes)**：简单、快速；最早的 optimizer。
-- **[SGD with momentum](#info:sgd_momentum_notes)**：加入速度（velocity），让更新更平滑。
-- **[Adagrad](#info:adagrad_notes)**：在稀疏、高方差的 gradient 上很流行；对早期的 embedding 和 logistic/softmax 模型很有帮助。它在训练中为每个参数单独调整学习率，并且随时间不断调整。
-- **[RMSProp](#info:rmsprop_notes)**：修正了 Adagrad 步长逐渐消失的问题；在早期 RNN 语言模型中被广泛使用。
+\`\`\`text
+SGD
+ ├─ 问题 1（噪声）            → Momentum
+ └─ 问题 2（共用学习率）      → Adagrad → RMSProp
+                                            ↓
+                  Momentum + RMSProp  =  Adam
+                                            ↓
+                 解耦的 weight decay  =  AdamW   ← 这份代码用的
+\`\`\`
 
-### 2014–2017：RNN → 早期 seq2seq
+## 时间线
 
-- **[Adam](#info:adam_notes)**：成为 NLP 的默认选择（RNN 语言模型、带 attention 的 seq2seq）。原因：它把 momentum 和 RMSProp 式的方差归一化结合在一起，所以比 SGD 少得多地需要反复调学习率（LR）。
+下面每个时期写的是语言模型当时**在用**什么；其中好几个方法提出得早得多。
 
-### 2017–2019：Transformer 起飞
+### 2014 年以前：基础组件
 
-- **Adam + warmup 成为标准**：先做一小段线性 warmup，再衰减（通常是 inverse-sqrt 或 cosine）。
-- 从 post-norm 过渡到 pre-norm；Adam 的自适应性加上 warmup，让很深的层堆叠也能稳定训练。
-- weight decay 开始变得重要。BERT 让 Adam 搭配 weight decay 流行起来；不久之后，社区统一采用了解耦的 weight decay（AdamW），因为它更可预测、泛化更好。
+- **[SGD](#info:sgd_notes)**：最基本的规则。随机逼近的思想可以追溯到 Robbins & Monro（1951）。
+- **[SGD with momentum](#info:sgd_momentum_notes)**：加入速度（velocity），让更新更平滑。由 Polyak（1964）提出；Sutskever 等人（2013）证明了它对深度网络很重要。
+- **[Adagrad](#info:adagrad_notes)**（2011）：第一个流行起来的"每个参数单独的学习率"方法。它对稀疏、高方差的梯度很有帮助，比如词向量：罕见词的那一行只是偶尔才拿到梯度。
+- **[RMSProp](#info:rmsprop_notes)**（2012）：修正了 Adagrad 步长随时间缩到接近 0 的问题；在早期 RNN 语言模型中被广泛使用。
 
-### 2019–2021：规模扩大（T5、GPT-2/3、mT5）
+### 2014–2017：Adam 成为默认选择
 
-- **[AdamW](#info:adamw_notes)** 成为大语言模型的首选（bf16、warmup + cosine、梯度裁剪、对 norm/bias 不做 decay）。
-- **Adafactor**（省内存、类似 Adam）在 optimizer 状态内存紧张时，被 T5/mT5 这类模型广泛采用（对二阶矩做分解）。
+- **[Adam](#info:adam_notes)**（2014）成为 NLP 的默认选择（RNN 语言模型、带 attention 的 seq2seq）。它把 momentum 和 RMSProp 的"按参数缩放"结合在一起，所以比 SGD 少得多地需要反复调学习率。
 
-### 2022–2023：进一步扩大规模
+### 2017–2019：Transformer
+
+- **Adam + warmup 成为标准**：先做一小段线性 warmup，再衰减（原始 Transformer 用 inverse-sqrt，后来通常用 cosine）。
+- 从 post-norm 过渡到 pre-norm；再加上 Adam 的自适应性和 warmup，很深的层堆叠也能稳定训练。
+- **解耦的 weight decay。** AdamW 论文（Loshchilov & Hutter，2017）指出：weight decay 应该直接作用在权重上，而不是作为 L2 正则项加到梯度里。BERT（2018）用的 Adam 已经是这种解耦的 decay，而且不对 LayerNorm 和 bias 做 decay；这套做法随着 BERT 流行开来。
+
+### 2019–2021：规模扩大（GPT-2/3、T5）
+
+- **[AdamW](#info:adamw_notes)** 成为大语言模型的默认选择，搭配 warmup + cosine 衰减、全局范数的[梯度裁剪](#hover:clip_grad_norm_notes)，并且对 norm/bias 的权重不做 decay。
+- GPT-2 论文没有公布 optimizer 的细节。GPT-3 论文公布了：Adam，$\\beta_1 = 0.9$、$\\beta_2 = 0.95$，梯度裁剪阈值 1.0，weight decay 0.1，先 warmup 再 cosine 衰减。这个网站的代码用的就是这些值。
+- **Adafactor**（省内存、类似 Adam，对二阶矩做分解）在 optimizer 内存紧张时被 T5/mT5 采用。
+
+### 2022–2023：AdamW 站稳
 
 - 预训练仍然用 AdamW（或者在内存是瓶颈时用 Adafactor）。
-- 微调：Lion、Adan、AdaBelief、Sophia 等的实验在某些设置下表现不错，但没有一个能在基础模型预训练上普遍取代 AdamW。
-- 系统层面普遍采用融合的 AdamW kernel（Apex、DeepSpeed、xFormers）来提升吞吐量。
+- Lion、Sophia 等新 optimizer 在某些设置下表现更好，但都没能普遍取代 AdamW。
+- 为了提速，融合的（fused）AdamW kernel 成为标配：PyTorch 自带的 \`AdamW(..., fused=True)\`（PyTorch 2.0 起）、Apex、DeepSpeed。
 
 ### 2024 至今
 
-- AdamW 仍然是 LLM 预训练和大多数全参数微调的主流默认选择。
-- 当必须把 optimizer 内存压到最小时，Adafactor 仍是一个实用的替代方案。
-- 研究型 optimizer 不断出现，但生产环境的语言模型仍然坚持上面这对稳定的组合，并搭配：pre-norm/RMSNorm、bf16、线性 warmup（约占总步数的 0.5–3%）、cosine 衰减、全局范数裁剪，以及对 norm/bias 不做 decay。
+- AdamW 仍然是 LLM 预训练和全参数微调最常用的默认选择；必须把内存压到最小时，Adafactor 仍是一个选项。
+- 🆕 **Muon**（Keller Jordan，2024 年底，最早用在 NanoGPT speedrun 里）对每个二维权重矩阵，用"正交化"之后的 momentum 来更新，让矩阵里没有哪个方向主导更新。Moonshot 把它扩展到大规模，用 **MuonClip** 训练了 Kimi K2（2025，总参数 1T）：MuonClip 是 Muon 加上 "QK-clip"，一旦 attention 的 logits 变得太大，就把 query/key 的权重按比例缩小。Muon 只用于中间层的权重矩阵；embedding、输出层和 norm 的权重仍然用 AdamW。这是目前在这种规模的预训练上用 optimizer 取代 AdamW 最知名的例子。
+
+## 这份代码里的 AdamW
+
+\`\`\`python
+# weight decay only on 2D weights (Linear, Embedding), not on biases or LayerNorm
+decay    = [p for p in model.parameters() if p.dim() >= 2]
+no_decay = [p for p in model.parameters() if p.dim() < 2]
+optimizer = torch.optim.AdamW([
+    {"params": decay,    "weight_decay": 0.1},
+    {"params": no_decay, "weight_decay": 0.0},
+], lr=3e-4, betas=(0.9, 0.95))
+\`\`\`
+
+### 两组参数
+
+- **\`decay\`**：2 维及以上的参数，也就是所有 \`nn.Linear\` 的权重和 embedding 表。模型几乎所有的参数都在这里，weight decay 防止它们长得太大。
+- **\`no_decay\`**：1 维的参数，也就是所有 bias，以及 LayerNorm 的 $\\gamma$ 和 $\\beta$。它们只占参数的很小一部分，对它们做 decay 对防止过拟合帮助不大。对 $\\gamma$ 做 decay 甚至会和 LayerNorm 的作用对着干：它把 $\\gamma$ 往 0 拉，而 $\\gamma$ 本来是负责把归一化后的输出重新放大的。
+- 共享的权重（\`tok_emb.weight\` = \`lm_head.weight\`，见 [weight tying](#hover:weight_tying_notes)）只出现一次，因为 \`model.parameters()\` 会跳过重复的参数。它被分到 \`decay\` 组。
+
+nanoGPT 也是这样分组的：用 \`p.dim() >= 2\` 来判断。
+
+### 超参数
+
+- **\`lr=3e-4\`**：小模型上 Adam 常用的一个稳妥的学习率。（GPT-3 论文里和 GPT-2 small 同样大小的 125M 模型用的是 6e-4。）
+- **\`betas=(0.9, 0.95)\`**：Adam 两个滑动平均的平均速率。速率为 $\\beta$ 的滑动平均，大约相当于对最近 $\\frac{1}{1 - \\beta}$ 步求平均：
+  - $\\beta_1 = 0.9$：momentum（梯度的平均）大约覆盖最近 10 步。
+  - $\\beta_2 = 0.95$：梯度平方的平均大约覆盖最近 20 步。PyTorch 的默认值是 0.999，大约 1000 步。窗口短一些，梯度大小变化时反应更快，大模型训练更稳定；GPT-3 用的就是 0.95。
+- **\`weight_decay=0.1\`**（只用在 \`decay\` 组）：每一步都把权重往 0 稍微缩一点，缩多少和学习率成正比。这个值来自 GPT-3。解耦的 decay 具体怎么算，见 [AdamW](#info:adamw_notes)。
+
+### 这份代码省略了什么
+
+学习率在整个训练过程中一直是 3e-4。真实的 GPT-2/GPT-3 训练会用**学习率调度**（schedule）：前面一段从接近 0 线性 warmup 上来，然后按 cosine 曲线衰减到一个很小的值。warmup 是为了在 Adam 的滑动平均还不可靠的时候避免大幅更新；衰减是为了让模型在最后稳定地收敛到一个最低点。
+
+## 参考资料
+
+1. **Decoupled Weight Decay Regularization**（AdamW）。Loshchilov & Hutter，2017。[arXiv:1711.05101 ↗](https://arxiv.org/abs/1711.05101)
+2. **Language Models are Few-Shot Learners**（GPT-3），附录 B：训练细节。Brown 等人，2020。[arXiv:2005.14165 ↗](https://arxiv.org/abs/2005.14165)
+3. **Muon: An optimizer for hidden layers in neural networks**。Keller Jordan，2024。[kellerjordan.github.io ↗](https://kellerjordan.github.io/posts/muon/)
+4. **Kimi K2: Open Agentic Intelligence**（MuonClip）。Moonshot AI，2025。[arXiv:2507.20534 ↗](https://arxiv.org/abs/2507.20534)
 `,
   },
 

@@ -4268,52 +4268,107 @@ So $z$ and $y$ are orthogonal. Because $z$ is chosen arbitrarily from $ker(P)$ a
   },
 
   optim_adamw_notes: {
-    title: "torch.optim.AdamW",
+    title: "Optimizers: from SGD to AdamW",
     md: `
-## What it is
+**An optimizer turns gradients into parameter updates.**
 
-AdamW is the dominant optimizer in current LLM pretraining. An optimizer is the decision-making algorithm in pretraining. At each step the optimizer answers the question: "Given the current parameters and the gradient, how should I update the parameters to reduce loss?" So:
+[\`loss.backward()\`](#hover:backward_notes) computes every parameter's gradient; \`optimizer.step()\` then decides how far, and in which direction, to move each parameter. Optimizers differ only in that rule. They are used in every kind of training, pretraining and finetuning alike.
 
-- The **gradient** tells us the local slope of the loss with respect to each parameter.
-- The **optimizer** gives us the algorithm that turns the gradient into an update.
+This note follows the history: each optimizer fixes a problem of the one before. Click a name for the details and a worked example. The last section explains the AdamW settings in this site's code.
 
-## History of optimizers: from SGD to AdamW
+## Two problems with plain SGD
 
-From my learning experience, I find it's difficult to understand AdamW without understanding the history of optimizers. So below is a language-model-focused optimizer timeline with the key ideas, like who used each optimizer and why it changed. Click the links under each optimizer to see the details.
+The simplest rule, [SGD](#info:sgd_notes), moves every parameter against its gradient by a fixed learning rate: \`w = w − lr × grad\`. It has two problems, and the optimizers below were invented to fix them:
 
-### 2010–2013: Sparse features era (word vectors, classic NLP)
+1. **Gradients are noisy.** Each step estimates the gradient from one small batch, so part of every step is noise and the path zigzags. Fix: **momentum**, an average of recent gradients, so the noise cancels and the consistent direction remains.
+2. **One learning rate for all parameters.** Parameters can have gradients of very different sizes. With \`lr = 0.01\`, a parameter whose gradient is about 100 moves 1 per step (it may oscillate), while one whose gradient is about 0.01 moves 0.0001 (it barely learns). Fix: a **per-parameter step size** that shrinks for parameters with consistently large gradients and grows for those with small ones.
 
-- **[SGD](#info:sgd_notes)**: simple and fast; the original optimizer.
-- **[SGD with momentum](#info:sgd_momentum_notes)**: adds velocity to smooth updates.
-- **[Adagrad](#info:adagrad_notes)**: popular for sparse, high-variance gradients; helped early embeddings and logistic/softmax models. It adjusts the learning rate for each parameter during training and keeps adjusting it over time.
-- **[RMSProp](#info:rmsprop_notes)**: fixes Adagrad's vanishing step size; widely used in early RNN LMs.
+\`\`\`text
+SGD
+ ├─ problem 1 (noise)            → Momentum
+ └─ problem 2 (one lr for all)   → Adagrad → RMSProp
+                                               ↓
+                     Momentum + RMSProp  =  Adam
+                                               ↓
+             decoupled weight decay  =  AdamW   ← used in this code
+\`\`\`
 
-### 2014–2017: RNNs → early seq2seq
+## Timeline
 
-- **[Adam](#info:adam_notes)**: becomes the default in NLP (RNN LMs, seq2seq with attention). Why: it combines momentum with RMSProp-style variance normalization, so it needs much less LR fiddling than SGD.
+The eras below say what language models **used** at the time; several of these methods are much older.
 
-### 2017–2019: Transformer takeoff
+### Before 2014: the building blocks
 
-- **Adam + warmup standardizes**: a small linear warmup, then decay (often inverse-sqrt or cosine).
-- Post-norm → pre-norm transitions; Adam's adaptivity plus warmup stabilize deep stacks.
-- Weight decay starts to matter. BERT popularizes weight decay with Adam; the community converges on decoupled weight decay (AdamW) soon after, for predictability and better generalization.
+- **[SGD](#info:sgd_notes)**: the basic rule. Stochastic approximation goes back to Robbins & Monro (1951).
+- **[SGD with momentum](#info:sgd_momentum_notes)**: adds a velocity to smooth the updates. Proposed by Polyak (1964); shown to matter for deep networks by Sutskever et al. (2013).
+- **[Adagrad](#info:adagrad_notes)** (2011): the first popular per-parameter learning rate. It helped with sparse, high-variance gradients such as word embeddings, where a rare word's row gets a gradient only now and then.
+- **[RMSProp](#info:rmsprop_notes)** (2012): fixes Adagrad's step size shrinking toward zero over time; widely used in early RNN language models.
 
-### 2019–2021: Scaling up (T5, GPT-2/3, mT5)
+### 2014–2017: Adam becomes the default
 
-- **[AdamW](#info:adamw_notes)** becomes the go-to for big LMs (bf16, warmup + cosine, grad clipping, no decay on norm/bias).
-- **Adafactor** (memory-efficient, Adam-like) gains traction for T5/mT5-style models when optimizer-state RAM is tight (factored second moments).
+- **[Adam](#info:adam_notes)** (2014) becomes the default in NLP (RNN language models, seq2seq with attention). It combines momentum with RMSProp's per-parameter scaling, so it needs much less learning-rate tuning than SGD.
 
-### 2022–2023: Scaling up further
+### 2017–2019: Transformers
 
-- Pretraining is still AdamW (or Adafactor where memory is the limiter).
-- Finetuning: experiments with Lion, Adan, AdaBelief, Sophia, etc. show promise on some setups, but none broadly displaces AdamW for foundation-model pretraining.
-- Systems stacks adopt fused AdamW kernels (Apex, DeepSpeed, xFormers) for throughput.
+- **Adam + warmup becomes standard:** a short linear warmup, then a decay (inverse-sqrt in the original Transformer, later usually cosine).
+- Post-norm gives way to pre-norm; together with Adam's adaptivity and warmup, this makes deep stacks train stably.
+- **Decoupled weight decay.** The AdamW paper (Loshchilov & Hutter, 2017) shows that weight decay should be applied directly to the weights, not added to the gradient as L2 regularization. BERT (2018) already used Adam with this kind of decoupled decay, and excluded LayerNorm and bias from it; this recipe spread with BERT.
+
+### 2019–2021: scaling up (GPT-2/3, T5)
+
+- **[AdamW](#info:adamw_notes)** becomes the default for large language models, used with warmup + cosine decay, global-norm [gradient clipping](#hover:clip_grad_norm_notes), and no decay on norm/bias weights.
+- The GPT-2 paper gives no optimizer details. The GPT-3 paper does: Adam with $\\beta_1 = 0.9$, $\\beta_2 = 0.95$, gradient clipping at 1.0, weight decay 0.1, and warmup followed by cosine decay. This site's code uses the same values.
+- **Adafactor** (memory-efficient and Adam-like, with factored second moments) is used for T5/mT5 when optimizer memory is tight.
+
+### 2022–2023: AdamW holds
+
+- Pretraining stays on AdamW (or Adafactor where memory is the limit).
+- New optimizers such as Lion and Sophia show gains in some setups, but none broadly replaces AdamW.
+- Fused AdamW kernels become standard for speed: PyTorch's built-in \`AdamW(..., fused=True)\` (since PyTorch 2.0), Apex, DeepSpeed.
 
 ### 2024–today
 
-- AdamW remains the mainstream default for LLM pretraining and most full-parameter finetunes.
-- Adafactor remains a practical alternative when optimizer memory must be minimized.
-- Research optimizers appear regularly, but production LMs stick to the stable duo above, paired with: pre-norm/RMSNorm, bf16, linear warmup (≈0.5–3% of steps), cosine decay, global-norm clipping, and no decay on norm/bias.
+- AdamW is still the most common default for LLM pretraining and full-parameter finetuning; Adafactor remains an option when memory must be minimized.
+- 🆕 **Muon** (Keller Jordan, late 2024, first used in the NanoGPT speedrun) updates each 2D weight matrix with an orthogonalized version of its momentum, so no direction in the matrix dominates the update. Moonshot scaled it up and trained Kimi K2 (2025, 1T total parameters) with **MuonClip**: Muon plus a "QK-clip" that rescales the query/key weights whenever attention logits grow too large. Muon is used only for the hidden weight matrices; embeddings, the output layer and norm weights still use AdamW. It is the best-known case so far of an optimizer replacing AdamW for pretraining at this scale.
+
+## The AdamW in this code
+
+\`\`\`python
+# weight decay only on 2D weights (Linear, Embedding), not on biases or LayerNorm
+decay    = [p for p in model.parameters() if p.dim() >= 2]
+no_decay = [p for p in model.parameters() if p.dim() < 2]
+optimizer = torch.optim.AdamW([
+    {"params": decay,    "weight_decay": 0.1},
+    {"params": no_decay, "weight_decay": 0.0},
+], lr=3e-4, betas=(0.9, 0.95))
+\`\`\`
+
+### Two parameter groups
+
+- **\`decay\`**: parameters with 2 or more dimensions: every \`nn.Linear\` weight and the embedding tables. These hold almost all of the model's parameters, and weight decay keeps them from growing too large.
+- **\`no_decay\`**: 1D parameters: every bias, and LayerNorm's $\\gamma$ and $\\beta$. They are a tiny share of the parameters, so decaying them does little against overfitting. Decaying $\\gamma$ would even work against LayerNorm: it pulls $\\gamma$ toward 0, which shrinks the normalized output that LayerNorm is meant to rescale.
+- The tied weight (\`tok_emb.weight\` = \`lm_head.weight\`, see [weight tying](#hover:weight_tying_notes)) appears only once, because \`model.parameters()\` skips duplicates. It lands in \`decay\`.
+
+This is the same split nanoGPT uses: \`p.dim() >= 2\` decides.
+
+### The hyperparameters
+
+- **\`lr=3e-4\`**: a common safe learning rate for Adam on small models. (The GPT-3 paper used 6e-4 for its 125M model, the size of GPT-2 small.)
+- **\`betas=(0.9, 0.95)\`**: the averaging rates of Adam's two running averages. A rate $\\beta$ averages over roughly the last $\\frac{1}{1 - \\beta}$ steps:
+  - $\\beta_1 = 0.9$: the momentum (average gradient) covers about the last 10 steps.
+  - $\\beta_2 = 0.95$: the average squared gradient covers about the last 20 steps. PyTorch's default is 0.999, about 1000 steps. The shorter window reacts faster when gradient sizes change, which makes large-model training more stable; GPT-3 used 0.95.
+- **\`weight_decay=0.1\`** (only in the \`decay\` group): each step shrinks the weights a little toward 0, in proportion to the learning rate. The value comes from GPT-3. See [AdamW](#info:adamw_notes) for how decoupled decay works.
+
+### What this code leaves out
+
+The learning rate stays at 3e-4 for the whole run. Real GPT-2/GPT-3 training uses a **schedule**: a linear warmup from near 0 over the first steps, then a cosine decay down to a small value. Warmup avoids large updates while Adam's running averages are still unreliable; the decay lets the model settle into a minimum at the end.
+
+## References
+
+1. **Decoupled Weight Decay Regularization** (AdamW). Loshchilov & Hutter, 2017. [arXiv:1711.05101 ↗](https://arxiv.org/abs/1711.05101)
+2. **Language Models are Few-Shot Learners** (GPT-3), Appendix B: training details. Brown et al., 2020. [arXiv:2005.14165 ↗](https://arxiv.org/abs/2005.14165)
+3. **Muon: An optimizer for hidden layers in neural networks**. Keller Jordan, 2024. [kellerjordan.github.io ↗](https://kellerjordan.github.io/posts/muon/)
+4. **Kimi K2: Open Agentic Intelligence** (MuonClip). Moonshot AI, 2025. [arXiv:2507.20534 ↗](https://arxiv.org/abs/2507.20534)
 `,
   },
 

@@ -208,7 +208,7 @@ export function buildCodeHtml({ component, selectedId }) {
   }
 
   // 9) Optimizer: make torch.optim.AdamW clickable to open notes
-  html = html.replace(/torch\.optim\.AdamW\([^)]*\)/g, (m) => `<span data-action="open:optim_adamw_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
+  html = html.replace(/torch\.optim\.AdamW/g, (m) => `<span data-action="open:optim_adamw_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
 
   // 10) Presentation: links get a class instead of inline styles, then Python syntax colors.
   html = html.split('style="text-decoration: underline; cursor: pointer;"').join('class="code-link"');
