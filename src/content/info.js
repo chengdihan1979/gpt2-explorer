@@ -4467,13 +4467,9 @@ $$
   sgd_momentum_notes: {
     title: "SGD with momentum",
     md: `
-**Instead of stepping only with the current gradient, we keep a velocity: an exponential moving average (EMA) of past gradients.**
+**Instead of stepping with the current gradient alone, keep a velocity: a running average of past gradients, and step with that.**
 
 ## What it is
-
-The velocity smooths noise and accelerates motion in directions that stay consistently downhill.
-
-We use the common EMA form:
 
 $$
 v \\leftarrow \\beta v + (1 - \\beta) g \\\\[4pt]
@@ -4481,10 +4477,69 @@ v \\leftarrow \\beta v + (1 - \\beta) g \\\\[4pt]
 $$
 
 - $g = \\nabla_{\\theta} L$ is the current gradient.
-- $\\beta$ (e.g., 0.9) controls how much "memory" to keep.
+- $\\beta$ (usually 0.9) controls how much "memory" to keep.
 - $\\eta$ is the learning rate.
 
-## Tiny numeric example
+Each step keeps 90% of the old velocity and adds 10% of the new gradient. Unrolled, $v$ is a weighted average of all past gradients: the newest has weight 0.1, the one before $0.1 \\times 0.9$, then $0.1 \\times 0.81$, and so on, fading by a factor 0.9 per step. This is an **exponential moving average** (EMA). With $\\beta = 0.9$ it covers roughly the last $\\frac{1}{1 - \\beta} = 10$ steps.
+
+The name comes from physics: $v$ behaves like a ball with inertia. Pushed the same way step after step, it keeps rolling that way; pushed back and forth, it barely moves.
+
+## Why it helps: noise cancels
+
+Plain [SGD](#info:sgd_notes) steps with each batch's gradient, and part of every such gradient is noise. Momentum averages the noise away.
+
+Take a parameter with two coordinates. The true downhill direction is $x$, but every batch adds a large noise in $y$ whose sign flips from step to step:
+
+\`\`\`text
+odd steps:   g = [1, +3]
+even steps:  g = [1, −3]
+\`\`\`
+
+**SGD** steps with $g$ itself: each step moves 1 in $x$ and ±3 in $y$. The noise (3) is larger than the signal (1), so the path zigzags across far more than it moves forward.
+
+**Momentum** ($\\beta = 0.9$) steps with $v$:
+
+\`\`\`text
+step  1:  v = [0.100,  0.300]
+step  2:  v = [0.190, -0.030]
+step  3:  v = [0.271,  0.273]
+step  4:  v = [0.344, -0.054]
+step 10:  v = [0.651, -0.103]
+step 20:  v = [0.878, -0.139]
+step 40:  v = [0.985, -0.156]
+\`\`\`
+
+- **$x$ (signal):** every gradient is 1, so their average is 1. $v_x$ climbs from 0 toward 1.
+- **$y$ (noise):** +3 and −3 alternate, so they cancel in the average. $v_y$ ends up swinging only about ±0.16.
+
+Where ±0.16 comes from: once things settle, $v_y$ alternates between $+a$ and $-a$. An odd step turns $-a$ into $+a$: $a = 0.9 \\cdot (-a) + 0.1 \\cdot 3$, so $1.9a = 0.3$ and $a = \\frac{0.3}{1.9} \\approx 0.16$.
+
+The noise shrinks from 3 to about 0.16, roughly 1/19 of its size, while the signal is kept. The path becomes nearly straight. The same thing happens in a narrow valley (an "ill-conditioned" loss), where the gradient keeps flipping across the valley while pointing consistently along it.
+
+## The cost: a slow start
+
+SGD has no velocity: from step 1 it moves the full gradient. Momentum's $v$ starts at 0 and has to build up. Compare the $x$ direction above:
+
+\`\`\`text
+          SGD steps with    momentum steps with v
+step  1:       1                 0.100
+step  2:       1                 0.190
+step  3:       1                 0.271
+step 10:       1                 0.651
+step 20:       1                 0.878
+step 40:       1                 0.985   → approaches 1
+\`\`\`
+
+Each value is 0.9 × the previous one plus 0.1: $0.1$, then $0.1 \\cdot 0.9 + 0.1 = 0.19$, then $0.19 \\cdot 0.9 + 0.1 = 0.271$, and so on.
+
+- **Early on**, momentum is slower than SGD: it takes about 10+ steps to warm up.
+- **Once warmed up**, both move at the same speed along the signal: $\\eta \\times 1$ per step. In the EMA form, $v$ settles at the average gradient and never exceeds it, because each step adds only $(1 - \\beta) = 10\\%$ of the new gradient.
+
+So momentum is not faster along the signal; its gain is in the noise direction (±3 per step for SGD vs about ±0.16). [Adam](#info:adam_notes) removes the slow start with a "bias correction".
+
+## Full worked example: one data point, no noise
+
+This example has a single data point, so the gradient has no noise to cancel. It shows only the cost (the slow start), step by step, so it is a useful contrast to the example above.
 
 ### Setup
 
@@ -4570,21 +4625,13 @@ w \\leftarrow w - \\eta \\cdot v_w = 1.171 - 0.1 \\cdot (-1.5135) = 1.32235 \\\\
 b \\leftarrow b - \\eta \\cdot v_b = 0.0855 - 0.1 \\cdot (-0.75675) = 0.161175
 $$
 
-> You can see the loss decreasing at each step (4.5 → 4.0613 → 3.3089). That's the optimizer using backprop's gradients to move $w, b$ toward better values. Compare with SGD, where the loss decreases faster (4.5 → 1.125 → 0.28125) in the first 3 steps of the example. The reason is below.
+> You can see the loss decreasing at each step (4.5 → 4.0613 → 3.3089). That's the optimizer using backprop's gradients to move $w, b$ toward better values. Compare with SGD, where the loss decreases faster (4.5 → 1.125 → 0.28125) in the first 3 steps. The reason is the slow start explained above: in steps 1–3 the velocity is only 0.1×, 0.19× and 0.271× of a full gradient.
 
-## Why momentum lags at first
+## Why momentum loses on this example
 
-The velocity needs to build up. With $\\beta = 0.9$, the velocity starts at 0, and in early steps it only tracks the current gradient by a fraction. That makes the initial steps smaller than plain SGD.
+There is no noise here, so momentum pays the cost without getting the benefit. It is also hurt later: as $w$ and $b$ approach the target, the gradient shrinks, but $v$ still remembers the larger gradients of earlier steps. So momentum overshoots the target and oscillates around it. After 10 steps momentum's loss is about 0.44, versus about $4 \\times 10^{-6}$ for SGD.
 
-For example, in our tiny numeric example:
-
-- **Step 1** keeps 90% of the past velocity ($0$ for now, because $v_w = 0, v_b = 0$) and adds 10% of the current gradient, so step 1 is 0.1× the raw gradient.
-- **Step 2** keeps 90% of the past velocity (0.1× the raw gradient from step 1) and adds 10% of the current gradient, so step 2 is roughly 0.19× the raw gradient ($0.1 \\cdot 0.9 + 0.1 = 0.19$).
-- **Step 3** keeps 90% of the past velocity (0.19× the raw gradient from steps 1–2) and adds 10% of the current gradient, so step 3 is roughly 0.271× the raw gradient ($0.19 \\cdot 0.9 + 0.1 = 0.271$).
-
-## When and why momentum wins later
-
-Once gradients stay roughly aligned, the velocity accumulates, so steps become larger and smoother than SGD. That pays off on harder problems, such as noisy or ill-conditioned losses. On this one-example problem it does not: SGD already converges very fast, while momentum overshoots and oscillates. After 10 steps momentum's loss is about 0.44, versus about $4 \\times 10^{-6}$ for SGD.
+Momentum pays off on harder problems: noisy gradients (as in the example above) and narrow valleys. Training a language model on small batches is exactly that kind of problem.
 
 ## Making momentum look better earlier
 
@@ -4592,6 +4639,17 @@ If we want momentum to look better earlier, we can:
 
 1. Lower $\\beta$ (e.g., 0.8), so the velocity builds up faster.
 2. Slightly raise $\\eta$ (e.g., 0.12) to make up for the smaller steps early on.
+
+## PyTorch's form is different
+
+This note uses the EMA form $v \\leftarrow \\beta v + (1 - \\beta) g$, which is also the form [Adam](#info:adam_notes) uses for its first moment. PyTorch's \`torch.optim.SGD(momentum=0.9)\` uses a different form, without the $(1 - \\beta)$:
+
+$$
+v \\leftarrow \\beta v + g \\\\[4pt]
+\\theta \\leftarrow \\theta - \\eta v
+$$
+
+With a constant gradient of 1, this $v$ settles at $\\frac{1}{1 - \\beta} = 10$ instead of 1. The two forms differ by exactly the factor $(1 - \\beta)$ at every step, so PyTorch's form with learning rate $\\eta$ takes the same steps as the EMA form with learning rate $\\frac{\\eta}{1 - \\beta} = 10\\eta$. Keep this in mind when copying a learning rate from one form to the other.
 `,
   },
 
