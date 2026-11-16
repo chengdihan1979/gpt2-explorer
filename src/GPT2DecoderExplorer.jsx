@@ -639,8 +639,62 @@ The more $h$ points in the same direction as row $i$, the higher token $i$ score
 
 The assignment does not copy anything: both layers point to the **same \`Parameter\` object**, so the shared matrix receives the **sum** of the gradients from both uses.
 
+A tiny example shows where each part comes from. Drop all the blocks so the embedding feeds straight into \`lm_head\`, and use a vocabulary of 3 words with \`n_embd\` = 4:
+
+\`\`\`text
+E = [[ 0.5, 0,   0.5, 0  ],    # word 0
+     [ 0,   0.5, 0,   0.5],    # word 1
+     [-0.5, 0,   0.5, 0  ]]    # word 2
+
+input token = word 0   →  x = E[0] = [0.5, 0, 0.5, 0]     ← input side uses E
+logits = x @ E.T = [0.5, 0, 0]                            ← output side uses E again
+p = softmax(logits) = [0.452, 0.274, 0.274]
+correct next token = word 2,  loss = 1.294
+\`\`\`
+
+The gradient of the loss with respect to the logits is $p - y$ ([why?](#hover:cross_entropy_notes)):
+
+\`\`\`text
+p − y = [0.452, 0.274, 0.274] − [0, 0, 1] = [0.452, 0.274, -0.726]
+\`\`\`
+
+### Output side: every row gets a gradient
+
+Since $\\text{logit}_i = x \\cdot E[i]$, row $i$ receives $(p_i - y_i)\\, x$:
+
+\`\`\`text
+row 0:   0.452 × [0.5, 0, 0.5, 0] = [ 0.226, 0,  0.226, 0]
+row 1:   0.274 × [0.5, 0, 0.5, 0] = [ 0.137, 0,  0.137, 0]
+row 2:  -0.726 × [0.5, 0, 0.5, 0] = [-0.363, 0, -0.363, 0]
+\`\`\`
+
+An update subtracts the gradient. Row 2 (the correct word) has a negative gradient, so it moves **toward** $x$. Rows 0 and 1 (wrong words) are pushed **away** from $x$.
+
+### Input side: only the looked-up row
+
+$x$ is a lookup of row 0, so only row 0 gets this gradient. $x$ affects every logit, so its gradient is a sum over all word vectors, weighted by $p_i - y_i$:
+
+\`\`\`text
+dL/dx = 0.452 × E[0] + 0.274 × E[1] − 0.726 × E[2]
+      = [0.589, 0.137, -0.137, 0.137]       → added to row 0 only
+rows 1 and 2: 0
+\`\`\`
+
+### The two add up
+
+\`\`\`text
+         output side             input side                       total (E.grad)
+row 0:  [ 0.226, 0, 0.226, 0] + [0.589, 0.137, -0.137, 0.137] = [ 0.815, 0.137, 0.089, 0.137]
+row 1:  [ 0.137, 0, 0.137, 0] + 0                              = [ 0.137, 0,     0.137, 0    ]
+row 2:  [-0.363, 0,-0.363, 0] + 0                              = [-0.363, 0,    -0.363, 0    ]
+\`\`\`
+
+Checked in PyTorch: computing the gradient with only one side using $E$, then the other, and adding the two gives exactly \`E.grad\` from the tied version.
+
+### What this means for training
+
 - **Input side:** only the rows of tokens that appear in the batch get a gradient.
-- **Output side:** the softmax gives a gradient to **all 50,257 rows** every step, pushing down the scores of the wrong tokens.
+- **Output side:** the softmax gives a gradient to **every row** of the vocabulary (50,304 in this site's code) every step. A wrong word's push is proportional to its probability $p_i$.
 
 So with tying, even a rare token's embedding keeps getting trained, through the output side.
 
@@ -933,63 +987,201 @@ So the second and fourth dimensions are "dropped" (zeroed), while the rest are d
   cross_entropy_notes: {
     title: "Cross Entropy",
     md: `
-**Cross-entropy loss** is a measure of how well a model predicts the target distribution. Here it computes the negative log-likelihood of the correct next token at every position.
+**Cross-entropy loss** measures how much probability the model gave to the correct answer. In GPT-2 it is computed at every position, for the true next token, and then averaged into one number.
 
 Docs: [CrossEntropy ↗](https://pytorch.org/docs/stable/generated/torch.nn.functional.cross_entropy.html)
 
-## Shape of logits and targets in language models
+## A running example
 
-In GPT-style training:
-
-- **Logits** (raw predictions before softmax): $(B, T, V)$
-- **Targets** (ground-truth token indices): $(B, T)$
-
-where:
-
-- $B$: batch size
-- $T$: sequence length
-- $V$: vocabulary size
-
-Example: for $B = 2$, $T = 4$, $V = 10$:
+Take a tiny vocabulary of 3 words. At one position the model outputs these logits, and the correct next word is word 2:
 
 \`\`\`text
-Logits shape  = (2, 4, 10)
-Targets shape = (2, 4)
+logits z = [0.5, 0, 0]
+correct answer t = 2
 \`\`\`
 
-## What cross-entropy expects
+## Step 1: logits → probabilities (softmax)
 
-\`torch.nn.functional.cross_entropy\` expects:
+Softmax exponentiates every logit and divides by the total, so the results are positive and sum to 1:
 
-- **Input:** a 2D tensor of shape $(N, C)$, where $N$ = number of samples and $C$ = number of classes.
-- **Target:** a 1D tensor of shape $(N,)$ with integer class indices.
+\`\`\`text
+exp(0.5) = 1.6487
+exp(0)   = 1
+exp(0)   = 1
+total S  = 1.6487 + 1 + 1 = 3.6487
 
-So we need to flatten both logits and targets.
+p = [1.6487 / S, 1 / S, 1 / S]
+  = [0.452, 0.274, 0.274]
+\`\`\`
 
-## Why \`.view(-1, logits.size(-1))\`?
-
-- \`logits.view(-1, V)\` reshapes $(B, T, V) \\to (B \\times T, V)$. Each row corresponds to one token position $(b, t)$ in the batch, i.e. the model's distribution over the vocabulary for that position.
-- \`targets.view(-1)\` reshapes $(B, T) \\to (B \\times T,)$. Each entry is the correct class index for the next token in the sequence.
-
-> Every token in the batch is treated as an independent classification example. The cross-entropy loss is computed for all sequences in the current batch at once.
-
-## A tiny numerical example
-
-Suppose a 4-class model outputs these prediction probabilities for one position:
+## Step 2: loss = −log(probability of the correct answer)
 
 $$
-p = [0.1, 0.2, 0.6, 0.1]
+\\text{loss} = -\\log p_t
 $$
 
-The true class is class 3 (0-indexed: index 2), i.e. one-hot $y = [0, 0, 1, 0]$.
+Only the correct word's probability enters the formula. Here $t = 2$:
 
-> In practice (e.g. GPT-2), the target is not one-hot but the class index, i.e. 2. It's equivalent to multiplying by a one-hot, but far more memory/compute efficient.
+\`\`\`text
+p[2] = 0.27407
+loss = −ln(0.27407) = 1.2944
+\`\`\`
 
-Cross-entropy for this example:
+The log is the natural log (base $e$), the same one PyTorch uses.
+
+The wrong words still matter indirectly: softmax divides by the total $S$, so a higher logit for a wrong word makes $p_t$ smaller and the loss larger.
+
+### The same formula with a one-hot target
+
+Write the correct answer as a one-hot vector $y$: 1 at the correct word, 0 everywhere else. Here $y = [0, 0, 1]$. Then
 
 $$
-CE = -\\sum_{i=1}^4 y_i \\log p_i = -\\log p_3 = -\\log 0.6 \\approx 0.5108
+\\text{loss} = -\\sum_i y_i \\log p_i
 $$
+
+Every term with $y_i = 0$ vanishes, leaving only $-\\log p_t$, the formula above.
+
+> In practice (e.g. GPT-2), the target is passed as the class index (here 2), not as a one-hot vector. The result is the same, but it uses far less memory and compute.
+
+## What the numbers mean
+
+| Probability of the correct answer | loss |
+|---|---|
+| 1.0 (certain and right) | 0 |
+| 0.5 | 0.693 |
+| 1/3 (uniform guess over 3 words) | 1.099 |
+| 0.274 (the example) | 1.294 |
+| 0.01 | 4.605 |
+
+The example's loss (1.294) is worse than a uniform guess (1.099), because the model gave its highest logit to word 0, not to the correct word 2.
+
+A model that guesses uniformly over $V$ words has $p_t = 1/V$, so its loss is $\\ln V$. For GPT-2, $\\ln 50{,}304 \\approx 10.83$. A model whose initial logits are all small (as with GPT-2's $\\mathcal{N}(0, 0.02)$ init) starts training near this value.
+
+## Computing it directly from the logits
+
+Substitute the softmax into the loss:
+
+$$
+\\text{loss} = -\\log \\frac{e^{z_t}}{S} = \\log S - z_t, \\qquad S = \\sum_j e^{z_j}
+$$
+
+For the example: $\\ln 3.6487 - 0 = 1.2944$, the same number.
+
+PyTorch's \`F.cross_entropy\` takes the raw logits and computes the loss in this form (log-sum-exp), without first computing $p$ and then taking its log. A tiny probability can round to 0 in floating point, and $\\log 0 = -\\infty$; the log-sum-exp form avoids that. This is why the model passes logits, not probabilities, to \`F.cross_entropy\`.
+
+## The gradient with respect to the logits: $p - y$
+
+Backpropagation starts from this gradient, so it is worth deriving. Start from $\\text{loss} = \\log S - z_t$ and differentiate each term with respect to one logit $z_i$.
+
+**First term, $\\log S$.** By the chain rule, the derivative of $\\log$ is $1/S$, and the only term of $S$ that contains $z_i$ is $e^{z_i}$:
+
+$$
+\\frac{\\partial \\log S}{\\partial z_i} = \\frac{1}{S} \\cdot e^{z_i} = p_i
+$$
+
+That is exactly the definition of softmax.
+
+**Second term, $-z_t$.** It depends only on the correct logit:
+
+$$
+\\frac{\\partial (-z_t)}{\\partial z_i} = \\begin{cases} -1 & i = t \\\\ 0 & i \\ne t \\end{cases} \\;=\\; -y_i
+$$
+
+**Add them:**
+
+$$
+\\frac{\\partial\\, \\text{loss}}{\\partial z_i} = p_i - y_i
+$$
+
+For the example:
+
+\`\`\`text
+p     = [0.452, 0.274,  0.274]
+y     = [0,     0,      1    ]
+p − y = [0.452, 0.274, -0.726]
+\`\`\`
+
+Checked in PyTorch two ways: with autograd, and by nudging each logit by 0.001 and measuring how much the loss changes.
+
+\`\`\`text
+autograd z.grad                  = [ 0.4519,  0.2741, -0.7259]
+nudge logit 0: change / 0.001    =   0.4518
+nudge logit 1: change / 0.001    =   0.2741
+nudge logit 2: change / 0.001    =  -0.7260
+\`\`\`
+
+What the gradient does (an update subtracts the gradient):
+
+- **Wrong words** get $+p_i$, so their logits go **down**. The more probability a wrong word took, the harder it is pushed down.
+- **The correct word** gets $p_t - 1$, which is always negative, so its logit goes **up**. The further $p_t$ is from 1, the harder it is pushed up.
+- When $p = y$ (the correct word has probability 1), the gradient is 0 and nothing changes.
+
+The gradient is this simple because the $\\exp$ in softmax and the $\\log$ in cross-entropy cancel when differentiated. This is another reason PyTorch fuses softmax and cross-entropy into one function.
+
+## In GPT-2: from $(B, T, V)$ logits to one number
+
+The model computes the loss in one line:
+
+\`\`\`python
+loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+\`\`\`
+
+### Targets are the input shifted by one
+
+Each position's correct answer is the token that comes right after it. \`get_batch\` builds \`y\` this way:
+
+\`\`\`text
+a slice of tokens:  [464, 3290, 3332, 319, 262]     (ids are made up)
+
+idx (x)     = [464, 3290, 3332, 319]     fed to the model
+targets (y) = [3290, 3332, 319, 262]     the next token at each position
+\`\`\`
+
+So the shapes are:
+
+- **Logits** (raw scores before softmax): $(B, T, V)$
+- **Targets** (true token ids, not one-hot): $(B, T)$
+
+where $B$ is the batch size, $T$ the sequence length and $V$ the vocabulary size.
+
+### Flattening: \`.view(-1, V)\` and \`.view(-1)\`
+
+\`F.cross_entropy\` expects:
+
+- **Input:** a 2D tensor $(N, C)$: $N$ samples, each with scores for $C$ classes.
+- **Target:** a 1D tensor $(N,)$ of integer class indices.
+
+It knows nothing about $B$ and $T$, so both are merged into one dimension:
+
+- \`logits.view(-1, V)\`: $(B, T, V) \\to (B \\times T, V)$. Each row is one position $(b, t)$: the model's scores over the vocabulary there.
+- \`targets.view(-1)\`: $(B, T) \\to (B \\times T,)$. Each entry is the correct next-token id for that row.
+
+> Every position in the batch becomes an independent classification problem: $B \\times T$ problems in total.
+
+### Averaging over all positions
+
+Each of the $B \\times T$ rows gets its own loss, $-\\log p_t$. By default (\`reduction='mean'\`) they are averaged into one number. Checked in PyTorch with $B = 2$, $T = 4$, $V = 5$ and random logits:
+
+\`\`\`text
+logits.view(-1, V).shape = (8, 5)
+targets.view(-1).shape   = (8,)
+
+loss at each of the 8 positions:
+[1.916, 1.822, 2.035, 3.344, 2.511, 1.021, 2.102, 0.378]
+
+mean                     = 1.8913
+F.cross_entropy result   = 1.8913   ✓
+\`\`\`
+
+Because the loss is a mean, each position's logits gradient is also divided by $B \\times T$:
+
+$$
+\\frac{\\partial\\, \\text{loss}}{\\partial\\, \\text{logits}[b, t]} = \\frac{p - y}{B \\times T}
+$$
+
+So the size of the gradient does not grow with the batch, and the learning rate does not have to change when the batch size does.
+
+> One forward pass over a sequence of length $T$ yields $T$ next-token problems at once: every token is a training signal. The [causal mask](#info:causal_mask_notes) is what makes this valid: position $t$ cannot see tokens after it, so it cannot peek at its own answer.
 
 ## References
 

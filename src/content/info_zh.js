@@ -3441,8 +3441,62 @@ $h$ 和第 $i$ 行的方向越接近，词 $i$ 的分数就越高。共享之后
 
 这行赋值并没有复制任何东西：两个层指向的是**同一个 \`Parameter\` 对象**，所以这个共享矩阵收到的是两处用法梯度的**和**。
 
+用一个极简的例子看清楚每一份梯度从哪来。去掉所有 block，让 embedding 直接接 \`lm_head\`；词表只有 3 个词，\`n_embd\` = 4：
+
+\`\`\`text
+E = [[ 0.5, 0,   0.5, 0  ],    # word 0
+     [ 0,   0.5, 0,   0.5],    # word 1
+     [-0.5, 0,   0.5, 0  ]]    # word 2
+
+输入 token = word 0   →  x = E[0] = [0.5, 0, 0.5, 0]     ← 输入端用了 E
+logits = x @ E.T = [0.5, 0, 0]                           ← 输出端又用了 E
+p = softmax(logits) = [0.452, 0.274, 0.274]
+正确的下一个 token = word 2，loss = 1.294
+\`\`\`
+
+loss 对 logits 的梯度是 $p - y$（[为什么？](#hover:cross_entropy_notes)）：
+
+\`\`\`text
+p − y = [0.452, 0.274, 0.274] − [0, 0, 1] = [0.452, 0.274, -0.726]
+\`\`\`
+
+### 输出端：每一行都有梯度
+
+因为 $\\text{logit}_i = x \\cdot E[i]$，第 $i$ 行收到的梯度是 $(p_i - y_i)\\, x$：
+
+\`\`\`text
+row 0:   0.452 × [0.5, 0, 0.5, 0] = [ 0.226, 0,  0.226, 0]
+row 1:   0.274 × [0.5, 0, 0.5, 0] = [ 0.137, 0,  0.137, 0]
+row 2:  -0.726 × [0.5, 0, 0.5, 0] = [-0.363, 0, -0.363, 0]
+\`\`\`
+
+更新时减去梯度。row 2（正确答案）的梯度是负的，所以它**朝 $x$ 的方向移动**；row 0、row 1 是错误答案，**被推离 $x$**。
+
+### 输入端：只有被查的那一行
+
+$x$ 是查表查出的 row 0，所以这份梯度只加到 row 0。$x$ 影响了每个 logit，所以它的梯度是所有词向量按 $p_i - y_i$ 加权求和：
+
+\`\`\`text
+dL/dx = 0.452 × E[0] + 0.274 × E[1] − 0.726 × E[2]
+      = [0.589, 0.137, -0.137, 0.137]       → 只加到 row 0
+row 1、row 2：0
+\`\`\`
+
+### 两份相加
+
+\`\`\`text
+         输出端                   输入端                           合计 (E.grad)
+row 0:  [ 0.226, 0, 0.226, 0] + [0.589, 0.137, -0.137, 0.137] = [ 0.815, 0.137, 0.089, 0.137]
+row 1:  [ 0.137, 0, 0.137, 0] + 0                              = [ 0.137, 0,     0.137, 0    ]
+row 2:  [-0.363, 0,-0.363, 0] + 0                              = [-0.363, 0,    -0.363, 0    ]
+\`\`\`
+
+在 PyTorch 里验证过：分别只让一端用 $E$ 算出梯度，两份加起来，正好等于共享版本的 \`E.grad\`。
+
+### 对训练意味着什么
+
 - **输入端：** 只有在 batch 里出现过的 token，对应的行才有梯度。
-- **输出端：** softmax 每一步都给**全部 50,257 行**梯度，把错误词的分数往下压。
+- **输出端：** softmax 每一步都给词表的**每一行**梯度（这个网站的代码里是 50,304 行）。错误词被推开的力度和它的概率 $p_i$ 成正比。
 
 所以共享之后，即使是罕见词的 embedding，也能通过输出端一直得到训练。
 
@@ -3584,63 +3638,201 @@ $$
   cross_entropy_notes: {
     title: "Cross Entropy（交叉熵）",
     md: `
-**Cross-entropy loss** 衡量模型对目标分布预测得有多好。这里它在每个位置上，计算正确的下一个 token 的负对数似然（negative log-likelihood）。
+**Cross-entropy loss** 衡量模型给正确答案分了多少概率。GPT-2 在每个位置上，对真实的下一个 token 算一次，再把所有位置平均成一个数。
 
 文档：[CrossEntropy ↗](https://pytorch.org/docs/stable/generated/torch.nn.functional.cross_entropy.html)
 
-## 语言模型里 logits 和 targets 的形状
+## 贯穿全文的例子
 
-在 GPT 式的训练中：
-
-- **Logits**（softmax 之前的原始预测）：$(B, T, V)$
-- **Targets**（真实的 token 索引）：$(B, T)$
-
-其中：
-
-- $B$：batch size
-- $T$：序列长度
-- $V$：词表大小
-
-例子：$B = 2$，$T = 4$，$V = 10$：
+取一个只有 3 个词的词表。某个位置上模型输出的 logits 如下，正确的下一个词是 word 2：
 
 \`\`\`text
-Logits shape  = (2, 4, 10)
-Targets shape = (2, 4)
+logits z = [0.5, 0, 0]
+正确答案 t = 2
 \`\`\`
 
-## cross-entropy 需要什么样的输入
+## 第 1 步：logits → 概率（softmax）
 
-\`torch.nn.functional.cross_entropy\` 要求：
+softmax 对每个 logit 取 exp，再除以总和，得到的结果都是正数、加起来等于 1：
 
-- **Input：** 形状为 $(N, C)$ 的 2 维张量，$N$ 是样本数，$C$ 是类别数。
-- **Target：** 形状为 $(N,)$ 的 1 维张量，里面是整数类别索引。
+\`\`\`text
+exp(0.5) = 1.6487
+exp(0)   = 1
+exp(0)   = 1
+总和 S   = 1.6487 + 1 + 1 = 3.6487
 
-所以 logits 和 targets 都要先展平。
+p = [1.6487 / S, 1 / S, 1 / S]
+  = [0.452, 0.274, 0.274]
+\`\`\`
 
-## 为什么是 \`.view(-1, logits.size(-1))\`？
-
-- \`logits.view(-1, V)\` 把 $(B, T, V) \\to (B \\times T, V)$。每一行对应 batch 里的一个 token 位置 $(b, t)$，也就是模型在这个位置上对整个词表的分布。
-- \`targets.view(-1)\` 把 $(B, T) \\to (B \\times T,)$。每一项是这个序列中下一个 token 的正确类别索引。
-
-> batch 里的每个 token 都被当作一个独立的分类样本。当前 batch 所有序列的 cross-entropy loss 一次算完。
-
-## 一个小数值例子
-
-假设一个 4 分类模型在某个位置输出的预测概率是：
+## 第 2 步：loss = −log(正确答案的概率)
 
 $$
-p = [0.1, 0.2, 0.6, 0.1]
+\\text{loss} = -\\log p_t
 $$
 
-真实类别是第 3 类（从 0 开始数是索引 2），即 one-hot $y = [0, 0, 1, 0]$。
+公式里只出现正确答案的概率。这里 $t = 2$：
 
-> 实际中（比如 GPT-2），target 不是 one-hot，而是类别索引，也就是 2。这和乘以一个 one-hot 等价，但省内存、省计算得多。
+\`\`\`text
+p[2] = 0.27407
+loss = −ln(0.27407) = 1.2944
+\`\`\`
 
-这个例子的 cross-entropy：
+这里的 log 是自然对数（底数 $e$），PyTorch 用的也是它。
+
+错误的词也会间接起作用：softmax 要除以总和 $S$，所以错误词的 logit 越高，$p_t$ 就越小，loss 就越大。
+
+### 用 one-hot 写同一个公式
+
+把正确答案写成 one-hot 向量 $y$：正确的词是 1，其他都是 0。这里 $y = [0, 0, 1]$。于是
 
 $$
-CE = -\\sum_{i=1}^4 y_i \\log p_i = -\\log p_3 = -\\log 0.6 \\approx 0.5108
+\\text{loss} = -\\sum_i y_i \\log p_i
 $$
+
+$y_i = 0$ 的项全部消失，只剩 $-\\log p_t$，就是上面的公式。
+
+> 实际中（比如 GPT-2），target 传的是类别索引（这里是 2），不是 one-hot 向量。结果一样，但省内存、省计算得多。
+
+## 这些数字是什么意思
+
+| 正确答案的概率 | loss |
+|---|---|
+| 1.0（完全确定且答对） | 0 |
+| 0.5 | 0.693 |
+| 1/3（3 个词里均匀乱猜） | 1.099 |
+| 0.274（这个例子） | 1.294 |
+| 0.01 | 4.605 |
+
+这个例子的 loss（1.294）比均匀乱猜（1.099）还高：模型把最大的 logit 给了 word 0，而不是正确答案 word 2。
+
+在 $V$ 个词里均匀乱猜时 $p_t = 1/V$，loss 就是 $\\ln V$。对 GPT-2 来说，$\\ln 50{,}304 \\approx 10.83$。如果模型初始的 logits 都很小（比如 GPT-2 用 $\\mathcal{N}(0, 0.02)$ 初始化），训练刚开始时 loss 就在这个值附近。
+
+## 直接从 logits 算
+
+把 softmax 代进 loss：
+
+$$
+\\text{loss} = -\\log \\frac{e^{z_t}}{S} = \\log S - z_t, \\qquad S = \\sum_j e^{z_j}
+$$
+
+代入例子：$\\ln 3.6487 - 0 = 1.2944$，结果一样。
+
+PyTorch 的 \`F.cross_entropy\` 接收原始 logits，按这种形式（log-sum-exp）计算，不会先算出 $p$ 再取 log。很小的概率在浮点数里可能被舍入成 0，而 $\\log 0 = -\\infty$；log-sum-exp 的写法避开了这个问题。所以模型传给 \`F.cross_entropy\` 的是 logits，不是概率。
+
+## 对 logits 的梯度：$p - y$
+
+反向传播就是从这个梯度开始的，所以值得推一遍。从 $\\text{loss} = \\log S - z_t$ 出发，对某一个 logit $z_i$ 分别求两项的导数。
+
+**第一项 $\\log S$。** 用链式法则：$\\log$ 的导数是 $1/S$；$S$ 里只有 $e^{z_i}$ 这一项含 $z_i$：
+
+$$
+\\frac{\\partial \\log S}{\\partial z_i} = \\frac{1}{S} \\cdot e^{z_i} = p_i
+$$
+
+结果正好是 softmax 的定义。
+
+**第二项 $-z_t$。** 它只和正确答案的 logit 有关：
+
+$$
+\\frac{\\partial (-z_t)}{\\partial z_i} = \\begin{cases} -1 & i = t \\\\ 0 & i \\ne t \\end{cases} \\;=\\; -y_i
+$$
+
+**两项相加：**
+
+$$
+\\frac{\\partial\\, \\text{loss}}{\\partial z_i} = p_i - y_i
+$$
+
+代入例子：
+
+\`\`\`text
+p     = [0.452, 0.274,  0.274]
+y     = [0,     0,      1    ]
+p − y = [0.452, 0.274, -0.726]
+\`\`\`
+
+在 PyTorch 里用两种方法核对：一是 autograd，二是把每个 logit 加 0.001，看 loss 变化了多少。
+
+\`\`\`text
+autograd z.grad                  = [ 0.4519,  0.2741, -0.7259]
+logit 0 加 0.001：变化 / 0.001   =   0.4518
+logit 1 加 0.001：变化 / 0.001   =   0.2741
+logit 2 加 0.001：变化 / 0.001   =  -0.7260
+\`\`\`
+
+这个梯度的作用（更新时减去梯度）：
+
+- **错误的词**梯度是 $+p_i$，所以 logit **下降**。错误词占的概率越多，被压得越狠。
+- **正确的词**梯度是 $p_t - 1$，总是负数，所以 logit **上升**。$p_t$ 离 1 越远，往上推得越狠。
+- 当 $p = y$（正确答案概率为 1）时，梯度为 0，不再更新。
+
+梯度这么简单，是因为 softmax 里的 $\\exp$ 和 cross-entropy 里的 $\\log$ 求导时互相抵消了。这也是 PyTorch 把 softmax 和 cross-entropy 合成一个函数的原因之一。
+
+## 在 GPT-2 里：从 $(B, T, V)$ 的 logits 到一个数
+
+模型用一行代码算 loss：
+
+\`\`\`python
+loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+\`\`\`
+
+### targets 就是输入往后错一位
+
+每个位置的正确答案是紧跟在它后面的那个 token。\`get_batch\` 就是这样构造 \`y\` 的：
+
+\`\`\`text
+一段 token：  [464, 3290, 3332, 319, 262]     （编号是随便写的）
+
+idx (x)     = [464, 3290, 3332, 319]     喂给模型
+targets (y) = [3290, 3332, 319, 262]     每个位置的下一个 token
+\`\`\`
+
+所以形状是：
+
+- **Logits**（softmax 之前的原始分数）：$(B, T, V)$
+- **Targets**（真实的 token 编号，不是 one-hot）：$(B, T)$
+
+其中 $B$ 是 batch size，$T$ 是序列长度，$V$ 是词表大小。
+
+### 展平：\`.view(-1, V)\` 和 \`.view(-1)\`
+
+\`F.cross_entropy\` 要求：
+
+- **Input：** 2 维张量 $(N, C)$：$N$ 个样本，每个样本对 $C$ 个类别打分。
+- **Target：** 1 维张量 $(N,)$，里面是整数类别索引。
+
+它不认识 $B$ 和 $T$，所以要把这两个维度合成一个：
+
+- \`logits.view(-1, V)\`：$(B, T, V) \\to (B \\times T, V)$。每一行是一个位置 $(b, t)$：模型在这里对整个词表的打分。
+- \`targets.view(-1)\`：$(B, T) \\to (B \\times T,)$。每一项是这一行对应的正确下一个 token 的编号。
+
+> batch 里的每个位置都变成一道独立的分类题，一共 $B \\times T$ 道。
+
+### 对所有位置取平均
+
+$B \\times T$ 行各算出一个 loss，$-\\log p_t$。默认（\`reduction='mean'\`）把它们平均成一个数。用 $B = 2$、$T = 4$、$V = 5$ 和随机 logits 在 PyTorch 里验证：
+
+\`\`\`text
+logits.view(-1, V).shape = (8, 5)
+targets.view(-1).shape   = (8,)
+
+8 个位置各自的 loss：
+[1.916, 1.822, 2.035, 3.344, 2.511, 1.021, 2.102, 0.378]
+
+平均                     = 1.8913
+F.cross_entropy 的结果   = 1.8913   ✓
+\`\`\`
+
+因为 loss 是平均值，每个位置的 logits 梯度也要除以 $B \\times T$：
+
+$$
+\\frac{\\partial\\, \\text{loss}}{\\partial\\, \\text{logits}[b, t]} = \\frac{p - y}{B \\times T}
+$$
+
+这样梯度的大小不会随 batch 变大而变大，换 batch size 时 learning rate 也不用跟着改。
+
+> 一个长度为 $T$ 的序列，一次 forward 就得到 $T$ 道"预测下一个词"的题：每个 token 都是训练信号。之所以能这样做，靠的是 [causal mask](#info:causal_mask_notes)：位置 $t$ 看不到它后面的 token，也就偷看不到自己的答案。
 
 ## 参考资料
 
@@ -7167,6 +7359,207 @@ $$
   &= (0.2966312, -0.2963911)
   \\end{aligned}
   $$
+`,
+  },
+  zero_grad_notes: {
+    title: "optimizer.zero_grad()",
+    md: `
+**为什么每一步训练都要先清空梯度。**
+
+## 它在训练循环里的位置
+
+训练循环每一步做 5 件事：
+
+\`\`\`python
+for step in range(max_steps):
+    x, y = dataloader.get_batch("train")    # 1. 取一个 batch
+    optimizer.zero_grad(set_to_none=True)   # 2. 清空上一步的梯度
+    _, loss = model(x, y)                   # 3. forward，算出 loss
+    loss.backward()                         # 4. backward，算出每个参数的梯度
+    torch.nn.utils.clip_grad_norm_(...)     #    （裁剪梯度）
+    optimizer.step()                        # 5. 用梯度更新参数
+\`\`\`
+
+这篇讲第 2 步。
+
+## 原因：PyTorch 的梯度是累加的，不是覆盖的
+
+\`backward()\` 算出梯度后，会**加到**参数的 \`.grad\` 上，而不是替换原来的值。
+
+用一个参数验证：$w = 2$，$\\text{loss} = (3w)^2$，所以 $\\frac{d\\,\\text{loss}}{dw} = 18w = 36$。
+
+\`\`\`text
+不清零，连续 backward 三次：
+step 0:  w.grad = 36
+step 1:  w.grad = 72     ← 36 + 36
+step 2:  w.grad = 108    ← 36 + 36 + 36
+
+把 w.grad 设回 None 再 backward：
+         w.grad = 36     ← 正确
+\`\`\`
+
+如果不清零，第 100 步用的梯度就是前 100 步梯度的总和，参数会被越推越远。
+
+## 为什么 PyTorch 要设计成累加
+
+在两种常见情况下，累加正是想要的行为：
+
+1. **一个参数被用了好几次。** [weight tying](#hover:weight_tying_notes) 就是这样：\`tok_emb.weight\` 在输入端和输出端各用了一次，两份梯度必须加在一起。累加正好做到这一点。
+2. **Gradient accumulation（梯度累积）。** GPU 放不下一个大 batch 时，可以把它拆成几个小 batch（micro-batch）。每个小 batch 都 \`backward()\` 一次但不清零，最后只 \`step()\` 一次，效果和用大 batch 训练一样。Karpathy 的 build-nanogpt 复现 GPT-2（124M）时，就是用这个方法凑出约 0.5M token 的 batch。
+
+\`\`\`python
+optimizer.zero_grad(set_to_none=True)
+for micro_step in range(grad_accum_steps):
+    x, y = dataloader.get_batch("train")
+    _, loss = model(x, y)
+    loss = loss / grad_accum_steps   # 让加起来的结果等于整个大 batch 的平均
+    loss.backward()                  # 梯度在 p.grad 里累加
+optimizer.step()
+\`\`\`
+
+> \`loss / grad_accum_steps\` 这一步不能省：每个小 batch 的 loss 已经是它自己那些 token 的平均，不除的话，累加出来的梯度会大 \`grad_accum_steps\` 倍。
+
+## \`set_to_none=True\` 是什么
+
+有两种清零方式：
+
+\`\`\`text
+set_to_none=False:  p.grad 填成全 0 的 tensor（还占着内存）
+set_to_none=True:   p.grad = None（释放内存）
+\`\`\`
+
+下一次 \`backward()\` 时，如果 \`.grad\` 是 \`None\`，PyTorch 会直接把新梯度写进去，不用先读一遍全 0 的 tensor 再相加，所以更省内存，也稍微快一点。从 PyTorch 2.0 开始，\`set_to_none=True\` 已经是默认值。
+
+> 有一点区别要注意：用 \`None\` 清零后，如果某个参数在下一步没有收到梯度，它的 \`.grad\` 会一直是 \`None\`，而不是全 0。optimizer 会跳过 \`.grad\` 为 \`None\` 的参数。
+`,
+  },
+  backward_notes: {
+    title: "loss.backward()",
+    md: `
+**\`loss.backward()\` 做了什么：一次反向传播，算出所有参数的梯度。**
+
+## \`backward()\` 只算梯度，\`step()\` 才更新参数
+
+\`backward()\` **不会**改任何 weight。它只算梯度，把结果存进每个参数的 \`.grad\`。下一行 \`optimizer.step()\` 读出 \`.grad\`，才去更新参数。
+
+\`\`\`python
+loss.backward()     # 只算梯度，结果存进 p.grad；weight 不变
+optimizer.step()    # 读出 p.grad，用它更新 weight
+\`\`\`
+
+用一个参数验证：$w = 2$，$\\text{loss} = (3w)^2$，梯度是 $18w = 36$。优化器用最简单的 SGD，\`lr = 0.01\`：
+
+\`\`\`text
+backward 之前:  w = 2.0    w.grad = None
+backward 之后:  w = 2.0    w.grad = 36      ← 梯度算出来了，w 没动
+step 之后:      w = 1.64   w.grad = 36      ← w 才变了：2 − 0.01 × 36 = 1.64
+\`\`\`
+
+所以 \`.grad\` 必须存下来：它就是 \`backward()\` 交给 \`step()\` 的结果。
+
+### 为什么要分成两步
+
+如果 \`backward()\` 算完梯度就顺手更新参数，下面这些事情都做不了：
+
+1. **先处理梯度，再更新参数。** 代码里 \`backward()\` 和 \`step()\` 之间有一行 \`clip_grad_norm_\`：它先看所有梯度合起来有多大，太大就整体缩小。这一步要等全部梯度都算完才能做。
+2. **Gradient accumulation。** 几个小 batch 各 \`backward()\` 一次，梯度先在 \`.grad\` 里累加，最后只 \`step()\` 一次。见 [zero_grad](#hover:zero_grad_notes)。
+3. **更新规则不止一种。** SGD 是 \`w = w − lr × grad\`；GPT-2 用的 AdamW 还会用到过去很多步梯度的平均值，再按每个参数的情况调整步长。\`backward()\` 只负责提供梯度，怎么用由你选的 optimizer 决定。
+
+所以每一步训练的分工是：
+
+\`\`\`text
+zero_grad()  清空 .grad
+backward()   算梯度，写进 .grad
+(clip)       调整 .grad
+step()       读 .grad，更新参数
+\`\`\`
+
+## 一次反向传播覆盖所有参数
+
+这份代码里，每个训练 step 只调用一次 \`loss.backward()\`，这一次就把**全部**约 1.24 亿个参数的 \`.grad\` 都填好。
+
+forward 时，PyTorch 会记下每一步运算，连成一张**计算图**：从 embedding 开始，经过 12 个 block、\`ln_f\`、\`lm_head\`，一直到 loss。\`backward()\` 从 loss 出发，沿着这张图**倒着走一遍**。每经过一层，就用链式法则把梯度往前传，同时把这一层参数的梯度算出来：
+
+\`\`\`text
+loss → lm_head → ln_f → block 12 → block 11 → ... → block 1 → pos_emb, tok_emb
+\`\`\`
+
+走完这一遍，每个参与了 forward 的参数都拿到了梯度，不需要每个参数单独 backward 一次。
+
+> 唯一一个 step 里 backward 好几次的情况是 gradient accumulation。即便如此，每次 backward 也都是一次算出所有参数的梯度，只是这几份梯度在 \`.grad\` 里累加，最后只 \`step()\` 一次。
+
+## 每一层做两件事
+
+反向传播时，每一层都会从它后面那一层收到一份梯度：**loss 对这一层输出的梯度**，记作 $\\frac{\\partial L}{\\partial y}$（上游梯度）。拿到它之后，这一层做两件事：
+
+\`\`\`text
+1. 算自己参数的梯度:   dL/dW, dL/db   → 存进 W.grad, b.grad
+2. 算对输入的梯度:     dL/dx          → 交给前一层，当作它的 dL/dy
+\`\`\`
+
+第 2 件事就是梯度能一层层往回传的原因：这一层的 $\\frac{\\partial L}{\\partial x}$，就是前一层的 $\\frac{\\partial L}{\\partial y}$。
+
+### 用一个 Linear 层算一遍
+
+\`nn.Linear(2, 3)\`：输入 2 维，输出 3 维，$y = x W^\\top + b$。
+
+\`\`\`text
+x = [1, 2]
+
+W = [[1, 0],      b = [0, 0, 0]
+     [0, 1],
+     [1, 1]]
+
+y = x @ W.T + b = [1, 2, 3]
+\`\`\`
+
+假设后面那一层传回来的上游梯度是：
+
+\`\`\`text
+dL/dy = [0.5, -1, 2]
+\`\`\`
+
+**第 1 件事：参数的梯度。** 每个输出 $y_i = x \\cdot W[i] + b_i$，所以：
+
+\`\`\`text
+dL/dW[i] = dL/dy[i] × x          （第 i 行 = 上游梯度的第 i 个数 × 输入）
+
+W.grad = [[ 0.5 × [1, 2]],   = [[ 0.5,  1],
+          [-1   × [1, 2]],      [-1,   -2],
+          [ 2   × [1, 2]]]      [ 2,    4]]
+
+b.grad = dL/dy = [0.5, -1, 2]    （b[i] 直接加到 y[i] 上，所以梯度原样传过来）
+\`\`\`
+
+**第 2 件事：输入的梯度。** $x$ 参与了每一个 $y_i$，所以它的梯度是每一行 $W[i]$ 按 $\\frac{\\partial L}{\\partial y_i}$ 加权求和：
+
+\`\`\`text
+dL/dx = 0.5 × W[0] + (−1) × W[1] + 2 × W[2]
+      = 0.5 × [1, 0] − [0, 1] + 2 × [1, 1]
+      = [2.5, 1]                 → 传给前一层
+\`\`\`
+
+> 多层串起来时，梯度会依次乘上每一层的 Jacobian，见[这个两层的例子](#hover:gradient_notes)。
+
+## 放到整个 GPT-2 里
+
+\`\`\`text
+loss
+ ↓ dL/dlogits = (p − y) / (B*T)        ← cross-entropy 那篇推过的
+lm_head:  算 W.grad，把 dL/dx 传给 ln_f
+ ↓
+ln_f:     算 γ.grad 和 β.grad，把 dL/dx 传给 block 12
+ ↓
+block 12 → block 11 → ... → block 1    每个内部的 Linear、LayerNorm 都做同样的两件事
+ ↓
+tok_emb, pos_emb:  只做第 1 件事（它们是第一层，前面没有层了）
+\`\`\`
+
+起点的梯度 $\\frac{(p - y)}{B \\times T}$ 在 [Cross Entropy](#hover:cross_entropy_notes) 里推导过。
+
+GELU、softmax、dropout 这类**没有参数**的层，只做第 2 件事：把梯度变换一下，继续往前传。
+
+> 前面 [weight tying](#hover:weight_tying_notes) 的例子其实已经用到了这两件事。它的"输出端梯度"是 \`lm_head\` 的第 1 件事（参数梯度）；"输入端梯度"是 \`lm_head\` 的第 2 件事：算出 $\\frac{\\partial L}{\\partial x}$，传回 embedding 的那一行。
 `,
   },
 };

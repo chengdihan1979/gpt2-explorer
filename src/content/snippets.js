@@ -11,54 +11,61 @@ class DataLoader:
         
         # at init load tokens from local file
         with open("input.txt", "r") as f:
-            text = f.read()
+            text = f.read()                   # str
         tokenizer = tiktoken.get_encoding("gpt2")
-        ids = tokenizer.encode(text) # return the token ids
-        ids = torch.tensor(ids, dtype=torch.long)
-        n = int((1.0 - val_fraction) * len(ids))
-        self.train_ids = ids[:n]
-        self.val_ids = ids[n:]
+        ids = tokenizer.encode(text) # return the token ids: list of N ints
+        ids = torch.tensor(ids, dtype=torch.long)    # (N,)
+        n = int((1.0 - val_fraction) * len(ids))     # int, 90% of N
+        self.train_ids = ids[:n]                     # (n,)
+        self.val_ids = ids[n:]                       # (N - n,)
         
     def get_batch(self, split: str):
-        data = self.train_ids if split == "train" else self.val_ids
+        data = self.train_ids if split == "train" else self.val_ids   # (n,)
         if len(data) <= self.block_size + 1:
             # pad by cycling if dataset is too small
             data = data.repeat((self.block_size * 2) // max(1, len(data)) + 1)
-        ix = torch.randint(len(data) - self.block_size - 1, (self.batch_size,))
-        x = torch.stack([data[i:i+self.block_size] for i in ix])
-        y = torch.stack([data[i+1:i+1+self.block_size] for i in ix])
-        return x, y
+        # B = batch_size = 4, T = block_size = 32
+        ix = torch.randint(len(data) - self.block_size - 1, (self.batch_size,))  # (B,) start positions
+        x = torch.stack([data[i:i+self.block_size] for i in ix])      # B pieces of (T,) -> (B, T)
+        y = torch.stack([data[i+1:i+1+self.block_size] for i in ix])  # (B, T), x shifted by one
+        return x, y                                                   # (B, T), (B, T)
         
 
 class GPT2(nn.Module):
     def __init__(self, vocab_size, n_layer, n_embd, n_head, max_toks, dropout=0.1):
         super().__init__()
-        self.tok_emb = nn.Embedding(vocab_size, n_embd)
-        self.pos_emb = nn.Embedding(max_toks, n_embd)
+        # V = vocab_size = 50304, C = n_embd = 768
+        self.tok_emb = nn.Embedding(vocab_size, n_embd)   # weight (V, C)
+        self.pos_emb = nn.Embedding(max_toks, n_embd)     # weight (1024, C)
         self.emb_drop = nn.Dropout(dropout) # embedding dropout
         self.blocks = nn.ModuleList([
             TransformerBlock(n_embd=n_embd, n_head=n_head, dropout=dropout)
             for _ in range(n_layer)
         ])
-        self.ln_f = nn.LayerNorm(n_embd)
-        self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
+        self.ln_f = nn.LayerNorm(n_embd)                  # weight (C,), bias (C,)
+        self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)  # weight (V, C)
         # weight tying: LM head shares weights with token embeddings
         self.lm_head.weight = self.tok_emb.weight
 
     # Dimension changes during forward
-    def forward(self, idx, targets=None):
+    # B = batch, T = sequence length, C = 768, V = 50304
+    def forward(self, idx, targets=None):    # idx: (B, T), targets: (B, T)
         B, T = idx.size()
-        pos = torch.arange(0, T, device=idx.device)
+        pos = torch.arange(0, T, device=idx.device)    # (T,) = [0, 1, ..., T-1]
+        # tok_emb(idx): (B, T, C)
+        # pos_emb(pos): (T, C) -> [None, :, :] -> (1, T, C)
+        # sum broadcasts over the batch -> (B, T, C)
         x = self.tok_emb(idx) + self.pos_emb(pos)[None, :, :]
-        x = self.emb_drop(x)
+        x = self.emb_drop(x)          # (B, T, C)
         for blk in self.blocks:
-            x = blk(x)
-        x = self.ln_f(x)
-        logits = self.lm_head(x)
+            x = blk(x)                # (B, T, C) -> (B, T, C)
+        x = self.ln_f(x)              # (B, T, C)
+        logits = self.lm_head(x)      # (B, T, C) @ (C, V) -> (B, T, V)
         loss = None
         if targets is not None:
+            # logits.view(-1, V): (B*T, V), targets.view(-1): (B*T,) -> loss: () scalar
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-        return logits, loss
+        return logits, loss           # (B, T, V), () scalar
 
 # ----- Simple training loop -----
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -71,13 +78,13 @@ val_fraction = 0.1
 dataloader = DataLoader(batch_size=batch_size, block_size=block_size, val_fraction=val_fraction)
 max_steps = 1000
 for step in range(max_steps):
-    x, y = dataloader.get_batch("train")
+    x, y = dataloader.get_batch("train")    # x: (4, 32), y: (4, 32)
     x, y = x.to(device), y.to(device)
-    optimizer.zero_grad(set_to_none=True)
-    _, loss = model(x, y)
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-    optimizer.step()
+    optimizer.zero_grad(set_to_none=True)   # every p.grad -> None
+    _, loss = model(x, y)                   # logits (4, 32, 50304), loss () scalar
+    loss.backward()                         # each p.grad gets the same shape as p
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # rescale all grads so total norm <= 1.0
+    optimizer.step()                        # each p updated in place, shape unchanged
     if step % 100 == 0:
         print(f"step {step} loss {loss.item():.4f}")
 `;

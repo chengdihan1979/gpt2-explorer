@@ -5055,4 +5055,207 @@ The original Transformer is post-LN: after every sublayer, $x$ itself is replace
 > 🆕 Modern models such as LLaMA keep this final norm but use RMSNorm instead of LayerNorm (no mean subtraction, no β).
 `,
   },
+  zero_grad_notes: {
+    title: "optimizer.zero_grad()",
+    md: `
+**Why every training step starts by clearing the gradients.**
+
+## Where it sits in the training loop
+
+Each step of the loop does five things:
+
+\`\`\`python
+for step in range(max_steps):
+    x, y = dataloader.get_batch("train")    # 1. get a batch
+    optimizer.zero_grad(set_to_none=True)   # 2. clear the previous step's gradients
+    _, loss = model(x, y)                   # 3. forward pass, compute the loss
+    loss.backward()                         # 4. backward pass, compute every parameter's gradient
+    torch.nn.utils.clip_grad_norm_(...)     #    (clip the gradients)
+    optimizer.step()                        # 5. update the parameters with the gradients
+\`\`\`
+
+This note is about step 2.
+
+## The reason: gradients accumulate, they are not overwritten
+
+\`backward()\` **adds** the new gradient to each parameter's \`.grad\`; it does not replace the old value.
+
+Check with one parameter: $w = 2$ and $\\text{loss} = (3w)^2$, so $\\frac{d\\,\\text{loss}}{dw} = 18w = 36$.
+
+\`\`\`text
+backward three times without clearing:
+step 0:  w.grad = 36
+step 1:  w.grad = 72     ← 36 + 36
+step 2:  w.grad = 108    ← 36 + 36 + 36
+
+set w.grad back to None, then backward:
+         w.grad = 36     ← correct
+\`\`\`
+
+Without clearing, the gradient used at step 100 would be the sum of the gradients from all 100 steps, and the parameters would be pushed further and further off.
+
+## Why PyTorch accumulates
+
+Accumulating is the behavior you want in two common cases:
+
+1. **One parameter is used more than once.** [Weight tying](#hover:weight_tying_notes) is an example: \`tok_emb.weight\` is used at the input and again at the output, and the two gradients have to be added. Accumulation does exactly that.
+2. **Gradient accumulation.** When a large batch does not fit on the GPU, split it into several micro-batches. Call \`backward()\` on each without clearing, then call \`step()\` once. The result is the same as training on the large batch. Karpathy's build-nanogpt reproduction of GPT-2 (124M) uses this to reach a batch of about 0.5M tokens.
+
+\`\`\`python
+optimizer.zero_grad(set_to_none=True)
+for micro_step in range(grad_accum_steps):
+    x, y = dataloader.get_batch("train")
+    _, loss = model(x, y)
+    loss = loss / grad_accum_steps   # so the sum equals the mean over the whole large batch
+    loss.backward()                  # gradients add up in p.grad
+optimizer.step()
+\`\`\`
+
+> The \`loss / grad_accum_steps\` matters: each micro-batch's loss is already a mean over its own tokens, so without the division the accumulated gradient would be \`grad_accum_steps\` times too large.
+
+## What \`set_to_none=True\` does
+
+There are two ways to clear:
+
+\`\`\`text
+set_to_none=False:  p.grad is filled with zeros (the tensor still takes memory)
+set_to_none=True:   p.grad = None (the memory is freed)
+\`\`\`
+
+On the next \`backward()\`, if \`.grad\` is \`None\`, PyTorch writes the new gradient straight in, instead of reading a tensor of zeros and adding to it. This saves memory and is slightly faster. Since PyTorch 2.0, \`set_to_none=True\` is the default.
+
+> One difference to be aware of: after clearing with \`None\`, a parameter that receives no gradient in the next step keeps \`.grad = None\`, not a tensor of zeros. Optimizers skip parameters whose \`.grad\` is \`None\`.
+`,
+  },
+  backward_notes: {
+    title: "loss.backward()",
+    md: `
+**What \`loss.backward()\` does: one backward pass that computes the gradient of every parameter.**
+
+## \`backward()\` computes gradients; \`step()\` updates parameters
+
+\`backward()\` does **not** change any weight. It only computes the gradients and stores them in each parameter's \`.grad\`. The next line, \`optimizer.step()\`, reads \`.grad\` and updates the parameters.
+
+\`\`\`python
+loss.backward()     # compute gradients, store them in p.grad; weights unchanged
+optimizer.step()    # read p.grad, update the weights
+\`\`\`
+
+Check with one parameter: $w = 2$, $\\text{loss} = (3w)^2$, so the gradient is $18w = 36$. The optimizer is plain SGD with \`lr = 0.01\`:
+
+\`\`\`text
+before backward:  w = 2.0    w.grad = None
+after backward:   w = 2.0    w.grad = 36      ← gradient computed, w unchanged
+after step:       w = 1.64   w.grad = 36      ← now w changes: 2 − 0.01 × 36 = 1.64
+\`\`\`
+
+So \`.grad\` has to be stored: it is how \`backward()\` hands its result to \`step()\`.
+
+### Why keep them as two separate steps
+
+If \`backward()\` updated the parameters right away, none of these would be possible:
+
+1. **Process the gradients before updating.** Between \`backward()\` and \`step()\` the code calls \`clip_grad_norm_\`: it measures how large all the gradients are together and scales them down if they are too large. That needs every gradient to be computed first.
+2. **Gradient accumulation.** Several micro-batches each call \`backward()\`, their gradients add up in \`.grad\`, and \`step()\` runs once. See [zero_grad](#hover:zero_grad_notes).
+3. **Different update rules.** SGD does \`w = w − lr × grad\`. AdamW, used for GPT-2, also uses running averages of past gradients and adapts the step size per parameter. \`backward()\` only provides the gradient; the optimizer you choose decides how to use it.
+
+So the work in each training step is split like this:
+
+\`\`\`text
+zero_grad()  clear .grad
+backward()   compute gradients, write them into .grad
+(clip)       adjust .grad
+step()       read .grad, update the parameters
+\`\`\`
+
+## One backward pass covers every parameter
+
+In this code each training step calls \`loss.backward()\` once, and that one call fills the \`.grad\` of **all** ~124M parameters.
+
+During the forward pass, PyTorch records every operation and links them into a **computation graph**, from the embeddings, through the 12 blocks, \`ln_f\` and \`lm_head\`, to the loss. \`backward()\` starts at the loss and walks this graph **once, in reverse**. At each layer it uses the chain rule to pass the gradient on, and computes that layer's parameter gradients along the way:
+
+\`\`\`text
+loss → lm_head → ln_f → block 12 → block 11 → ... → block 1 → pos_emb, tok_emb
+\`\`\`
+
+When the walk is done, every parameter that took part in the forward pass has its gradient. No parameter needs its own backward call.
+
+> The one case with several \`backward()\` calls per step is gradient accumulation. Even then, each call computes all parameters' gradients; the calls just add up in \`.grad\` before the single \`step()\`.
+
+## What each layer does: two things
+
+During the backward pass, each layer receives one gradient from the layer after it: the gradient of the loss with respect to **this layer's output**. Call it $\\frac{\\partial L}{\\partial y}$, the upstream gradient. With it, the layer does two things:
+
+\`\`\`text
+1. Gradients of its own parameters:  dL/dW, dL/db   → stored in W.grad, b.grad
+2. Gradient of its input:            dL/dx          → handed to the previous layer as its dL/dy
+\`\`\`
+
+Thing 2 is what lets the gradient travel back layer by layer: this layer's $\\frac{\\partial L}{\\partial x}$ is the previous layer's $\\frac{\\partial L}{\\partial y}$.
+
+### Worked example: one Linear layer
+
+\`nn.Linear(2, 3)\`: 2 inputs, 3 outputs, $y = x W^\\top + b$.
+
+\`\`\`text
+x = [1, 2]
+
+W = [[1, 0],      b = [0, 0, 0]
+     [0, 1],
+     [1, 1]]
+
+y = x @ W.T + b = [1, 2, 3]
+\`\`\`
+
+Suppose the layer after it hands back this upstream gradient:
+
+\`\`\`text
+dL/dy = [0.5, -1, 2]
+\`\`\`
+
+**Thing 1: the parameter gradients.** Each output is $y_i = x \\cdot W[i] + b_i$, so:
+
+\`\`\`text
+# row i = the i-th upstream number × the input
+dL/dW[i] = dL/dy[i] × x
+
+W.grad = [[ 0.5 × [1, 2]],   = [[ 0.5,  1],
+          [-1   × [1, 2]],      [-1,   -2],
+          [ 2   × [1, 2]]]      [ 2,    4]]
+
+# b[i] is added straight to y[i], so its gradient passes through unchanged
+b.grad = dL/dy = [0.5, -1, 2]
+\`\`\`
+
+**Thing 2: the input gradient.** $x$ feeds every $y_i$, so its gradient is the sum of the rows $W[i]$, weighted by $\\frac{\\partial L}{\\partial y_i}$:
+
+\`\`\`text
+dL/dx = 0.5 × W[0] + (−1) × W[1] + 2 × W[2]
+      = 0.5 × [1, 0] − [0, 1] + 2 × [1, 1]
+      = [2.5, 1]                 → passed to the previous layer
+\`\`\`
+
+> For a longer chain, where the gradient is multiplied by each layer's Jacobian in turn, see [this two-layer example](#hover:gradient_notes).
+
+## Across the whole of GPT-2
+
+\`\`\`text
+loss
+ ↓ dL/dlogits = (p − y) / (B*T)        ← derived in the cross-entropy note
+lm_head:  compute W.grad, pass dL/dx to ln_f
+ ↓
+ln_f:     compute γ.grad and β.grad, pass dL/dx to block 12
+ ↓
+block 12 → block 11 → ... → block 1    every Linear and LayerNorm inside does the same two things
+ ↓
+tok_emb, pos_emb:  only thing 1 (they are the first layer; nothing comes before them)
+\`\`\`
+
+The starting gradient $\\frac{(p - y)}{B \\times T}$ is derived in [Cross Entropy](#hover:cross_entropy_notes).
+
+Layers **without parameters**, such as GELU, softmax and dropout, only do thing 2: they transform the gradient and pass it on.
+
+> The [weight tying](#hover:weight_tying_notes) example already used both things. Its "output side" gradient is \`lm_head\`'s thing 1 (parameter gradient); its "input side" gradient is \`lm_head\`'s thing 2: the $\\frac{\\partial L}{\\partial x}$ that flows back to the embedding row.
+`,
+  },
 };
