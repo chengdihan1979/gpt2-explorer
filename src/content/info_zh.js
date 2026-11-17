@@ -7220,52 +7220,98 @@ step 10,000:  移动 η / 100
   rmsprop_notes: {
     title: "RMSProp",
     md: `
-**RMSProp** 为每个参数维护平方 gradient 的指数移动平均（EMA），并用这个平均值的 RMS（平方根）来缩放步长。
+**RMSProp** 保留了 Adagrad"每个参数自己的学习率"，但只对**最近**的梯度平方求平均，而不是把所有历史都加起来。
 
-## 它做了什么
+它解决的是 [Adagrad](#info:adagrad_notes) 的问题：Adagrad 的累加和只增不减，所以步子只会变小，过去的大梯度还会一直压着步子。（这个方法由 Geoffrey Hinton 在 2012 年的一次课上提出，没有正式发表过论文。）
+
+## 更新规则
+
+只改了累加器这一处。对每个参数 $i$：
 
 $$
 \\begin{aligned}
-s_t &= \\beta s_{t-1} + (1 - \\beta) (g_t \\odot g_t) \\\\
-\\theta_{t+1} &= \\theta_t - \\frac{\\eta}{\\sqrt{s_t} + \\epsilon}\\, g_t
+\\text{Adagrad:}\\quad & s_i \\leftarrow s_i + g_i^2 \\\\
+\\text{RMSProp:}\\quad & s_i \\leftarrow \\beta\\, s_i + (1 - \\beta)\\, g_i^2
 \\end{aligned}
 $$
 
-- $\\beta$ 是衰减率（例如 0.9）。
-- $s_t$ 是平方 gradient 的 EMA。
-- $g_t$ 是时刻 $t$ 的 gradient，$\\theta_t$ 是时刻 $t$ 的参数。
-- $\\eta$ 是学习率。
-- $\\epsilon$ 是一个小常数，用来避免除以零。
+更新式和 Adagrad 一样：
 
-## RMSProp 修正了什么（对比 Adagrad）
+$$
+\\theta_i \\leftarrow \\theta_i - \\frac{\\eta}{\\sqrt{s_i} + \\epsilon} \\cdot g_i
+$$
 
-Adagrad 会永远累加平方 gradient，所以每个参数的步长单调缩小（$\\sim 1/\\sqrt{t}$），在长时间训练中可能变得过小。
+- $g_i$ 是参数 $i$ 当前的梯度；$s_i$ 从 0 开始。
+- $\\beta$ 是衰减率，通常取 0.9。
+- $\\eta$ 是学习率；$\\epsilon$ 是一个很小的常数，防止除以 0。
+- 写成向量形式，累加器就是 $s \\leftarrow \\beta s + (1 - \\beta)(g \\odot g)$，其中 $\\odot$ 是逐元素相乘（见 [Adagrad](#info:adagrad_notes) note 里的解释）。
 
-RMSProp 用 EMA 取代了不断增长的累加和。这样可以防止学习率下降得太快，让算法在训练深度神经网络时更有效。
+### 现在 $s$ 的含义
 
-### 和 momentum 的类比
+新的累加器是一个**指数滑动平均**（EMA），和 [momentum](#info:sgd_momentum_notes) 用的是同一种平均：每一步保留 90% 的旧 $s$，再加上 10% 的新 $g^2$，所以越早的梯度每过一步就再乘一次 0.9，逐渐被遗忘。$\\beta = 0.9$ 时，$s$ 大约是最近 $\\frac{1}{1 - \\beta} = 10$ 个梯度平方的平均。
 
-我们可以像看待 SGD+momentum 与 SGD 的关系那样，看待 RMSProp 与 Adagrad 的关系：
+所以 $s$ 的含义变了：
 
-- **Adagrad → RMSProp：** 对平方 gradient 这个统计量使用 EMA（记忆），而不是不断增长的累加和。
-- **SGD → SGD+momentum：** 对 gradient 本身加上 EMA（记忆）。
+- **Adagrad：** $s$ 是"到目前为止一共累计了多少"，所以会一直变大。
+- **RMSProp：** $s$ 是"最近梯度的平方一般有多大"。梯度大小不变时，$s$ 也不变。
 
-但两者仍有一些关键区别：
+$\\sqrt{s}$ 就是最近梯度的**均方根**（root mean square，RMS）；用它去除梯度，这就是这个方法名字的由来。
 
-- **对什么做 EMA：** RMSProp = 平方 gradient。SGD+momentum = gradient。
-- **逐参数学习率：** RMSProp（和 Adagrad 一样）保留逐参数的自适应步长；SGD+momentum（和 SGD 一样）使用一个全局学习率（没有逐参数）。
-- **修正的失效模式：** Adagrad 的学习率在长时间训练中会衰减到接近零；RMSProp 避免了这一点。SGD 噪声大、走"之"字形；SGD+momentum 让它更平滑并加速。
+## 它修好了什么
 
-## 小数值例子
+### 效果 1 还在，"只会变小"没了
+
+梯度一直是 $g$ 时，$s$ 会稳定在 $g^2$，所以每一步走 $\\eta \\cdot \\frac{g}{|g|} = \\pm\\eta$：
+
+- 和 Adagrad 一样，步子和梯度的大小无关（Adagrad 的效果 1）。
+- 和 Adagrad 不同，步子**不会随时间缩小**：第 10000 步和第 100 步走得一样远。
+
+### 能跟上梯度大小的变化
+
+用 Adagrad 那个"被过去压住"的例子：前 100 步梯度是 10，从第 101 步起梯度变成 1。之后每一步走多远（单位是 $\\eta$）？
+
+\`\`\`text
+梯度变成 1 之后      Adagrad    RMSProp
+第  1 步              0.010      0.105
+第 10 步              0.010      0.168
+第 20 步              0.010      0.277
+第 30 步              0.010      0.439
+第 40 步              0.010      0.637
+第 60 步              0.010      0.921   → 接近 1
+\`\`\`
+
+- **Adagrad：** $s$ 里还存着前 100 步的大梯度，而且永远不会减少，所以步子一直卡在 $0.01\\eta$。
+- **RMSProp：** 过去的大梯度每步乘 0.9 逐渐被遗忘。几十步之后，$s$ 就反映出"现在梯度是 1"，步子恢复到接近 $\\eta$。
+
+训练 LLM 时，梯度的大小在训练的不同阶段确实会变，所以能跟上这种变化很重要。
+
+## 和 momentum 的类比
+
+RMSProp 和 Adagrad 的关系，就像 SGD with momentum 和 SGD 的关系：两者都是加了一个 EMA，也就是对最近几步的短期记忆。
+
+- **Adagrad → RMSProp：** 把永远增长的梯度平方累加和，换成梯度平方的 EMA。
+- **SGD → SGD with momentum：** 把当前梯度，换成梯度的 EMA。
+
+区别在于：
+
+- **对什么求平均：** RMSProp 平均的是梯度的**平方**（反映大小）；momentum 平均的是梯度本身（反映方向）。
+- **每个参数自己的学习率：** RMSProp 和 Adagrad 一样，每个参数有自己的学习率；momentum 和 SGD 一样，所有参数共用一个学习率。
+- **解决的问题：** RMSProp 解决 Adagrad 步子缩到接近 0 的问题；momentum 解决 SGD 路线嘈杂、走"之"字形的问题。
+
+[Adam](#info:adam_notes) 把两者结合在一起：梯度的 EMA（momentum），除以梯度平方的 EMA 的平方根（RMSProp）。
+
+## 数值例子
+
+和 [Adagrad](#info:adagrad_notes) note 用同一个问题，方便对比。
 
 ### 设置
 
 - **参数：** $\\theta = (\\theta_1, \\theta_2)$
-- **Loss：** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$
-- **Gradient：** $g = (g_1, g_2) = (\\theta_1 - 3,\\; \\theta_2 + 2)$
-- **RMSProp 累加器：** $s \\leftarrow \\beta s + (1 - \\beta) (g \\odot g)$，从 $s_0 = (0, 0)$ 开始
-- **更新规则：** $\\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{s} + \\epsilon}\\, g$
-- **超参数：** $\\eta = 0.1$，$\\beta = 0.9$，$\\epsilon = 10^{-8}$（非常小，数值上可以忽略）
+- **Loss：** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$，在 $\\theta = (3, -2)$ 处最小
+- **梯度：** $g = (g_1, g_2) = (\\theta_1 - 3,\\; \\theta_2 + 2)$
+- **累加器：** $s \\leftarrow \\beta s + (1 - \\beta) (g \\odot g)$，从 $s_0 = (0, 0)$ 开始
+- **更新：** $\\theta \\leftarrow \\theta - \\Delta$，其中 $\\Delta = \\eta_{\\text{eff}} \\cdot g$，$\\eta_{\\text{eff}} = \\frac{\\eta}{\\sqrt{s} + \\epsilon}$
+- **超参数：** $\\eta = 0.1$，$\\beta = 0.9$，$\\epsilon = 10^{-8}$（这里可以忽略）
 - **初始值：** $\\theta_0 = (0, 0)$
 
 ### 第 1 步
@@ -7274,8 +7320,10 @@ RMSProp 用 EMA 取代了不断增长的累加和。这样可以防止学习率�
 - $g_1 = (-3, 2)$
 - $s_1 = 0.9 \\cdot (0, 0) + (1 - 0.9) \\cdot \\big((-3, 2) \\odot (-3, 2)\\big) = (0.9, 0.4)$
 - $\\sqrt{s_1} = (0.9487, 0.6325) \\Rightarrow \\eta_{\\text{eff}} = (0.1054, 0.1581)$
-- 更新 $\\triangledown = \\eta_{\\text{eff}} \\cdot g_1 = (0.1054, 0.1581) \\cdot (-3, 2) = (-0.3162, 0.3162)$
-- $\\theta_1 = \\theta_0 - \\triangledown = (0, 0) - (-0.3162, 0.3162) = (0.3162, -0.3162)$
+- $\\Delta = \\eta_{\\text{eff}} \\cdot g_1 = (0.1054, 0.1581) \\cdot (-3, 2) = (-0.3162, 0.3162)$
+- $\\theta_1 = \\theta_0 - \\Delta = (0, 0) - (-0.3162, 0.3162) = (0.3162, -0.3162)$
+
+两个坐标都走了 $0.3162$：梯度分别是 $-3$ 和 $2$，走的距离却一样（效果 1）。但 $0.3162$ 是 $3.16\\eta$，比"正常"的步长 $\\eta = 0.1$ 大了三倍多。这就是下面要讲的起步问题。
 
 ### 第 2 步
 
@@ -7283,8 +7331,8 @@ RMSProp 用 EMA 取代了不断增长的累加和。这样可以防止学习率�
 - $g_2 = (0.3162 - 3,\\; -0.3162 + 2) = (-2.6838, 1.6838)$
 - $s_2 = 0.9 \\cdot (0.9, 0.4) + (1 - 0.9) \\cdot \\big((-2.6838, 1.6838) \\odot (-2.6838, 1.6838)\\big) = (1.5303, 0.6435)$
 - $\\sqrt{s_2} = (1.2370, 0.8022) \\Rightarrow \\eta_{\\text{eff}} = (0.0808, 0.1247)$
-- 更新 $\\triangledown = \\eta_{\\text{eff}} \\cdot g_2 = (0.0808, 0.1247) \\cdot (-2.6838, 1.6838) = (-0.2170, 0.2099)$
-- $\\theta_2 = \\theta_1 - \\triangledown = (0.3162, -0.3162) - (-0.2170, 0.2099) = (0.5332, -0.5261)$
+- $\\Delta = \\eta_{\\text{eff}} \\cdot g_2 = (0.0808, 0.1247) \\cdot (-2.6838, 1.6838) = (-0.2170, 0.2099)$
+- $\\theta_2 = \\theta_1 - \\Delta = (0.3162, -0.3162) - (-0.2170, 0.2099) = (0.5332, -0.5261)$
 
 ### 第 3 步
 
@@ -7292,47 +7340,152 @@ RMSProp 用 EMA 取代了不断增长的累加和。这样可以防止学习率�
 - $g_3 = (0.5332 - 3,\\; -0.5261 + 2) = (-2.4668, 1.4739)$
 - $s_3 = 0.9 \\cdot (1.5303, 0.6435) + (1 - 0.9) \\cdot \\big((-2.4668, 1.4739) \\odot (-2.4668, 1.4739)\\big) = (1.9858, 0.7964)$
 - $\\sqrt{s_3} = (1.4092, 0.8924) \\Rightarrow \\eta_{\\text{eff}} = (0.0710, 0.1121)$
-- 更新 $\\triangledown = \\eta_{\\text{eff}} \\cdot g_3 = (0.0710, 0.1121) \\cdot (-2.4668, 1.4739) = (-0.1751, 0.1652)$
-- $\\theta_3 = \\theta_2 - \\triangledown = (0.5332, -0.5261) - (-0.1751, 0.1652) = (0.7083, -0.6913)$
+- $\\Delta = \\eta_{\\text{eff}} \\cdot g_3 = (0.0710, 0.1121) \\cdot (-2.4668, 1.4739) = (-0.1751, 0.1652)$
+- $\\theta_3 = \\theta_2 - \\Delta = (0.5332, -0.5261) - (-0.1751, 0.1652) = (0.7083, -0.6913)$
+
+### 这个例子说明了什么
+
+- 第 1–3 步的步子在变小（$\\theta_1$：$0.316 \\to 0.217 \\to 0.175$），但原因不是像 Adagrad 那样 $s$ 只增不减。一是 $s$ 还在从 0 开始"热身"（见下一节）；二是 $\\theta$ 越来越接近最低点，梯度本身也在变小。
+- 和 Adagrad 一样，$\\theta_1$（梯度更大）的有效学习率更小，但它的实际步子并不更小。
+
+## 新问题：刚开始时步子太大
+
+$s$ 从 0 开始，第 1 步只加了 $(1 - \\beta) = 10\\%$ 的 $g^2$：
+
+\`\`\`text
+s = 0.1 × g²,   √s = 0.316 × |g|
+第 1 步走:  η × g / (0.316 |g|) = ±3.16 η      ← 是正常步长的 3 倍多
+\`\`\`
+
+这和 momentum"起步慢"是同一个原因：从 0 开始的 EMA，在最初几步里都偏小。在 momentum 里，偏小的平均值就是步子本身，所以步子一开始**太小**；在这里，它在**分母**上，所以步子一开始**太大**。$s$ 大约要 10 步以上才"热身"完毕。[Adam](#info:adam_notes) 用 "bias correction" 同时修正了这两个问题。
+
+## 在 PyTorch 里
+
+\`torch.optim.RMSprop(params, lr=0.01, alpha=0.99, eps=1e-8)\`：衰减率 $\\beta$ 在这里叫 \`alpha\`，默认值是 **0.99**（大约相当于最近 100 步的平均），而不是这篇 note 和 Hinton 课上用的 0.9。
 `,
   },
 
   adam_notes: {
     title: "Adam",
     md: `
-**Adam** 结合了 RMSProp 和 SGD+momentum 的优点。
+**Adam** 把前面两个想法结合在一起：[momentum](#info:sgd_momentum_notes)（梯度的平均）和 [RMSProp](#info:rmsprop_notes)（用梯度平方的平均给每个参数定步长）。它还修正了这两者共有的"起步问题"。
 
-## 它是什么
+## 更新规则
 
-- **RMSProp：** 追踪平方 gradient（它刻画了 gradient 的尺度），用来归一化步长。
-- **SGD+momentum：** 追踪 gradient 本身（它刻画了 gradient 的方向），用来平滑更新。
-
-Adam 把这两个想法合并到一条更新规则里：
+对每个参数，Adam 维护两个 EMA（指数滑动平均），都从 0 开始：
 
 $$
 \\begin{aligned}
 m_t &= \\beta_1 m_{t-1} + (1 - \\beta_1)\\, g_t && \\text{(EMA of gradients: momentum)} \\\\
-v_t &= \\beta_2 v_{t-1} + (1 - \\beta_2) (g_t \\odot g_t) && \\text{(EMA of squared gradients: RMS scaling)} \\\\
+v_t &= \\beta_2 v_{t-1} + (1 - \\beta_2)\\, g_t^2 && \\text{(EMA of squared gradients: RMSProp)} \\\\
 \\hat{m}_t &= \\frac{m_t}{1 - \\beta_1^t} && \\text{(bias correction)} \\\\
 \\hat{v}_t &= \\frac{v_t}{1 - \\beta_2^t} && \\text{(bias correction)} \\\\
-\\theta_{t+1} &= \\theta_t - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t && \\text{(adaptive step per parameter)}
+\\theta_{t} &= \\theta_{t-1} - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t && \\text{(update)}
 \\end{aligned}
 $$
 
-- $\\beta_1$ 和 $\\beta_2$ 分别是 momentum 系数和 RMS 缩放系数。
-- $\\epsilon$ 是一个小常数，用来避免除以零。
+- $g_t$ 是第 $t$ 步的梯度；参数是向量时，$g_t^2$ 指 $g_t \\odot g_t$（逐元素相乘，见 [Adagrad](#info:adagrad_notes)）。
+- $m_t$ 记录最近梯度的**方向**；$v_t$ 记录最近梯度的**大小**。
+- $\\beta_1$（通常 0.9）让 $m$ 大约覆盖最近 $\\frac{1}{1 - \\beta_1} = 10$ 步；$\\beta_2$（通常 0.999）让 $v$ 大约覆盖最近 1000 步。
+- $\\hat{m}_t$ 和 $\\hat{v}_t$ 是做了 bias correction 之后的版本，下面会解释。
+- $\\eta$ 是学习率；$\\epsilon$ 是一个很小的常数，防止除以 0。
 
-> 偏差修正（bias correction）解决的是 EMA（指数移动平均）有偏的问题。我们会在笔记最后讨论它。
+先不管 bias correction，更新量就是 $\\eta \\cdot \\frac{m}{\\sqrt{v}}$：momentum 的平均梯度，除以 RMSProp 的梯度均方根。
 
-## 小数值例子
+## 合在一起多了什么：梯度越乱，步子越小
+
+看比值 $\\frac{m}{\\sqrt{v}}$：分子是梯度的**平均值**，分母是梯度的**均方根**。
+
+**梯度方向一致**，比如一直是 1：
+
+\`\`\`text
+m ≈ 1,  √v ≈ 1   →  m/√v ≈ 1,   每步走 η
+\`\`\`
+
+**梯度方向乱跳**，比如 4、−2、4、−2……（平均值还是 1，但噪声很大）：
+
+\`\`\`text
+m ≈ 平均值       = 1
+v ≈ 平方的平均值 = (16 + 4) / 2 = 10,   √v ≈ 3.16
+m/√v ≈ 1 / 3.16 = 0.32,   每步只走 0.32 η
+\`\`\`
+
+正负来回跳时，它们在 $m$ 里互相抵消（这是 momentum 的作用），但 $v$ 里的平方不会抵消。所以梯度越不一致，$\\frac{m}{\\sqrt{v}}$ 越小，Adam 走得越谨慎；梯度越一致，就越接近全速 $\\eta$。
+
+可以把 $\\frac{m}{\\sqrt{v}}$ 理解成一个"信噪比"：这个方向有多可信。它的绝对值通常最多约为 1，所以 Adam 每一步的步长**最多大约是 $\\eta$**，不管梯度本身有多大。这也保留了 Adagrad 和 RMSProp"步长和梯度大小无关"的性质。
+
+## Bias correction
+
+### 问题：两个平均值都从 0 开始
+
+$m$ 和 $v$ 都从 0 开始，所以最初几步两者都偏小。这就是前面遇到过的起步问题：
+
+- 在 [momentum](#info:sgd_momentum_notes) 里，偏小的平均值就是步子本身，所以步子一开始**太小**。
+- 在 [RMSProp](#info:rmsprop_notes) 里，偏小的平均值在分母上，所以步子一开始**太大**。
+
+### 偏小多少
+
+假设梯度一直是 $g$，把 $m$ 展开：
+
+\`\`\`text
+m1 = 0.1 g
+m2 = 0.9 × 0.1 g + 0.1 g = 0.19 g
+m3 = 0.9 × 0.19 g + 0.1 g = 0.271 g
+...
+m_t = (1 − 0.9^t) × g
+\`\`\`
+
+一般地，$m_t = (1 - \\beta_1^t)\\, g$；同理 $v_t = (1 - \\beta_2^t)\\, g^2$。平均值正好偏小了 $(1 - \\beta^t)$ 这个比例。
+
+### 修正：除回去
+
+$$
+\\hat{m}_t = \\frac{m_t}{1 - \\beta_1^t}, \\qquad \\hat{v}_t = \\frac{v_t}{1 - \\beta_2^t}
+$$
+
+\`\`\`text
+第 1 步:  m̂ = 0.1 g / 0.1       = g      ✓
+          v̂ = 0.001 g² / 0.001  = g²     ✓
+\`\`\`
+
+随着 $t$ 变大，$\\beta^t$ 趋近 0，除数趋近 1，修正就自动消失了。有了修正，第 1 步正好走 $\\eta \\cdot \\frac{g}{|g|} = \\pm\\eta$。
+
+> 论文第 3 节对随时间变化的梯度做了推导：[Adam: A Method for Stochastic Optimization ↗](https://arxiv.org/pdf/1412.6980)。
+
+### 如果不修正
+
+梯度不变时，不修正的步长 $\\eta \\cdot \\frac{m_t}{\\sqrt{v_t}}$ 会被放大
+
+$$
+F_t = \\frac{1 - \\beta_1^t}{\\sqrt{1 - \\beta_2^t}}
+$$
+
+倍。$\\beta_1 = 0.9$、$\\beta_2 = 0.999$ 时：
+
+\`\`\`text
+step     1:  F = 3.16       (0.1 / √0.001)
+step     2:  F = 4.25
+step     3:  F = 4.95
+step     4:  F = 5.44
+step    12:  F = 6.57       ← 最大
+step   100:  F = 3.24
+step  1000:  F = 1.26
+step  3000:  F = 1.03
+\`\`\`
+
+$m$（10 步平均）热身很快，但 $v$（1000 步平均）要几千步才热身完毕，在此之前步子一直偏大，最多大到 6.6 倍。训练刚开始时参数是随机的，梯度本来就大，这时步子再放大好几倍，很容易让训练发散。
+
+## 数值例子
+
+和 [Adagrad](#info:adagrad_notes)、[RMSProp](#info:rmsprop_notes) note 用同一个问题。
 
 ### 设置
 
 - **参数：** $\\theta = (\\theta_1, \\theta_2)$
-- **Loss：** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$
-- **Gradient：** $g = (g_1, g_2) = (\\theta_1 - 3,\\; \\theta_2 + 2)$
-- **更新规则：** $\\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t$
-- **超参数：** $\\eta = 0.1$，$\\beta_1 = 0.9$，$\\beta_2 = 0.999$，$\\epsilon = 10^{-8}$（非常小，数值上可以忽略）
+- **Loss：** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$，在 $\\theta = (3, -2)$ 处最小
+- **梯度：** $g = (g_1, g_2) = (\\theta_1 - 3,\\; \\theta_2 + 2)$
+- **更新：** $\\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t$
+- **超参数：** $\\eta = 0.1$，$\\beta_1 = 0.9$，$\\beta_2 = 0.999$，$\\epsilon = 10^{-8}$（这里可以忽略）
 - **初始值：** $\\theta_0 = (0, 0)$，$m_0 = (0, 0)$，$v_0 = (0, 0)$
 
 ### 第 1 步
@@ -7341,7 +7494,7 @@ $$
 - $g_1 = (-3, 2)$
 - $m_1 = 0.9 \\cdot (0, 0) + (1 - 0.9) \\cdot (-3, 2) = (-0.3, 0.2)$
 - $v_1 = 0.999 \\cdot (0, 0) + (1 - 0.999) \\cdot \\big((-3, 2) \\odot (-3, 2)\\big) = (0.009, 0.004)$
-- **偏差修正：**
+- **Bias correction：**
 
   $$
   \\begin{aligned}
@@ -7356,13 +7509,15 @@ $$
   \\theta_1 = \\theta_0 - \\frac{\\eta}{\\sqrt{\\hat{v}_1} + \\epsilon}\\, \\hat{m}_1 = (0, 0) - \\frac{0.1}{\\sqrt{(9, 4)}} \\cdot (-3, 2) = (0.1, -0.1)
   $$
 
+修正之后，$\\hat{m}_1$ 和 $\\hat{v}_1$ 正好是 $g_1$ 和 $g_1^2$，所以两个坐标都正好走了 $\\eta = 0.1$。如果不修正，它们会走 $3.16 \\times 0.1 = 0.316$，和 RMSProp 例子里第 1 步一样偏大。
+
 ### 第 2 步
 
 - $\\theta_1 = (0.1, -0.1)$
 - $g_2 = (0.1 - 3,\\; -0.1 + 2) = (-2.9, 1.9)$
 - $m_2 = 0.9 \\cdot (-0.3, 0.2) + (1 - 0.9) \\cdot (-2.9, 1.9) = (-0.56, 0.37)$
 - $v_2 = 0.999 \\cdot (0.009, 0.004) + (1 - 0.999) \\cdot \\big((-2.9, 1.9) \\odot (-2.9, 1.9)\\big) = (0.017401, 0.007606)$
-- **偏差修正：**
+- **Bias correction：**
 
   $$
   \\begin{aligned}
@@ -7386,7 +7541,7 @@ $$
 - $g_3 = (0.1998973 - 3,\\; -0.1998335 + 2) = (-2.80010, 1.80017)$
 - $m_3 = 0.9 \\cdot (-0.56, 0.37) + (1 - 0.9) \\cdot (-2.80010, 1.80017) = (-0.78401, 0.513017)$
 - $v_3 = 0.999 \\cdot (0.017401, 0.007606) + (1 - 0.999) \\cdot \\big((-2.80010, 1.80017) \\odot (-2.80010, 1.80017)\\big) = (0.0252242, 0.010839)$
-- **偏差修正：**
+- **Bias correction：**
 
   $$
   \\begin{aligned}
@@ -7406,169 +7561,272 @@ $$
 
 ### 这个例子说明了什么
 
-这个例子展示了 Adam 如何结合 RMSProp 和 SGD+momentum 的优点，得到一个更有效的 optimizer：
+- **每一步两个坐标都走了约 $\\eta = 0.1$**：$\\theta_1$ 是 $0 \\to 0.1 \\to 0.2 \\to 0.3$，$\\theta_2$ 是 $0 \\to -0.1 \\to -0.2 \\to -0.3$。梯度分别是 $-3$ 和 $2$，步子却一样：步长和梯度大小无关。
+- **这里的梯度完全一致**（没有噪声），所以 $\\frac{\\hat{m}}{\\sqrt{\\hat{v}}} \\approx \\pm 1$，Adam 每步都走全速。如果梯度有噪声，步子会更小。
+- **bias correction** 让第 1 步正好是 $\\eta$，而不是 $3.16\\eta$。
 
-- **Momentum：** $\\hat{m}_t$ 是原始 gradient 的平滑版本，减少了噪声和"之"字形震荡。
-- **逐参数自适应：** $\\hat{v}_t$ 在不同坐标上取值不同，所以每个参数都有自己的有效步长 $\\frac{\\eta}{\\sqrt{\\hat{v}_{t,i}} + \\epsilon}$。
+## 在 PyTorch 里
 
-## 偏差修正（Bias correction）
+\`torch.optim.Adam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8)\`：\`betas\` 就是 $(\\beta_1, \\beta_2)$。bias correction 总是会做。
 
-Adam 维护以下两者的 **EMA（指数移动平均）**：
-
-- gradient，$m_t$（momentum），以及
-- 平方 gradient，$v_t$（RMS 缩放）。
-
-两个 EMA 都从零开始（$m_0 = 0$，$v_0 = 0$）。这会让估计值偏向零，而且在最初几步偏差很大，尤其是在常用的 $\\beta_1 = 0.9$、$\\beta_2 = 0.999$ 下。
-
-例如，对于一个恒定的 gradient $g$，第一步是：
-
-- $m_1 = \\beta_1 m_0 + (1 - \\beta_1)\\, g$（$m_1$ 从 $0.1g$ 开始），
-- $v_1 = \\beta_2 v_0 + (1 - \\beta_2)\\, g^2$（$v_1$ 从 $0.001g^2$ 开始）。
-
-所以如果没有偏差修正，第 1 步的分子只有预期值的 $0.1\\times$，分母只有预期值的 $\\sqrt{0.001} \\approx 0.0316\\times$。原始（未修正）的步长大小约为
-
-$$
-\\eta \\cdot \\frac{m_1}{\\sqrt{v_1}} = \\eta \\cdot \\frac{0.1g}{0.0316g} = \\eta \\cdot 3.16 = \\eta \\cdot F_1
-$$
-
-因此，在常用设置 $\\beta_1 = 0.9$、$\\beta_2 = 0.999$、$m_0 = 0$、$v_0 = 0$ 下：
-
-- $F_1 = 3.16$：第一步大了 3.16 倍。
-- 用类似的推理，可以得到 $F_2 = 4.25$、$F_3 = 4.95$、$F_4 = 5.44$。
-- 到 $t = 12$ 时达到最高点 $F_{12} = 6.568$，之后逐渐下降到 1。
-
-另一方面，有了偏差修正，$\\hat{m}_1 = g_1$，$\\hat{v}_1 = g_1^2$，所以 $\\frac{\\hat{m}_1}{\\sqrt{\\hat{v}_1}}$ 这一项对 $\\beta$ 的选择以及初始值 $m_0$、$v_0$ 都不那么敏感了。
-
-### 修正方法
-
-Adam 通过除以 $1 - \\beta^t$ 来修正：
-
-$$
-\\hat{m}_t = \\frac{m_t}{1 - \\beta_1^t}, \\qquad \\hat{v}_t = \\frac{v_t}{1 - \\beta_2^t}
-$$
-
-> 完整证明请参阅原论文第 3 节：[Adam: A Method for Stochastic Optimization ↗](https://arxiv.org/pdf/1412.6980)。
+这个网站的 GPT-2 代码用的是 [AdamW](#info:adamw_notes)（带解耦 weight decay 的 Adam），并且按照 GPT-3 的做法把 $\\beta_2$ 设成 0.95 而不是 0.999：$v$ 的平均窗口短一些，梯度大小变化时反应更快。见 [optimizer 总览](#info:optim_adamw_notes)。
 
 ## 参考资料
 
 1. **Adam: A Method for Stochastic Optimization**
 
-   Adam 的原始论文。
+   Kingma & Ba，2014。原始论文。
 
-   [Adam: A Method for Stochastic Optimization ↗](https://arxiv.org/pdf/1412.6980)
+   [arXiv:1412.6980 ↗](https://arxiv.org/pdf/1412.6980)
 
 2. **StackExchange 讨论**
 
-   关于 Adam 中偏差修正的讨论。
+   为什么 Adam 需要 bias correction。
 
-   [StackExchange 讨论 ↗](https://stats.stackexchange.com/questions/232741/why-is-it-important-to-include-a-bias-correction-term-for-the-adam-optimizer-for)
+   [StackExchange Discussion ↗](https://stats.stackexchange.com/questions/232741/why-is-it-important-to-include-a-bias-correction-term-for-the-adam-optimizer-for)
 `,
   },
 
   adamw_notes: {
     title: "AdamW",
     md: `
-**AdamW** = Adam（momentum + RMS 缩放 + 偏差修正）再加上单独施加的 **weight decay**。
+**AdamW** 就是 [Adam](#info:adam_notes) 加上 **weight decay（权重衰减）**，而且 decay 直接作用在权重上，不加进梯度里。名字里的 "W" 指的就是这种 decoupled（解耦的）**W**eight decay。这个网站的 GPT-2 代码用的就是它。
+
+## Weight decay 是什么
+
+每一步更新之前，先把每个权重缩小一点点：
+
+$$
+\\theta \\leftarrow (1 - \\eta \\lambda)\\, \\theta
+$$
+
+- $\\lambda$ 是衰减强度（这个网站的代码里是 0.1）；$\\eta$ 是学习率。
+- $\\eta = 0.1$、$\\lambda = 0.1$ 时，$1 - \\eta\\lambda = 0.99$：每一步先把每个权重乘以 0.99。
+
+**为什么要这样做？** 如果 loss 不需要某个权重，梯度就不会持续推它，decay 会慢慢把它拉向 0。如果某个权重对降低 loss 有用，梯度会一直把它推回去，它就能保持比较大的值。这样模型就不容易靠少数几个很大的权重去死记训练数据。这是一种**正则化（regularization）**。
+
+## 在 SGD 里，L2 正则化就是 weight decay
+
+另一种让权重保持较小的常见做法是 **L2 正则化**：在 loss 上加一个惩罚项，
+
+$$
+L_{\\text{total}} = L + \\frac{\\lambda}{2}\\, \\theta^2
+$$
+
+惩罚项的梯度是 $\\lambda \\theta$，所以 SGD 的更新变成
+
+$$
+\\theta \\leftarrow \\theta - \\eta\\, (g + \\lambda \\theta) = (1 - \\eta \\lambda)\\, \\theta - \\eta\\, g
+$$
+
+也就是"先缩小 $(1 - \\eta\\lambda)$ 倍，再走正常的一步"，和 weight decay 完全一样。在 SGD 里两者是同一件事，所以以前这两个名字一直混着用。
+
+## 在 Adam 里，L2 出了问题
+
+换成 Adam 以后，两者就**不一样**了。L2 的写法（\`torch.optim.Adam(weight_decay=...)\` 就是这样做的）是把 $\\lambda\\theta$ 加进梯度，再交给 Adam：
+
+\`\`\`text
+g' = g + λθ
+m 和 v 都用 g' 来算，最后走 η · m̂ / √v̂
+\`\`\`
+
+Adam 分不清 $g'$ 里哪部分来自 loss、哪部分是 decay，它把 $g'$ **整个**都除以 $\\sqrt{\\hat{v}}$。$\\sqrt{\\hat{v}}$ 是以前若干个 $g'$ 的均方根：大约是最近 $\\frac{1}{1 - \\beta_2} = 1000$ 个，不足 1000 步时就是到目前为止所有的（见 [Adam](#info:adam_notes)）。所以 decay 那部分也被缩放了：
+
+- **梯度大的参数：** $\\sqrt{\\hat{v}}$ 很大，decay 被除得几乎没了，**几乎不衰减**。
+- **梯度小的参数：** $\\sqrt{\\hat{v}}$ 很小，decay 反而被放大，**衰减得很猛**。
+
+### 例子：同一个 $\\lambda$，相差 100 倍
+
+两个参数 A 和 B，此刻都是 $\\theta = 1$；$\\eta = 0.01$，$\\lambda = 0.1$，所以 decay 给两者的梯度都加上 $\\lambda\\theta = 0.1$。A 自己的梯度在 $+10$ 和 $-10$ 之间来回跳；B 的在 $+0.01$ 和 $-0.01$ 之间来回跳。两者平均都是 0，也就是 loss 并不需要这两个权重，这正是 decay 应该把它们拉向 0 的情况。
+
+**第一步：$\\sqrt{\\hat{v}}$ 是多少？** 它是以前若干个 $g' = g + 0.1$ 的均方根：
+
+\`\`\`text
+A:  g' = 10.1, −9.9, 10.1, …    平方 102.01, 98.01   →  平均 100.01,  √v̂ ≈ 10
+B:  g' = 0.11, 0.09, 0.11, …    平方 0.0121, 0.0081  →  平均 0.0101,  √v̂ ≈ 0.1
+\`\`\`
+
+A 的 $g'$ 主要由它自己的梯度决定，多出来的 0.1 几乎看不出来。B 的 $g'$ 几乎全是 decay 那一项，它自己的梯度只是小小的抖动。
+
+**第二步：decay 那部分让 $\\theta$ 变了多少？** Adam 的一步是 $\\eta \\cdot \\hat{m} / \\sqrt{\\hat{v}}$，而 $\\hat{m}$ 是 $g'$ 的平均，所以 decay 那一项的贡献是 $\\eta \\lambda \\theta / \\sqrt{\\hat{v}}$：
+
+\`\`\`text
+A:  0.01 × 0.1 / 10   = 0.0001   →  每步缩小 0.01%
+B:  0.01 × 0.1 / 0.1  = 0.01     →  每步缩小 1%
+\`\`\`
+
+**第三步：和本来想要的比。** 设定 $\\lambda = 0.1$，本意是每步缩小 $\\eta\\lambda = 0.001$，也就是 0.1%：
+
+| | 本意（AdamW） | Adam + L2 |
+|---|---|---|
+| A（梯度大） | 0.1% | 0.01%，弱了 10 倍 |
+| B（梯度小） | 0.1% | 1%，强了 10 倍 |
+
+用的是同一个 $\\lambda$，实际衰减却差了 **100 倍**。原因只有一个：decay 也被除以了 $\\sqrt{\\hat{v}}$。
+
+**跑 200 步**（PyTorch 实测）：
+
+\`\`\`text
+                 A (梯度 ±10)    B (梯度 ±0.01)
+不加 decay          0.982            0.982
+Adam + L2           0.963            0.018     ← A 几乎没衰减，B 几乎到 0
+AdamW               0.804            0.804     ← 两个衰减得一样
+\`\`\`
+
+- **A：** 每步少 0.0001，200 步共少约 0.02：0.982 → 0.963。
+- **B：** 每步少约 0.01，大约 100 步就到了 0 附近。（$\\theta$ 变小以后，decay 那一项和 $\\sqrt{\\hat{v}}$ 也跟着变小，所以不会正好到 0。）
+- **AdamW：** 每步乘 $0.999$，$0.999^{200} \\approx 0.819$，所以两者都是 $0.982 \\times 0.819 \\approx 0.804$。
 
 ## 更新规则
 
+AdamW 算 $m_t$、$\\hat{m}_t$、$v_t$、$\\hat{v}_t$ 的方法和 [Adam](#info:adam_notes) 完全一样，用的是原本的梯度 $g_t$（不加 $\\lambda\\theta$）。只有最后一行不同：
+
 $$
 \\begin{aligned}
-m_t &= \\beta_1 m_{t-1} + (1 - \\beta_1)\\, g_t && \\text{(EMA of gradients: momentum)} \\\\
-v_t &= \\beta_2 v_{t-1} + (1 - \\beta_2) (g_t \\odot g_t) && \\text{(EMA of squared gradients: RMS scaling)} \\\\
-\\hat{m}_t &= \\frac{m_t}{1 - \\beta_1^t} && \\text{(bias correction)} \\\\
-\\hat{v}_t &= \\frac{v_t}{1 - \\beta_2^t} && \\text{(bias correction)} \\\\
-\\theta_t &= (1 - \\eta \\lambda)\\, \\theta_t && \\text{(decoupled weight decay)} \\\\
-\\theta_{t+1} &= \\theta_t - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t && \\text{(adaptive step per parameter)}
+\\text{Adam:}\\quad & \\theta_t = \\theta_{t-1} - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t \\\\
+\\text{AdamW:}\\quad & \\theta_t = (1 - \\eta \\lambda)\\, \\theta_{t-1} - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t
 \\end{aligned}
 $$
 
-- $\\beta_1$ 和 $\\beta_2$ 分别是 momentum 系数和 RMS 缩放系数。
-- $\\epsilon$ 是一个小常数，用来避免除以零。
-- $\\lambda$ 是 weight decay 的强度（例如 0.1）。
+decay 的 $(1 - \\eta\\lambda)$ 直接乘在权重上，不经过 $\\sqrt{\\hat{v}}$，所以不管梯度是什么样，每个参数都按同样的比例缩小。
 
-## 小数值例子
+## 数值例子
+
+和 [Adam](#info:adam_notes) note 用同一个问题，方便对比。
 
 ### 设置
 
 - **参数：** $\\theta = (\\theta_1, \\theta_2)$
-- **Loss：** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$
-- **Gradient：** $g = (g_1, g_2) = (\\theta_1 - 3,\\; \\theta_2 + 2)$
-- **更新规则：** $\\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t$
-- **超参数：** $\\eta = 0.1$，$\\beta_1 = 0.9$，$\\beta_2 = 0.999$，$\\epsilon = 10^{-8}$（非常小，数值上可以忽略），$\\lambda = 0.1$
+- **Loss：** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$，在 $\\theta = (3, -2)$ 处最小
+- **梯度：** $g = (g_1, g_2) = (\\theta_1 - 3,\\; \\theta_2 + 2)$
+- **更新：** $\\theta_t = (1 - \\eta\\lambda)\\, \\theta_{t-1} - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t$
+- **超参数：** $\\eta = 0.1$，$\\beta_1 = 0.9$，$\\beta_2 = 0.999$，$\\epsilon = 10^{-8}$（这里可以忽略），$\\lambda = 0.1$，所以衰减系数是 $1 - \\eta\\lambda = 0.99$
 - **初始值：** $\\theta_0 = (0, 0)$，$m_0 = (0, 0)$，$v_0 = (0, 0)$
 
 ### 第 1 步
 
 - $\\theta_0 = (0, 0)$
 - $g_1 = (-3, 2)$
-- $m_1 = 0.9 \\cdot (0, 0) + (1 - 0.9) \\cdot (-3, 2) = (-0.3, 0.2)$
-- $v_1 = 0.999 \\cdot (0, 0) + (1 - 0.999) \\cdot \\big((-3, 2) \\odot (-3, 2)\\big) = (0.009, 0.004)$
-- **偏差修正：**
+- $m_1 = 0.9 \\cdot (0, 0) + 0.1 \\cdot (-3, 2) = (-0.3, 0.2)$
+- $v_1 = 0.999 \\cdot (0, 0) + 0.001 \\cdot \\big((-3, 2) \\odot (-3, 2)\\big) = (0.009, 0.004)$
+- $\\hat{m}_1 = \\frac{(-0.3, 0.2)}{1 - 0.9} = (-3, 2)$，$\\quad \\hat{v}_1 = \\frac{(0.009, 0.004)}{1 - 0.999} = (9, 4)$，$\\quad \\sqrt{\\hat{v}_1} = (3, 2)$
+- **Decay：** $0.99 \\cdot (0, 0) = (0, 0)$
+- **Adam 的一步：** $0.1 \\cdot \\frac{(-3, 2)}{(3, 2)} = (-0.1, 0.1)$
+- $\\theta_1 = (0, 0) - (-0.1, 0.1) = (0.1, -0.1)$
 
-  $$
-  \\begin{aligned}
-  \\hat{m}_1 &= \\frac{m_1}{1 - \\beta_1^1} = \\frac{(-0.3, 0.2)}{1 - 0.9^1} = (-3, 2) \\\\
-  \\hat{v}_1 &= \\frac{v_1}{1 - \\beta_2^1} = \\frac{(0.009, 0.004)}{1 - 0.999^1} = (9, 4)
-  \\end{aligned}
-  $$
-
-- **衰减：** $\\theta_0 = (1 - \\eta \\lambda)\\, \\theta_0 = (1 - 0.1 \\cdot 0.1) \\cdot (0, 0) = (0, 0)$
-- **更新：**
-
-  $$
-  \\theta_1 = \\theta_0 - \\frac{\\eta}{\\sqrt{\\hat{v}_1} + \\epsilon}\\, \\hat{m}_1 = (0, 0) - \\frac{0.1}{\\sqrt{(9, 4)}} \\cdot (-3, 2) = (0.1, -0.1)
-  $$
+decay 这时还没起作用：$0.99 \\times 0 = 0$。第 1 步和 Adam 完全一样。
 
 ### 第 2 步
 
 - $\\theta_1 = (0.1, -0.1)$
 - $g_2 = (0.1 - 3,\\; -0.1 + 2) = (-2.9, 1.9)$
-- $m_2 = 0.9 \\cdot (-0.3, 0.2) + (1 - 0.9) \\cdot (-2.9, 1.9) = (-0.56, 0.37)$
-- $v_2 = 0.999 \\cdot (0.009, 0.004) + (1 - 0.999) \\cdot \\big((-2.9, 1.9) \\odot (-2.9, 1.9)\\big) = (0.017401, 0.007606)$
-- **偏差修正：**
-
-  $$
-  \\begin{aligned}
-  \\hat{m}_2 &= \\frac{m_2}{1 - \\beta_1^2} = \\frac{(-0.56, 0.37)}{1 - 0.9^2} = (-2.94737, 1.94737) \\\\
-  \\hat{v}_2 &= \\frac{v_2}{1 - \\beta_2^2} = \\frac{(0.017401, 0.007606)}{1 - 0.999^2} = (8.70485, 3.80490)
-  \\end{aligned}
-  $$
-
-- **衰减：** $\\theta_1 = (1 - \\eta \\lambda)\\, \\theta_1 = (1 - 0.1 \\cdot 0.1) \\cdot (0.1, -0.1) = (0.099, -0.099)$
-- **更新：**
-
-  $$
-  \\begin{aligned}
-  \\theta_2 &= \\theta_1 - \\frac{\\eta}{\\sqrt{\\hat{v}_2} + \\epsilon}\\, \\hat{m}_2 = (0.099, -0.099) - \\frac{0.1}{\\sqrt{(8.70485, 3.80490)}} \\cdot (-2.94737, 1.94737) \\\\
-  &= (0.1988973, -0.1988335)
-  \\end{aligned}
-  $$
+- $m_2 = 0.9 \\cdot (-0.3, 0.2) + 0.1 \\cdot (-2.9, 1.9) = (-0.56, 0.37)$
+- $v_2 = 0.999 \\cdot (0.009, 0.004) + 0.001 \\cdot \\big((-2.9, 1.9) \\odot (-2.9, 1.9)\\big) = (0.017401, 0.007606)$
+- $\\hat{m}_2 = \\frac{(-0.56, 0.37)}{1 - 0.9^2} = (-2.9474, 1.9474)$，$\\quad \\hat{v}_2 = \\frac{(0.017401, 0.007606)}{1 - 0.999^2} = (8.7049, 3.8049)$，$\\quad \\sqrt{\\hat{v}_2} = (2.9504, 1.9506)$
+- **Decay：** $0.99 \\cdot (0.1, -0.1) = (0.099, -0.099)$
+- **Adam 的一步：** $0.1 \\cdot \\frac{(-2.9474, 1.9474)}{(2.9504, 1.9506)} = (-0.0999, 0.0998)$
+- $\\theta_2 = (0.099, -0.099) - (-0.0999, 0.0998) = (0.1989, -0.1988)$
 
 ### 第 3 步
 
-- $\\theta_2 = (0.1988973, -0.1988335)$
-- $g_3 = (0.1988973 - 3,\\; -0.1988335 + 2) = (-2.80110, 1.80117)$
-- $m_3 = 0.9 \\cdot (-0.56, 0.37) + (1 - 0.9) \\cdot (-2.80110, 1.80117) = (-0.78411, 0.513117)$
-- $v_3 = 0.999 \\cdot (0.017401, 0.007606) + (1 - 0.999) \\cdot \\big((-2.80110, 1.80117) \\odot (-2.80110, 1.80117)\\big) = (0.0252298, 0.0108426)$
-- **偏差修正：**
+- $\\theta_2 = (0.1989, -0.1988)$
+- $g_3 = (0.1989 - 3,\\; -0.1988 + 2) = (-2.8011, 1.8012)$
+- $m_3 = 0.9 \\cdot (-0.56, 0.37) + 0.1 \\cdot (-2.8011, 1.8012) = (-0.7841, 0.5131)$
+- $v_3 = 0.999 \\cdot (0.017401, 0.007606) + 0.001 \\cdot \\big((-2.8011, 1.8012) \\odot (-2.8011, 1.8012)\\big) = (0.025230, 0.010843)$
+- $\\hat{m}_3 = \\frac{(-0.7841, 0.5131)}{1 - 0.9^3} = (-2.8934, 1.8934)$，$\\quad \\hat{v}_3 = \\frac{(0.025230, 0.010843)}{1 - 0.999^3} = (8.4183, 3.6178)$，$\\quad \\sqrt{\\hat{v}_3} = (2.9014, 1.9021)$
+- **Decay：** $0.99 \\cdot (0.1989, -0.1988) = (0.1969, -0.1968)$
+- **Adam 的一步：** $0.1 \\cdot \\frac{(-2.8934, 1.8934)}{(2.9014, 1.9021)} = (-0.0997, 0.0995)$
+- $\\theta_3 = (0.1969, -0.1968) - (-0.0997, 0.0995) = (0.2966, -0.2964)$
 
-  $$
-  \\begin{aligned}
-  \\hat{m}_3 &= \\frac{m_3}{1 - \\beta_1^3} = \\frac{(-0.78411, 0.513117)}{1 - 0.9^3} = (-2.893395, 1.89342) \\\\
-  \\hat{v}_3 &= \\frac{v_3}{1 - \\beta_2^3} = \\frac{(0.0252298, 0.0108426)}{1 - 0.999^3} = (8.418349, 3.617817)
-  \\end{aligned}
-  $$
+### 这个例子说明了什么
 
-- **衰减：** $\\theta_2 = (1 - \\eta \\lambda)\\, \\theta_2 = (1 - 0.1 \\cdot 0.1) \\cdot (0.1988973, -0.1988335) = (0.196908, -0.196845)$
-- **更新：**
+把 $\\theta_1$ 和同一个问题上的 Adam 对比：
 
-  $$
-  \\begin{aligned}
-  \\theta_3 &= \\theta_2 - \\frac{\\eta}{\\sqrt{\\hat{v}_3} + \\epsilon}\\, \\hat{m}_3 = (0.196908, -0.196845) - \\frac{0.1}{\\sqrt{(8.418349, 3.617817)}} \\cdot (-2.893395, 1.89342) \\\\
-  &= (0.2966312, -0.2963911)
-  \\end{aligned}
-  $$
+\`\`\`text
+          Adam      AdamW
+第 1 步   0.1000    0.1000
+第 2 步   0.1999    0.1989    ← 小了 0.001
+第 3 步   0.2996    0.2966    ← 小了 0.003
+\`\`\`
+
+- 差别就是 decay：每一步拿掉当前权重的 1%（$0.99 \\times 0.1 = 0.099$，第 2 步少了 0.001），这个效果会一步步累积。
+- Adam 那一步本身还是每步约 $\\eta = 0.1$，和 Adam 一样，因为喂给 $m$ 和 $v$ 的梯度里不含 decay。
+- 这里 decay 把 $\\theta$ 往 0 拉，也就是离最低点 $(3, -2)$ 更远了。在这个玩具问题里，每个权重都是需要的，所以 decay 只会拖后腿；它的好处要在真实模型里才体现出来，因为那里有很多权重是不需要的。
+
+## 在 PyTorch 和这个网站的 GPT-2 代码里
+
+\`torch.optim.AdamW(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01)\`。每一步先把每个权重乘以 $1 - \\eta\\lambda$（\`1 - lr * weight_decay\`），再走 Adam 的一步。
+
+### decay 实际有多强
+
+注意 $\\eta\\lambda$ 里的 $\\eta$：\`weight_decay=0.1\` 的意思**不是**"每步缩小 10%"。代码里 \`lr=3e-4\`，\`weight_decay=0.1\`：
+
+\`\`\`text
+η·λ = 0.0003 × 0.1 = 0.00003
+每步:  θ ← 0.99997 · θ          ← 每步只缩小 0.003%
+\`\`\`
+
+为了单独看 decay 的力量，假设某个权重**完全没有梯度**：这时 $m = 0$，Adam 那一步是 0，只剩 decay 在起作用。从 1 开始，$n$ 步之后就是 $0.99997^n$：
+
+\`\`\`text
+  1,000 步后:   0.970     ← 这个网站的代码 max_steps = 1000
+ 10,000 步后:   0.741
+ 50,000 步后:   0.223
+100,000 步后:   0.050
+\`\`\`
+
+快速估算：$0.99997^n \\approx e^{-0.00003\\, n}$。比如 10,000 步：$0.00003 \\times 10{,}000 = 0.3$，而 $e^{-0.3} \\approx 0.741$。大约 $1 / 0.00003 \\approx 33{,}000$ 步后，权重缩小到 $1/e \\approx 37\\%$。
+
+所以 weight decay 是一个很慢、很温和的力。它不会抹掉有用的权重，因为这些权重的梯度推力远远大于每步 0.003% 的拉力；它真正起作用的，是那些几万步都没被需要的权重。这个网站的训练只有 1000 步，decay 最多让权重缩小 3%；真正的 GPT 训练要跑几十万步。
+
+decay 乘了 $\\eta$，所以它也会跟着学习率变：如果用 LR schedule（GPT-3 用了先 warmup 再 cosine 下降），$\\eta$ 变小时 decay 也一起变弱。这个网站的代码没有 LR schedule（见 [optimizer 总览](#info:optim_adamw_notes)）。
+
+### 哪些参数做 decay
+
+代码按维度把参数分成两组：
+
+\`\`\`python
+decay    = [p for p in model.parameters() if p.dim() >= 2]
+no_decay = [p for p in model.parameters() if p.dim() < 2]
+\`\`\`
+
+以第 0 层为例：
+
+\`\`\`text
+做 decay (2D):
+  tok_emb.weight           (50304, 768)
+  pos_emb.weight           (1024, 768)
+  attn.c_attn.weight       (2304, 768)
+  attn.proj.weight         (768, 768)
+  mlp.fc_in.weight         (3072, 768)
+  mlp.fc_out.weight        (768, 3072)
+
+不做 decay (1D):
+  ln1.weight (γ), ln1.bias (β)     (768,)
+  ln2.weight (γ), ln2.bias (β)     (768,)
+  attn.c_attn.bias                 (2304,)
+  attn.proj.bias                   (768,)
+  mlp.fc_in.bias                   (3072,)
+  mlp.fc_out.bias                  (768,)
+\`\`\`
+
+整个模型统计下来：
+
+\`\`\`text
+做 decay:     50 个 tensor,  124,354,560 个参数   (99.9%)
+不做 decay:   98 个 tensor,      121,344 个参数   (0.1%)
+\`\`\`
+
+（因为 [weight tying](#info:weight_tying_notes)，\`lm_head.weight\` 和 \`tok_emb.weight\` 是同一个 tensor，只算一次。）
+
+- **LayerNorm 的 $\\gamma$ 和 $\\beta$：** 在 PyTorch 的 \`nn.LayerNorm\` 里，\`.weight\` 就是 $\\gamma$（初始化为 1），\`.bias\` 就是 $\\beta$（初始化为 0），对应 $y = \\gamma \\cdot \\hat{x} + \\beta$。$\\gamma$ 的"中性"值是 1，不是 0，把它往 0 拉只会把 LayerNorm 的输出越压越小，这是在破坏模型，而不是让它更简单。$\\beta$ 只做平移，往 0 拉也没有正则化的意义。
+- **Bias：** bias 是加上去的，不和输入相乘。模型"靠很大的权重死记数据"，靠的是那些和输入相乘的矩阵，不是 bias。而且 bias 总共只占 0.1%，对它们做 decay 几乎得不到好处。
+
+decay 的目标是那些**和输入相乘的大矩阵**（Linear 和 Embedding 的 weight），它们才是模型容量的来源。\`p.dim() >= 2\` 正好把它们和 bias、LayerNorm 的参数分开。这个做法来自 BERT，GPT-3、nanoGPT 等也都这样做。
+
+## 参考资料
+
+1. **Decoupled Weight Decay Regularization**（AdamW）。Loshchilov & Hutter，2017。[arXiv:1711.05101 ↗](https://arxiv.org/abs/1711.05101)
 `,
   },
   zero_grad_notes: {

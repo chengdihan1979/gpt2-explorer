@@ -4845,52 +4845,98 @@ step 101, gradient 1:           moves η × 1 / 100 = 0.01 η    ← held down b
   rmsprop_notes: {
     title: "RMSProp",
     md: `
-**RMSProp** keeps an exponential moving average (EMA) of each parameter's squared gradient and scales the step by the RMS (square root) of that average.
+**RMSProp** keeps Adagrad's per-parameter learning rate, but averages only the **recent** squared gradients instead of summing all of them.
 
-## What it does
+It fixes [Adagrad](#info:adagrad_notes)'s problem: Adagrad's sum only grows, so its steps only shrink, and large gradients from the past keep holding the steps down. (Proposed by Geoffrey Hinton in a 2012 lecture, never formally published.)
+
+## Update rule
+
+Only the accumulator changes. For each parameter $i$:
 
 $$
 \\begin{aligned}
-s_t &= \\beta s_{t-1} + (1 - \\beta) (g_t \\odot g_t) \\\\
-\\theta_{t+1} &= \\theta_t - \\frac{\\eta}{\\sqrt{s_t} + \\epsilon}\\, g_t
+\\text{Adagrad:}\\quad & s_i \\leftarrow s_i + g_i^2 \\\\
+\\text{RMSProp:}\\quad & s_i \\leftarrow \\beta\\, s_i + (1 - \\beta)\\, g_i^2
 \\end{aligned}
 $$
 
-- $\\beta$ is the decay rate (e.g., 0.9).
-- $s_t$ is the EMA of the squared gradient.
-- $g_t$ is the gradient at time $t$, and $\\theta_t$ is the parameter at time $t$.
-- $\\eta$ is the learning rate.
-- $\\epsilon$ is a small constant to avoid division by zero.
+The update is the same as Adagrad's:
 
-## What RMSProp fixes (vs. Adagrad)
+$$
+\\theta_i \\leftarrow \\theta_i - \\frac{\\eta}{\\sqrt{s_i} + \\epsilon} \\cdot g_i
+$$
 
-Adagrad sums squared gradients forever, so per-parameter step sizes shrink monotonically ($\\sim 1/\\sqrt{t}$) and can get too small in long runs.
+- $g_i$ is the current gradient of parameter $i$; $s_i$ starts at 0.
+- $\\beta$ is the decay rate, usually 0.9.
+- $\\eta$ is the learning rate; $\\epsilon$ is a tiny constant that prevents division by zero.
+- In vector form the accumulator is $s \\leftarrow \\beta s + (1 - \\beta)(g \\odot g)$, where $\\odot$ is element-wise multiplication (explained in the [Adagrad](#info:adagrad_notes) note).
 
-RMSProp replaces the forever-growing sum with an EMA. This prevents the learning rate from decreasing too quickly, making the algorithm more effective in training deep neural networks.
+### What $s$ means now
 
-### An analogy with momentum
+The new accumulator is an **exponential moving average** (EMA), the same kind of average [momentum](#info:sgd_momentum_notes) uses: each step keeps 90% of the old $s$ and adds 10% of the new $g^2$, so older gradients fade by a factor 0.9 per step. With $\\beta = 0.9$, $s$ is roughly the average of the last $\\frac{1}{1 - \\beta} = 10$ squared gradients.
 
-We can think of RMSProp vs. Adagrad the way we think of SGD+momentum vs. SGD:
+So $s$ changes meaning:
 
-- **Adagrad → RMSProp:** use an EMA (memory) of the squared gradient statistic instead of the forever-growing sum.
-- **SGD → SGD+momentum:** add an EMA (memory) of the gradient itself.
+- **Adagrad:** $s$ is "how much in total so far", so it keeps growing.
+- **RMSProp:** $s$ is "how large the squared gradients have been recently". If the gradient size stays the same, $s$ stays the same.
 
-But there are still some key differences:
+$\\sqrt{s}$ is then the **root mean square** (RMS) of the recent gradients; dividing the gradient by it gives the method its name.
 
-- **What gets the EMA:** RMSProp = squared gradients. SGD+momentum = gradients.
-- **Per-parameter LR:** RMSProp (like Adagrad) keeps per-parameter adaptive step sizes; SGD+momentum (like SGD) uses one global LR (no per-parameter).
-- **Failure mode fixed:** Adagrad's LR decays to near zero on long runs; RMSProp avoids that. SGD is noisy/zig-zaggy; SGD+momentum smooths and accelerates it.
+## What it fixes
 
-## Tiny numeric example
+### Effect 1 is kept; the shrinking is gone
+
+With a constant gradient $g$, $s$ settles at $g^2$, so each step moves $\\eta \\cdot \\frac{g}{|g|} = \\pm\\eta$:
+
+- As in Adagrad, the step size does not depend on how large the gradient is (Adagrad's Effect 1).
+- Unlike Adagrad, the step **does not shrink over time**: step 10,000 moves as far as step 100.
+
+### It follows changes in gradient size
+
+Adagrad's "held down by the past" case: the gradient is 10 for the first 100 steps, then 1 from step 101 on. How far does each step move afterwards (in units of $\\eta$)?
+
+\`\`\`text
+steps after the switch    Adagrad    RMSProp
+         1                 0.010      0.105
+        10                 0.010      0.168
+        20                 0.010      0.277
+        30                 0.010      0.439
+        40                 0.010      0.637
+        60                 0.010      0.921   → approaches 1
+\`\`\`
+
+- **Adagrad:** $s$ still holds the 100 large gradients and never lets them go, so the step stays stuck at $0.01\\eta$.
+- **RMSProp:** the old large gradients fade by a factor 0.9 per step. After a few dozen steps $s$ reflects "the gradient is now 1", and the step recovers to nearly $\\eta$.
+
+In LLM training the size of the gradients does change between phases of training, so being able to follow it matters.
+
+## An analogy with momentum
+
+RMSProp relates to Adagrad the way SGD with momentum relates to SGD: both add an EMA, a short memory of recent steps.
+
+- **Adagrad → RMSProp:** replace the forever-growing sum of squared gradients with an EMA of squared gradients.
+- **SGD → SGD with momentum:** replace the current gradient with an EMA of gradients.
+
+The differences:
+
+- **What gets averaged:** RMSProp averages **squared** gradients (their size); momentum averages the gradients themselves (their direction).
+- **Per-parameter learning rate:** RMSProp, like Adagrad, gives each parameter its own; momentum, like SGD, uses one learning rate for all.
+- **Problem fixed:** RMSProp fixes Adagrad's steps shrinking toward zero; momentum fixes SGD's noisy, zigzag path.
+
+[Adam](#info:adam_notes) combines the two: an EMA of the gradients (momentum) divided by the root of an EMA of the squared gradients (RMSProp).
+
+## Worked example
+
+The same problem as in the [Adagrad](#info:adagrad_notes) note, so the two can be compared.
 
 ### Setup
 
 - **Parameters:** $\\theta = (\\theta_1, \\theta_2)$
-- **Loss:** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$
+- **Loss:** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$, smallest at $\\theta = (3, -2)$
 - **Gradients:** $g = (g_1, g_2) = (\\theta_1 - 3,\\; \\theta_2 + 2)$
-- **RMSProp accumulator:** $s \\leftarrow \\beta s + (1 - \\beta) (g \\odot g)$, starting from $s_0 = (0, 0)$
-- **Update rule:** $\\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{s} + \\epsilon}\\, g$
-- **Hyperparameters:** $\\eta = 0.1$, $\\beta = 0.9$, $\\epsilon = 10^{-8}$ (tiny, so numerically negligible)
+- **Accumulator:** $s \\leftarrow \\beta s + (1 - \\beta) (g \\odot g)$, starting from $s_0 = (0, 0)$
+- **Update:** $\\theta \\leftarrow \\theta - \\Delta$, with $\\Delta = \\eta_{\\text{eff}} \\cdot g$ and $\\eta_{\\text{eff}} = \\frac{\\eta}{\\sqrt{s} + \\epsilon}$
+- **Hyperparameters:** $\\eta = 0.1$, $\\beta = 0.9$, $\\epsilon = 10^{-8}$ (negligible here)
 - **Init:** $\\theta_0 = (0, 0)$
 
 ### Step 1
@@ -4899,8 +4945,10 @@ But there are still some key differences:
 - $g_1 = (-3, 2)$
 - $s_1 = 0.9 \\cdot (0, 0) + (1 - 0.9) \\cdot \\big((-3, 2) \\odot (-3, 2)\\big) = (0.9, 0.4)$
 - $\\sqrt{s_1} = (0.9487, 0.6325) \\Rightarrow \\eta_{\\text{eff}} = (0.1054, 0.1581)$
-- Update $\\triangledown = \\eta_{\\text{eff}} \\cdot g_1 = (0.1054, 0.1581) \\cdot (-3, 2) = (-0.3162, 0.3162)$
-- $\\theta_1 = \\theta_0 - \\triangledown = (0, 0) - (-0.3162, 0.3162) = (0.3162, -0.3162)$
+- $\\Delta = \\eta_{\\text{eff}} \\cdot g_1 = (0.1054, 0.1581) \\cdot (-3, 2) = (-0.3162, 0.3162)$
+- $\\theta_1 = \\theta_0 - \\Delta = (0, 0) - (-0.3162, 0.3162) = (0.3162, -0.3162)$
+
+Both coordinates moved $0.3162$, the same distance even though the gradients were $-3$ and $2$ (Effect 1). But $0.3162$ is $3.16\\eta$, more than three times the "normal" step $\\eta = 0.1$. This is the start-up problem described below.
 
 ### Step 2
 
@@ -4908,8 +4956,8 @@ But there are still some key differences:
 - $g_2 = (0.3162 - 3,\\; -0.3162 + 2) = (-2.6838, 1.6838)$
 - $s_2 = 0.9 \\cdot (0.9, 0.4) + (1 - 0.9) \\cdot \\big((-2.6838, 1.6838) \\odot (-2.6838, 1.6838)\\big) = (1.5303, 0.6435)$
 - $\\sqrt{s_2} = (1.2370, 0.8022) \\Rightarrow \\eta_{\\text{eff}} = (0.0808, 0.1247)$
-- Update $\\triangledown = \\eta_{\\text{eff}} \\cdot g_2 = (0.0808, 0.1247) \\cdot (-2.6838, 1.6838) = (-0.2170, 0.2099)$
-- $\\theta_2 = \\theta_1 - \\triangledown = (0.3162, -0.3162) - (-0.2170, 0.2099) = (0.5332, -0.5261)$
+- $\\Delta = \\eta_{\\text{eff}} \\cdot g_2 = (0.0808, 0.1247) \\cdot (-2.6838, 1.6838) = (-0.2170, 0.2099)$
+- $\\theta_2 = \\theta_1 - \\Delta = (0.3162, -0.3162) - (-0.2170, 0.2099) = (0.5332, -0.5261)$
 
 ### Step 3
 
@@ -4917,47 +4965,152 @@ But there are still some key differences:
 - $g_3 = (0.5332 - 3,\\; -0.5261 + 2) = (-2.4668, 1.4739)$
 - $s_3 = 0.9 \\cdot (1.5303, 0.6435) + (1 - 0.9) \\cdot \\big((-2.4668, 1.4739) \\odot (-2.4668, 1.4739)\\big) = (1.9858, 0.7964)$
 - $\\sqrt{s_3} = (1.4092, 0.8924) \\Rightarrow \\eta_{\\text{eff}} = (0.0710, 0.1121)$
-- Update $\\triangledown = \\eta_{\\text{eff}} \\cdot g_3 = (0.0710, 0.1121) \\cdot (-2.4668, 1.4739) = (-0.1751, 0.1652)$
-- $\\theta_3 = \\theta_2 - \\triangledown = (0.5332, -0.5261) - (-0.1751, 0.1652) = (0.7083, -0.6913)$
+- $\\Delta = \\eta_{\\text{eff}} \\cdot g_3 = (0.0710, 0.1121) \\cdot (-2.4668, 1.4739) = (-0.1751, 0.1652)$
+- $\\theta_3 = \\theta_2 - \\Delta = (0.5332, -0.5261) - (-0.1751, 0.1652) = (0.7083, -0.6913)$
+
+### What the example shows
+
+- The steps shrink over steps 1–3 ($0.316 \\to 0.217 \\to 0.175$ for $\\theta_1$), but not because $s$ only grows, as in Adagrad. $s$ is still warming up from 0 (see below), and the gradients themselves get smaller as $\\theta$ approaches the minimum.
+- As in Adagrad, $\\theta_1$ (larger gradients) gets the smaller effective learning rate, but its actual steps are not smaller.
+
+## The new problem: steps too large at the start
+
+$s$ starts at 0, and the first step adds only $(1 - \\beta) = 10\\%$ of $g^2$:
+
+\`\`\`text
+s = 0.1 × g²,   √s = 0.316 × |g|
+step 1 moves:  η × g / (0.316 |g|) = ±3.16 η      ← more than 3× the normal step
+\`\`\`
+
+This is the same cause as momentum's slow start: an EMA that starts at 0 is too small for the first several steps. In momentum the too-small average is the step itself, so the steps start **too small**; here it sits in the **denominator**, so the steps start **too large**. It takes roughly 10+ steps for $s$ to warm up. [Adam](#info:adam_notes) fixes both with its "bias correction".
+
+## In PyTorch
+
+\`torch.optim.RMSprop(params, lr=0.01, alpha=0.99, eps=1e-8)\`: the decay rate $\\beta$ is called \`alpha\`, and its default is **0.99** (an average over roughly the last 100 steps), not the 0.9 used in this note and in Hinton's lecture.
 `,
   },
 
   adam_notes: {
     title: "Adam",
     md: `
-**Adam** combines the best ideas of RMSProp and SGD+momentum.
+**Adam** combines the two ideas before it: [momentum](#info:sgd_momentum_notes) (an average of the gradients) and [RMSProp](#info:rmsprop_notes) (a per-parameter step size from an average of the squared gradients). It also fixes the start-up problem both of them have.
 
-## What it is
+## Update rule
 
-- **RMSProp:** keeps track of the squared gradient (which captures the scale of the gradient) to normalize the step size.
-- **SGD+momentum:** keeps track of the gradient itself (which captures the direction of the gradient) to smooth the updates.
-
-Adam combines these two ideas in a single update rule:
+For each parameter, Adam keeps two EMAs (exponential moving averages), both starting at 0:
 
 $$
 \\begin{aligned}
 m_t &= \\beta_1 m_{t-1} + (1 - \\beta_1)\\, g_t && \\text{(EMA of gradients: momentum)} \\\\
-v_t &= \\beta_2 v_{t-1} + (1 - \\beta_2) (g_t \\odot g_t) && \\text{(EMA of squared gradients: RMS scaling)} \\\\
+v_t &= \\beta_2 v_{t-1} + (1 - \\beta_2)\\, g_t^2 && \\text{(EMA of squared gradients: RMSProp)} \\\\
 \\hat{m}_t &= \\frac{m_t}{1 - \\beta_1^t} && \\text{(bias correction)} \\\\
 \\hat{v}_t &= \\frac{v_t}{1 - \\beta_2^t} && \\text{(bias correction)} \\\\
-\\theta_{t+1} &= \\theta_t - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t && \\text{(adaptive step per parameter)}
+\\theta_{t} &= \\theta_{t-1} - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t && \\text{(update)}
 \\end{aligned}
 $$
 
-- $\\beta_1$ and $\\beta_2$ are the momentum and RMS scaling coefficients, respectively.
-- $\\epsilon$ is a small constant to avoid division by zero.
+- $g_t$ is the gradient at step $t$; for vectors of parameters, $g_t^2$ means $g_t \\odot g_t$ (element-wise, see [Adagrad](#info:adagrad_notes)).
+- $m_t$ tracks the **direction** of recent gradients; $v_t$ tracks their **size**.
+- $\\beta_1$ (usually 0.9) averages $m$ over roughly the last $\\frac{1}{1 - \\beta_1} = 10$ steps; $\\beta_2$ (usually 0.999) averages $v$ over roughly the last 1000 steps.
+- $\\hat{m}_t$ and $\\hat{v}_t$ are the bias-corrected versions, explained below.
+- $\\eta$ is the learning rate; $\\epsilon$ is a tiny constant that prevents division by zero.
 
-> Bias correction fixes the biased EMA (exponential moving average) problem. We'll discuss it at the end of the notes.
+Leaving out the bias correction for a moment, the update is simply $\\eta \\cdot \\frac{m}{\\sqrt{v}}$: momentum's average gradient, divided by RMSProp's RMS of the gradient.
 
-## Tiny numeric example
+## What combining them adds: noisy gradients get smaller steps
+
+Look at the ratio $\\frac{m}{\\sqrt{v}}$: the numerator is the **average** gradient, the denominator is the **root mean square** of the gradient.
+
+**Consistent gradients**, e.g. always 1:
+
+\`\`\`text
+m ≈ 1,  √v ≈ 1   →  m/√v ≈ 1,   each step moves η
+\`\`\`
+
+**Noisy gradients**, e.g. 4, −2, 4, −2, … (the average is still 1, but with large noise):
+
+\`\`\`text
+m ≈ average            = 1
+v ≈ average of squares = (16 + 4) / 2 = 10,   √v ≈ 3.16
+m/√v ≈ 1 / 3.16 = 0.32,   each step moves only 0.32 η
+\`\`\`
+
+When the signs flip back and forth, they cancel in $m$ (the momentum part), but the squares in $v$ do not cancel. So the less consistent the gradients, the smaller $\\frac{m}{\\sqrt{v}}$, and the more cautiously Adam steps; the more consistent, the closer it gets to the full step $\\eta$.
+
+Think of $\\frac{m}{\\sqrt{v}}$ as a signal-to-noise ratio: how trustworthy the direction is. Its size is usually at most about 1, so each Adam step is **at most about $\\eta$**, however large the gradient itself is. This keeps the scale independence from Adagrad and RMSProp.
+
+## Bias correction
+
+### The problem: both averages start at 0
+
+$m$ and $v$ start at 0, so for the first several steps both are too small. This is the same start-up problem as before:
+
+- In [momentum](#info:sgd_momentum_notes), the too-small average is the step itself, so the steps start **too small**.
+- In [RMSProp](#info:rmsprop_notes), the too-small average is in the denominator, so the steps start **too large**.
+
+### How large the bias is
+
+Suppose the gradient is always $g$. Unroll $m$:
+
+\`\`\`text
+m1 = 0.1 g
+m2 = 0.9 × 0.1 g + 0.1 g = 0.19 g
+m3 = 0.9 × 0.19 g + 0.1 g = 0.271 g
+...
+m_t = (1 − 0.9^t) × g
+\`\`\`
+
+In general $m_t = (1 - \\beta_1^t)\\, g$, and in the same way $v_t = (1 - \\beta_2^t)\\, g^2$. The average is too small by exactly the factor $(1 - \\beta^t)$.
+
+### The fix: divide it back out
+
+$$
+\\hat{m}_t = \\frac{m_t}{1 - \\beta_1^t}, \\qquad \\hat{v}_t = \\frac{v_t}{1 - \\beta_2^t}
+$$
+
+\`\`\`text
+step 1:  m̂ = 0.1 g / 0.1       = g      ✓
+         v̂ = 0.001 g² / 0.001  = g²     ✓
+\`\`\`
+
+As $t$ grows, $\\beta^t$ goes to 0 and the divisor goes to 1, so the correction fades away by itself. With the correction, the very first step is exactly $\\eta \\cdot \\frac{g}{|g|} = \\pm\\eta$.
+
+> The paper's Section 3 derives this for gradients that change over time: [Adam: A Method for Stochastic Optimization ↗](https://arxiv.org/pdf/1412.6980).
+
+### Without the correction
+
+With a constant gradient, the uncorrected step $\\eta \\cdot \\frac{m_t}{\\sqrt{v_t}}$ is too large by the factor
+
+$$
+F_t = \\frac{1 - \\beta_1^t}{\\sqrt{1 - \\beta_2^t}}
+$$
+
+For $\\beta_1 = 0.9$, $\\beta_2 = 0.999$:
+
+\`\`\`text
+step     1:  F = 3.16       (0.1 / √0.001)
+step     2:  F = 4.25
+step     3:  F = 4.95
+step     4:  F = 5.44
+step    12:  F = 6.57       ← the peak
+step   100:  F = 3.24
+step  1000:  F = 1.26
+step  3000:  F = 1.03
+\`\`\`
+
+$m$ (10-step average) warms up quickly, but $v$ (1000-step average) takes thousands of steps, and until then the steps stay too large, by up to 6.6×. At the start of training the parameters are random and the gradients are large; steps several times too large then can easily make training diverge.
+
+## Worked example
+
+The same problem as in the [Adagrad](#info:adagrad_notes) and [RMSProp](#info:rmsprop_notes) notes.
 
 ### Setup
 
 - **Parameters:** $\\theta = (\\theta_1, \\theta_2)$
-- **Loss:** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$
+- **Loss:** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$, smallest at $\\theta = (3, -2)$
 - **Gradients:** $g = (g_1, g_2) = (\\theta_1 - 3,\\; \\theta_2 + 2)$
-- **Update rule:** $\\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t$
-- **Hyperparameters:** $\\eta = 0.1$, $\\beta_1 = 0.9$, $\\beta_2 = 0.999$, $\\epsilon = 10^{-8}$ (tiny, so numerically negligible)
+- **Update:** $\\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t$
+- **Hyperparameters:** $\\eta = 0.1$, $\\beta_1 = 0.9$, $\\beta_2 = 0.999$, $\\epsilon = 10^{-8}$ (negligible here)
 - **Init:** $\\theta_0 = (0, 0)$, $m_0 = (0, 0)$, $v_0 = (0, 0)$
 
 ### Step 1
@@ -4980,6 +5133,8 @@ $$
   $$
   \\theta_1 = \\theta_0 - \\frac{\\eta}{\\sqrt{\\hat{v}_1} + \\epsilon}\\, \\hat{m}_1 = (0, 0) - \\frac{0.1}{\\sqrt{(9, 4)}} \\cdot (-3, 2) = (0.1, -0.1)
   $$
+
+After correction, $\\hat{m}_1$ and $\\hat{v}_1$ are exactly $g_1$ and $g_1^2$, so both coordinates move exactly $\\eta = 0.1$. Without the correction they would move $3.16 \\times 0.1 = 0.316$, the same too-large first step as in the RMSProp example.
 
 ### Step 2
 
@@ -5031,60 +5186,27 @@ $$
 
 ### What the example shows
 
-This example shows how Adam combines the best ideas of RMSProp and SGD+momentum to get a more effective optimizer:
+- **Every step moves about $\\eta = 0.1$** in both coordinates: $\\theta_1$ goes $0 \\to 0.1 \\to 0.2 \\to 0.3$, and $\\theta_2$ goes $0 \\to -0.1 \\to -0.2 \\to -0.3$. The gradients are $-3$ and $2$, yet the steps are the same: the step size does not depend on how large the gradient is.
+- **The gradients here are perfectly consistent** (no noise), so $\\frac{\\hat{m}}{\\sqrt{\\hat{v}}} \\approx \\pm 1$ and Adam takes full steps. With noisy gradients the steps would be smaller.
+- **Bias correction** makes step 1 exactly $\\eta$ instead of $3.16\\eta$.
 
-- **Momentum:** $\\hat{m}_t$ is a smoothed version of the raw gradient, reducing noise and zigzagging.
-- **Per-parameter adaptivity:** $\\hat{v}_t$ differs across coordinates, so each parameter gets its own effective step size $\\frac{\\eta}{\\sqrt{\\hat{v}_{t,i}} + \\epsilon}$.
+## In PyTorch
 
-## Bias correction
+\`torch.optim.Adam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8)\`: \`betas\` is $(\\beta_1, \\beta_2)$. Bias correction is always applied.
 
-Adam keeps an **EMA (exponential moving average)** of:
-
-- the gradient, $m_t$ (momentum), and
-- the squared gradient, $v_t$ (RMS scaling).
-
-Both EMAs start at zero ($m_0 = 0$, $v_0 = 0$). This biases the estimates toward zero, and the bias is large in the early steps, especially with the common $\\beta_1 = 0.9$, $\\beta_2 = 0.999$.
-
-For example, for a constant gradient $g$, the first step would be:
-
-- $m_1 = \\beta_1 m_0 + (1 - \\beta_1)\\, g$ ($m_1$ starts at $0.1g$),
-- $v_1 = \\beta_2 v_0 + (1 - \\beta_2)\\, g^2$ ($v_1$ starts at $0.001g^2$).
-
-So without bias correction, step 1 would use $0.1\\times$ the intended numerator and $\\sqrt{0.001} \\approx 0.0316\\times$ the intended denominator. The raw (uncorrected) step magnitude scales like
-
-$$
-\\eta \\cdot \\frac{m_1}{\\sqrt{v_1}} = \\eta \\cdot \\frac{0.1g}{0.0316g} = \\eta \\cdot 3.16 = \\eta \\cdot F_1
-$$
-
-So with the common setup $\\beta_1 = 0.9$, $\\beta_2 = 0.999$, $m_0 = 0$, $v_0 = 0$:
-
-- $F_1 = 3.16$: the first step is too large by a factor of 3.16.
-- Using similar reasoning, we get $F_2 = 4.25$, $F_3 = 4.95$, $F_4 = 5.44$.
-- At $t = 12$, we reach a high of $F_{12} = 6.568$, and from there it descends to 1.
-
-On the other hand, with bias correction, $\\hat{m}_1 = g_1$ and $\\hat{v}_1 = g_1^2$, so the $\\frac{\\hat{m}_1}{\\sqrt{\\hat{v}_1}}$ term becomes less sensitive to the choice of $\\beta$ and to the initial values $m_0$ and $v_0$.
-
-### The fix
-
-Adam fixes this by dividing by $1 - \\beta^t$:
-
-$$
-\\hat{m}_t = \\frac{m_t}{1 - \\beta_1^t}, \\qquad \\hat{v}_t = \\frac{v_t}{1 - \\beta_2^t}
-$$
-
-> For the complete proof, refer to Section 3 of the original paper, [Adam: A Method for Stochastic Optimization ↗](https://arxiv.org/pdf/1412.6980).
+This site's GPT-2 code uses [AdamW](#info:adamw_notes) (Adam with decoupled weight decay) and sets $\\beta_2 = 0.95$ instead of 0.999, following GPT-3: a shorter average for $v$ reacts faster when gradient sizes change. See the [optimizer overview](#info:optim_adamw_notes).
 
 ## References
 
 1. **Adam: A Method for Stochastic Optimization**
 
-   Original paper of Adam.
+   Kingma & Ba, 2014. The original paper.
 
-   [Adam: A Method for Stochastic Optimization ↗](https://arxiv.org/pdf/1412.6980)
+   [arXiv:1412.6980 ↗](https://arxiv.org/pdf/1412.6980)
 
 2. **StackExchange discussion**
 
-   Discussion about the bias correction in Adam.
+   Why bias correction matters in Adam.
 
    [StackExchange Discussion ↗](https://stats.stackexchange.com/questions/232741/why-is-it-important-to-include-a-bias-correction-term-for-the-adam-optimizer-for)
 `,
@@ -5093,107 +5215,243 @@ $$
   adamw_notes: {
     title: "AdamW",
     md: `
-**AdamW** = Adam (momentum + RMS scaling + bias correction) plus **weight decay** applied separately.
+**AdamW** is [Adam](#info:adam_notes) plus **weight decay**, applied directly to the weights instead of being added to the gradient. The "W" stands for this decoupled **W**eight decay. It is the optimizer this site's GPT-2 code uses.
+
+## What weight decay is
+
+Before each update, shrink every weight a little:
+
+$$
+\\theta \\leftarrow (1 - \\eta \\lambda)\\, \\theta
+$$
+
+- $\\lambda$ is the weight decay strength (0.1 in this site's code); $\\eta$ is the learning rate.
+- With $\\eta = 0.1$ and $\\lambda = 0.1$, $1 - \\eta\\lambda = 0.99$: every step first multiplies each weight by 0.99.
+
+**Why do this?** A weight that the loss does not need gets no consistent push from the gradient, so the decay slowly pulls it toward 0. A weight that does help lower the loss keeps getting pushed back by its gradient and stays large. The model is therefore discouraged from relying on a few very large weights to memorize the training data. This is a form of **regularization**.
+
+## In SGD, L2 regularization is the same thing
+
+Another common way to keep weights small is **L2 regularization**: add a penalty to the loss,
+
+$$
+L_{\\text{total}} = L + \\frac{\\lambda}{2}\\, \\theta^2
+$$
+
+The penalty's gradient is $\\lambda \\theta$, so the SGD update becomes
+
+$$
+\\theta \\leftarrow \\theta - \\eta\\, (g + \\lambda \\theta) = (1 - \\eta \\lambda)\\, \\theta - \\eta\\, g
+$$
+
+That is "shrink by $(1 - \\eta\\lambda)$, then take the normal step": exactly weight decay. In SGD the two are the same, which is why the names were long used interchangeably.
+
+## In Adam, L2 goes wrong
+
+With Adam the two are **no longer the same**. The L2 way (what \`torch.optim.Adam(weight_decay=...)\` does) adds $\\lambda\\theta$ to the gradient and hands the result to Adam:
+
+\`\`\`text
+g' = g + λθ
+m and v are computed from g', and the step is η · m̂ / √v̂
+\`\`\`
+
+Adam cannot tell which part of $g'$ comes from the loss and which part is decay. It divides **all** of it by $\\sqrt{\\hat{v}}$, the root mean square of the past values of $g'$ (over roughly the last $\\frac{1}{1 - \\beta_2} = 1000$ steps, or all steps so far if there have been fewer; see [Adam](#info:adam_notes)). So the decay part is scaled too:
+
+- **Parameters with large gradients:** $\\sqrt{\\hat{v}}$ is large, the decay is divided down to almost nothing, and the weight barely decays.
+- **Parameters with small gradients:** $\\sqrt{\\hat{v}}$ is small, the decay is magnified, and the weight decays very fast.
+
+### Example: one $\\lambda$, a 100× difference
+
+Two parameters A and B, both at $\\theta = 1$, with $\\eta = 0.01$ and $\\lambda = 0.1$, so the decay adds $\\lambda\\theta = 0.1$ to each gradient. A's own gradient alternates between $+10$ and $-10$; B's alternates between $+0.01$ and $-0.01$. Both average to 0: the loss does not need either weight, which is exactly when decay should pull them toward 0.
+
+**Step 1: what is $\\sqrt{\\hat{v}}$?** It is the root mean square of the past $g' = g + 0.1$:
+
+\`\`\`text
+A:  g' = 10.1, −9.9, 10.1, …    squares 102.01, 98.01   →  mean 100.01,  √v̂ ≈ 10
+B:  g' = 0.11, 0.09, 0.11, …    squares 0.0121, 0.0081  →  mean 0.0101,  √v̂ ≈ 0.1
+\`\`\`
+
+A's $g'$ is dominated by its own gradient, so the extra 0.1 hardly shows. B's $g'$ is almost entirely the decay term, with its own gradient as a small wobble.
+
+**Step 2: how much does the decay part move $\\theta$?** The step is $\\eta \\cdot \\hat{m} / \\sqrt{\\hat{v}}$, and $\\hat{m}$ averages $g'$, so the decay term contributes $\\eta \\lambda \\theta / \\sqrt{\\hat{v}}$:
+
+\`\`\`text
+A:  0.01 × 0.1 / 10   = 0.0001   →  shrinks 0.01% per step
+B:  0.01 × 0.1 / 0.1  = 0.01     →  shrinks 1% per step
+\`\`\`
+
+**Step 3: compare with what was intended.** $\\lambda = 0.1$ was meant to shrink each weight by $\\eta\\lambda = 0.001$, i.e. 0.1% per step:
+
+| | Intended (AdamW) | Adam + L2 |
+|---|---|---|
+| A (large gradients) | 0.1% | 0.01%, 10× too weak |
+| B (small gradients) | 0.1% | 1%, 10× too strong |
+
+Same $\\lambda$, but a **100×** difference in actual decay, caused only by dividing the decay by $\\sqrt{\\hat{v}}$.
+
+**Over 200 steps** (run in PyTorch):
+
+\`\`\`text
+                 A (gradient ±10)   B (gradient ±0.01)
+no decay              0.982              0.982
+Adam + L2             0.963              0.018     ← A barely decays, B is nearly 0
+AdamW                 0.804              0.804     ← both decay the same
+\`\`\`
+
+- **A:** 0.0001 less per step, about 0.02 over 200 steps: 0.982 → 0.963.
+- **B:** about 0.01 less per step, so it reaches nearly 0 within about 100 steps. (As $\\theta$ shrinks, the decay term and $\\sqrt{\\hat{v}}$ shrink with it, so it does not go exactly to 0.)
+- **AdamW:** each step multiplies by $0.999$, and $0.999^{200} \\approx 0.819$, so $0.982 \\times 0.819 \\approx 0.804$ for both.
 
 ## Update rule
 
+AdamW computes $m_t$, $\\hat{m}_t$, $v_t$, $\\hat{v}_t$ exactly as [Adam](#info:adam_notes) does, from the plain gradient $g_t$ (no $\\lambda\\theta$ added). Only the last line changes:
+
 $$
 \\begin{aligned}
-m_t &= \\beta_1 m_{t-1} + (1 - \\beta_1)\\, g_t && \\text{(EMA of gradients: momentum)} \\\\
-v_t &= \\beta_2 v_{t-1} + (1 - \\beta_2) (g_t \\odot g_t) && \\text{(EMA of squared gradients: RMS scaling)} \\\\
-\\hat{m}_t &= \\frac{m_t}{1 - \\beta_1^t} && \\text{(bias correction)} \\\\
-\\hat{v}_t &= \\frac{v_t}{1 - \\beta_2^t} && \\text{(bias correction)} \\\\
-\\theta_t &= (1 - \\eta \\lambda)\\, \\theta_t && \\text{(decoupled weight decay)} \\\\
-\\theta_{t+1} &= \\theta_t - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t && \\text{(adaptive step per parameter)}
+\\text{Adam:}\\quad & \\theta_t = \\theta_{t-1} - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t \\\\
+\\text{AdamW:}\\quad & \\theta_t = (1 - \\eta \\lambda)\\, \\theta_{t-1} - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t
 \\end{aligned}
 $$
 
-- $\\beta_1$ and $\\beta_2$ are the momentum and RMS scaling coefficients, respectively.
-- $\\epsilon$ is a small constant to avoid division by zero.
-- $\\lambda$ is the weight decay strength (e.g., 0.1).
+The decay $(1 - \\eta\\lambda)$ multiplies the weight directly and never passes through $\\sqrt{\\hat{v}}$, so every parameter shrinks by the same fraction, whatever its gradients look like.
 
-## Tiny numeric example
+## Worked example
+
+The same problem as in the [Adam](#info:adam_notes) note, so the two can be compared.
 
 ### Setup
 
 - **Parameters:** $\\theta = (\\theta_1, \\theta_2)$
-- **Loss:** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$
+- **Loss:** $L = \\frac{1}{2} \\left[(\\theta_1 - 3)^2 + (\\theta_2 + 2)^2\\right]$, smallest at $\\theta = (3, -2)$
 - **Gradients:** $g = (g_1, g_2) = (\\theta_1 - 3,\\; \\theta_2 + 2)$
-- **Update rule:** $\\theta \\leftarrow \\theta - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t$
-- **Hyperparameters:** $\\eta = 0.1$, $\\beta_1 = 0.9$, $\\beta_2 = 0.999$, $\\epsilon = 10^{-8}$ (tiny, so numerically negligible), $\\lambda = 0.1$
+- **Update:** $\\theta_t = (1 - \\eta\\lambda)\\, \\theta_{t-1} - \\frac{\\eta}{\\sqrt{\\hat{v}_t} + \\epsilon}\\, \\hat{m}_t$
+- **Hyperparameters:** $\\eta = 0.1$, $\\beta_1 = 0.9$, $\\beta_2 = 0.999$, $\\epsilon = 10^{-8}$ (negligible here), $\\lambda = 0.1$, so the decay factor is $1 - \\eta\\lambda = 0.99$
 - **Init:** $\\theta_0 = (0, 0)$, $m_0 = (0, 0)$, $v_0 = (0, 0)$
 
 ### Step 1
 
 - $\\theta_0 = (0, 0)$
 - $g_1 = (-3, 2)$
-- $m_1 = 0.9 \\cdot (0, 0) + (1 - 0.9) \\cdot (-3, 2) = (-0.3, 0.2)$
-- $v_1 = 0.999 \\cdot (0, 0) + (1 - 0.999) \\cdot \\big((-3, 2) \\odot (-3, 2)\\big) = (0.009, 0.004)$
-- **Bias correction:**
+- $m_1 = 0.9 \\cdot (0, 0) + 0.1 \\cdot (-3, 2) = (-0.3, 0.2)$
+- $v_1 = 0.999 \\cdot (0, 0) + 0.001 \\cdot \\big((-3, 2) \\odot (-3, 2)\\big) = (0.009, 0.004)$
+- $\\hat{m}_1 = \\frac{(-0.3, 0.2)}{1 - 0.9} = (-3, 2)$, $\\quad \\hat{v}_1 = \\frac{(0.009, 0.004)}{1 - 0.999} = (9, 4)$, $\\quad \\sqrt{\\hat{v}_1} = (3, 2)$
+- **Decay:** $0.99 \\cdot (0, 0) = (0, 0)$
+- **Adam step:** $0.1 \\cdot \\frac{(-3, 2)}{(3, 2)} = (-0.1, 0.1)$
+- $\\theta_1 = (0, 0) - (-0.1, 0.1) = (0.1, -0.1)$
 
-  $$
-  \\begin{aligned}
-  \\hat{m}_1 &= \\frac{m_1}{1 - \\beta_1^1} = \\frac{(-0.3, 0.2)}{1 - 0.9^1} = (-3, 2) \\\\
-  \\hat{v}_1 &= \\frac{v_1}{1 - \\beta_2^1} = \\frac{(0.009, 0.004)}{1 - 0.999^1} = (9, 4)
-  \\end{aligned}
-  $$
-
-- **Decay:** $\\theta_0 = (1 - \\eta \\lambda)\\, \\theta_0 = (1 - 0.1 \\cdot 0.1) \\cdot (0, 0) = (0, 0)$
-- **Update:**
-
-  $$
-  \\theta_1 = \\theta_0 - \\frac{\\eta}{\\sqrt{\\hat{v}_1} + \\epsilon}\\, \\hat{m}_1 = (0, 0) - \\frac{0.1}{\\sqrt{(9, 4)}} \\cdot (-3, 2) = (0.1, -0.1)
-  $$
+The decay does nothing yet: $0.99 \\times 0 = 0$. Step 1 is identical to Adam's.
 
 ### Step 2
 
 - $\\theta_1 = (0.1, -0.1)$
 - $g_2 = (0.1 - 3,\\; -0.1 + 2) = (-2.9, 1.9)$
-- $m_2 = 0.9 \\cdot (-0.3, 0.2) + (1 - 0.9) \\cdot (-2.9, 1.9) = (-0.56, 0.37)$
-- $v_2 = 0.999 \\cdot (0.009, 0.004) + (1 - 0.999) \\cdot \\big((-2.9, 1.9) \\odot (-2.9, 1.9)\\big) = (0.017401, 0.007606)$
-- **Bias correction:**
-
-  $$
-  \\begin{aligned}
-  \\hat{m}_2 &= \\frac{m_2}{1 - \\beta_1^2} = \\frac{(-0.56, 0.37)}{1 - 0.9^2} = (-2.94737, 1.94737) \\\\
-  \\hat{v}_2 &= \\frac{v_2}{1 - \\beta_2^2} = \\frac{(0.017401, 0.007606)}{1 - 0.999^2} = (8.70485, 3.80490)
-  \\end{aligned}
-  $$
-
-- **Decay:** $\\theta_1 = (1 - \\eta \\lambda)\\, \\theta_1 = (1 - 0.1 \\cdot 0.1) \\cdot (0.1, -0.1) = (0.099, -0.099)$
-- **Update:**
-
-  $$
-  \\begin{aligned}
-  \\theta_2 &= \\theta_1 - \\frac{\\eta}{\\sqrt{\\hat{v}_2} + \\epsilon}\\, \\hat{m}_2 = (0.099, -0.099) - \\frac{0.1}{\\sqrt{(8.70485, 3.80490)}} \\cdot (-2.94737, 1.94737) \\\\
-  &= (0.1988973, -0.1988335)
-  \\end{aligned}
-  $$
+- $m_2 = 0.9 \\cdot (-0.3, 0.2) + 0.1 \\cdot (-2.9, 1.9) = (-0.56, 0.37)$
+- $v_2 = 0.999 \\cdot (0.009, 0.004) + 0.001 \\cdot \\big((-2.9, 1.9) \\odot (-2.9, 1.9)\\big) = (0.017401, 0.007606)$
+- $\\hat{m}_2 = \\frac{(-0.56, 0.37)}{1 - 0.9^2} = (-2.9474, 1.9474)$, $\\quad \\hat{v}_2 = \\frac{(0.017401, 0.007606)}{1 - 0.999^2} = (8.7049, 3.8049)$, $\\quad \\sqrt{\\hat{v}_2} = (2.9504, 1.9506)$
+- **Decay:** $0.99 \\cdot (0.1, -0.1) = (0.099, -0.099)$
+- **Adam step:** $0.1 \\cdot \\frac{(-2.9474, 1.9474)}{(2.9504, 1.9506)} = (-0.0999, 0.0998)$
+- $\\theta_2 = (0.099, -0.099) - (-0.0999, 0.0998) = (0.1989, -0.1988)$
 
 ### Step 3
 
-- $\\theta_2 = (0.1988973, -0.1988335)$
-- $g_3 = (0.1988973 - 3,\\; -0.1988335 + 2) = (-2.80110, 1.80117)$
-- $m_3 = 0.9 \\cdot (-0.56, 0.37) + (1 - 0.9) \\cdot (-2.80110, 1.80117) = (-0.78411, 0.513117)$
-- $v_3 = 0.999 \\cdot (0.017401, 0.007606) + (1 - 0.999) \\cdot \\big((-2.80110, 1.80117) \\odot (-2.80110, 1.80117)\\big) = (0.0252298, 0.0108426)$
-- **Bias correction:**
+- $\\theta_2 = (0.1989, -0.1988)$
+- $g_3 = (0.1989 - 3,\\; -0.1988 + 2) = (-2.8011, 1.8012)$
+- $m_3 = 0.9 \\cdot (-0.56, 0.37) + 0.1 \\cdot (-2.8011, 1.8012) = (-0.7841, 0.5131)$
+- $v_3 = 0.999 \\cdot (0.017401, 0.007606) + 0.001 \\cdot \\big((-2.8011, 1.8012) \\odot (-2.8011, 1.8012)\\big) = (0.025230, 0.010843)$
+- $\\hat{m}_3 = \\frac{(-0.7841, 0.5131)}{1 - 0.9^3} = (-2.8934, 1.8934)$, $\\quad \\hat{v}_3 = \\frac{(0.025230, 0.010843)}{1 - 0.999^3} = (8.4183, 3.6178)$, $\\quad \\sqrt{\\hat{v}_3} = (2.9014, 1.9021)$
+- **Decay:** $0.99 \\cdot (0.1989, -0.1988) = (0.1969, -0.1968)$
+- **Adam step:** $0.1 \\cdot \\frac{(-2.8934, 1.8934)}{(2.9014, 1.9021)} = (-0.0997, 0.0995)$
+- $\\theta_3 = (0.1969, -0.1968) - (-0.0997, 0.0995) = (0.2966, -0.2964)$
 
-  $$
-  \\begin{aligned}
-  \\hat{m}_3 &= \\frac{m_3}{1 - \\beta_1^3} = \\frac{(-0.78411, 0.513117)}{1 - 0.9^3} = (-2.893395, 1.89342) \\\\
-  \\hat{v}_3 &= \\frac{v_3}{1 - \\beta_2^3} = \\frac{(0.0252298, 0.0108426)}{1 - 0.999^3} = (8.418349, 3.617817)
-  \\end{aligned}
-  $$
+### What the example shows
 
-- **Decay:** $\\theta_2 = (1 - \\eta \\lambda)\\, \\theta_2 = (1 - 0.1 \\cdot 0.1) \\cdot (0.1988973, -0.1988335) = (0.196908, -0.196845)$
-- **Update:**
+Compare $\\theta_1$ with plain Adam on the same problem:
 
-  $$
-  \\begin{aligned}
-  \\theta_3 &= \\theta_2 - \\frac{\\eta}{\\sqrt{\\hat{v}_3} + \\epsilon}\\, \\hat{m}_3 = (0.196908, -0.196845) - \\frac{0.1}{\\sqrt{(8.418349, 3.617817)}} \\cdot (-2.893395, 1.89342) \\\\
-  &= (0.2966312, -0.2963911)
-  \\end{aligned}
-  $$
+\`\`\`text
+          Adam      AdamW
+step 1    0.1000    0.1000
+step 2    0.1999    0.1989    ← 0.001 smaller
+step 3    0.2996    0.2966    ← 0.003 smaller
+\`\`\`
+
+- The difference is the decay: each step removes 1% of the current weight ($0.99 \\times 0.1 = 0.099$, i.e. 0.001 at step 2), and the effect adds up over steps.
+- The Adam step itself stays about $\\eta = 0.1$ per step, just as in Adam, because the gradients that feed $m$ and $v$ do not include the decay.
+- Here decay pulls $\\theta$ toward 0, away from the minimum at $(3, -2)$. In this toy problem every weight is needed, so decay only gets in the way; its benefit appears in a real model, where many weights are not needed.
+
+## In PyTorch and in this site's GPT-2 code
+
+\`torch.optim.AdamW(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01)\`. Each step first multiplies every weight by $1 - \\eta\\lambda$ (\`1 - lr * weight_decay\`), then takes the Adam step.
+
+### How strong the decay actually is
+
+Note the $\\eta$ in $\\eta\\lambda$: \`weight_decay=0.1\` does **not** mean "shrink 10% per step". The code uses \`lr=3e-4\` and \`weight_decay=0.1\`:
+
+\`\`\`text
+η·λ = 0.0003 × 0.1 = 0.00003
+each step:  θ ← 0.99997 · θ          ← shrinks only 0.003% per step
+\`\`\`
+
+To see what decay can do on its own, take a weight with **no gradient at all**: then $m = 0$, the Adam step is 0, and only the decay acts. Starting from 1, after $n$ steps it is $0.99997^n$:
+
+\`\`\`text
+after   1,000 steps:   0.970     ← this site's code runs max_steps = 1000
+after  10,000 steps:   0.741
+after  50,000 steps:   0.223
+after 100,000 steps:   0.050
+\`\`\`
+
+A quick estimate: $0.99997^n \\approx e^{-0.00003\\, n}$. For example, at 10,000 steps $0.00003 \\times 10{,}000 = 0.3$ and $e^{-0.3} \\approx 0.741$. After about $1 / 0.00003 \\approx 33{,}000$ steps the weight is down to $1/e \\approx 37\\%$.
+
+So weight decay is a slow, gentle pull. It does not erase useful weights, whose gradients push far harder than 0.003% per step; it acts on weights that go unneeded for tens of thousands of steps. With only 1000 steps, this site's training gets at most a 3% shrink from it; real GPT runs take hundreds of thousands of steps.
+
+Because the decay is multiplied by $\\eta$, it also follows the learning rate: with an LR schedule (GPT-3 used warmup followed by cosine decay), the decay weakens as $\\eta$ goes down. This site's code has no LR schedule (see the [optimizer overview](#info:optim_adamw_notes)).
+
+### Which parameters are decayed
+
+The code splits the parameters into two groups by number of dimensions:
+
+\`\`\`python
+decay    = [p for p in model.parameters() if p.dim() >= 2]
+no_decay = [p for p in model.parameters() if p.dim() < 2]
+\`\`\`
+
+For layer 0, for example:
+
+\`\`\`text
+decayed (2D):
+  tok_emb.weight           (50304, 768)
+  pos_emb.weight           (1024, 768)
+  attn.c_attn.weight       (2304, 768)
+  attn.proj.weight         (768, 768)
+  mlp.fc_in.weight         (3072, 768)
+  mlp.fc_out.weight        (768, 3072)
+
+not decayed (1D):
+  ln1.weight (γ), ln1.bias (β)     (768,)
+  ln2.weight (γ), ln2.bias (β)     (768,)
+  attn.c_attn.bias                 (2304,)
+  attn.proj.bias                   (768,)
+  mlp.fc_in.bias                   (3072,)
+  mlp.fc_out.bias                  (768,)
+\`\`\`
+
+Over the whole model:
+
+\`\`\`text
+decayed:      50 tensors,  124,354,560 parameters   (99.9%)
+not decayed:  98 tensors,      121,344 parameters   (0.1%)
+\`\`\`
+
+(\`lm_head.weight\` is the same tensor as \`tok_emb.weight\` because of [weight tying](#info:weight_tying_notes), so it is counted once.)
+
+- **LayerNorm $\\gamma$ and $\\beta$:** in PyTorch's \`nn.LayerNorm\`, \`.weight\` is $\\gamma$ (initialized to 1) and \`.bias\` is $\\beta$ (initialized to 0), in $y = \\gamma \\cdot \\hat{x} + \\beta$. The natural value of $\\gamma$ is 1, not 0, so pulling it toward 0 would just shrink LayerNorm's output; that damages the model rather than simplifying it. $\\beta$ only shifts the output, so decaying it serves no regularization purpose either.
+- **Biases:** a bias is added, not multiplied with the input. Memorizing the data with large weights happens in the matrices that multiply the input, not in biases. And biases are only 0.1% of the parameters, so decaying them would bring almost no benefit.
+
+Decay is aimed at the large matrices that multiply the input (Linear and Embedding weights), which is where the model's capacity lies. \`p.dim() >= 2\` separates exactly those from the biases and LayerNorm parameters. This recipe comes from BERT and is used by GPT-3, nanoGPT, and others.
+
+## References
+
+1. **Decoupled Weight Decay Regularization** (AdamW). Loshchilov & Hutter, 2017. [arXiv:1711.05101 ↗](https://arxiv.org/abs/1711.05101)
 `,
   },
   final_ln_notes: {
