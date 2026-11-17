@@ -1,9 +1,13 @@
 import React from "react";
 import { CATEGORY, getCategory } from "./palette";
 import { useSelectedId } from "./SelectionContext";
+import { useDiagramSpec } from "./DiagramSpecContext";
 
-export default function Node({ id, label, x, y, w, h, onClick }) {
+export default function Node({ id, label: defaultLabel, x, y, w, h, onClick }) {
   const selected = useSelectedId() === id;
+  const { labels, newIds } = useDiagramSpec();
+  const label = labels[id] ?? defaultLabel;
+  const isNew = newIds.has(id);
   const c = CATEGORY[getCategory(id)];
   const activate = () => onClick(id);
 
@@ -45,6 +49,11 @@ export default function Node({ id, label, x, y, w, h, onClick }) {
       >
         {label}
       </text>
+      {isNew && (
+        <text x={x + w - 6} y={y + h / 2} dominantBaseline="central" textAnchor="end" fontSize={12} aria-label="new in this model">
+          🆕
+        </text>
+      )}
     </g>
   );
 }

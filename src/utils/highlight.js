@@ -75,6 +75,8 @@ export function buildCodeHtml({ component, selectedId }) {
     });
   };
   if (selectedId === "input_data") highlightKeys(["open_file", "read_text"]);
+  if (selectedId === "attn_masked" || selectedId === "attn_class") highlightKeys(["local_band"]);
+  if (selectedId === "gpt2") highlightKeys(["local_layers"]);
   if (selectedId === "tokenizer") highlightKeys(["load_tok", "encode"]);
   if (selectedId === "token_embed") highlightKeys(["tok_emb", "tok_apply"]);
   if (selectedId === "pos_embed") highlightKeys(["pos_emb", "pos_apply"]);
@@ -145,8 +147,9 @@ export function buildCodeHtml({ component, selectedId }) {
   html = html.replace(/LM head shares weights with token embeddings/g, '<span data-action="open:weight_tying_notes" style="text-decoration: underline; cursor: pointer;">LM head shares weights with token embeddings</span>');
   // Link the class name CausalSelfAttention in its definition to open the causal analogy note
   html = html.replace(/class\s+(CausalSelfAttention)(?=\s*\()/g, 'class <span data-action="open:causal_analogy_notes" style="text-decoration: underline; cursor: pointer;">$1</span>');
-  // Link the class name GPT2 in its definition to open the GPT-2 notes
+  // Link the model class name in its definition to that model's overview note
   html = html.replace(/class\s+(GPT2)(?=\s*\()/g, 'class <span data-action="open:gpt2_notes" style="text-decoration: underline; cursor: pointer;">$1</span>');
+  html = html.replace(/class\s+(GPT3)(?=\s*\()/g, 'class <span data-action="open:gpt3_notes" style="text-decoration: underline; cursor: pointer;">$1</span>');
   
   
   
@@ -206,6 +209,9 @@ export function buildCodeHtml({ component, selectedId }) {
   if (selectedId === "attn_matmul_v") {
     html = html.replace(/(<span[^>]*data-action=\"open:att_v_product_notes\"[^>]*>)([\s\S]*?)(<\/span>)/, '$1<mark>$2</mark>$3');
   }
+
+  // GPT-3: the locally banded attention layers
+  html = html.replace(/make_local/g, '<span data-action="open:gpt3_notes" style="text-decoration: underline; cursor: pointer;">make_local</span>');
 
   // 9) Optimizer: make torch.optim.AdamW clickable to open notes
   html = html.replace(/torch\.optim\.AdamW/g, (m) => `<span data-action="open:optim_adamw_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);

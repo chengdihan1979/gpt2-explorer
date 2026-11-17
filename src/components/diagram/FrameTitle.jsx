@@ -1,9 +1,11 @@
 import React from "react";
 import { useSelectedId } from "./SelectionContext";
+import { useDiagramSpec } from "./DiagramSpecContext";
 
 // Clickable heading of a group frame (GPT-2, Transformer Block, sub-diagrams).
-export default function FrameTitle({ id, label, x, y, anchor = "middle", onClick }) {
+export default function FrameTitle({ id, label: defaultLabel, x, y, anchor = "middle", onClick }) {
   const selected = useSelectedId() === id;
+  const label = useDiagramSpec().labels[id] ?? defaultLabel;
   const width = label.length * 7.6 + 20;
   const left = anchor === "middle" ? x - width / 2 : x - 9;
 

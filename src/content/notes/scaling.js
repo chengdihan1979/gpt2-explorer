@@ -40,7 +40,31 @@ So GPT-3's block is the same as the GPT-2 code on this site: pre-LN, GELU, learn
 ### What did change
 
 1. **Context length** doubled from 1024 to 2048 tokens.
-2. **Alternating attention patterns:** layers alternate between normal (dense) attention and "locally banded sparse" attention that only looks at nearby tokens, taken from the Sparse Transformer. This did not catch on. The kind of local attention that later became common is Mistral's sliding window.
+2. **Alternating attention patterns** 🆕: layers alternate between normal (dense) attention and "locally banded sparse" attention that only looks at nearby tokens, taken from the Sparse Transformer. Explained below.
+
+### Locally banded attention
+
+In a normal GPT-2 layer, the [causal mask](#info:causal_mask_notes) lets token $i$ attend to **every** earlier token $0, 1, \\dots, i$. A locally banded layer cuts that further: token $i$ only attends to the last $w$ tokens, $i - w + 1, \\dots, i$ (a "band" next to the diagonal).
+
+With $T = 6$ tokens and window $w = 3$ (1 = may attend, 0 = masked):
+
+\`\`\`text
+dense causal (GPT-2)          locally banded, w = 3
+1 0 0 0 0 0                   1 0 0 0 0 0
+1 1 0 0 0 0                   1 1 0 0 0 0
+1 1 1 0 0 0                   1 1 1 0 0 0
+1 1 1 1 0 0                   0 1 1 1 0 0      ← token 3 no longer sees token 0
+1 1 1 1 1 0                   0 0 1 1 1 0
+1 1 1 1 1 1                   0 0 0 1 1 1
+\`\`\`
+
+The code on the GPT-3 page builds it in \`make_local\`: \`torch.triu(..., diagonal=-(w - 1))\` keeps the entries with $j \\ge i - (w - 1)$, and multiplying by the causal mask also keeps $j \\le i$. Every other layer (\`i % 2 == 1\`) is made local.
+
+- **Why:** a local layer only computes $w$ scores per token instead of up to $T$, which saves compute on long sequences.
+- **Why it still works:** the dense layers in between still connect every token to every earlier one, and stacked local layers widen the reach (two layers with $w = 3$ already reach 4 tokens back).
+- The paper does not say how wide GPT-3's band is; the window 256 in the code is only illustrative.
+
+This pattern did not catch on. The kind of local attention that later became common is Mistral's **sliding window** attention, which uses the same banded mask idea.
 
 ### Training settings
 
@@ -81,7 +105,41 @@ By the number of examples in the prompt:
 
 ### Why this works
 
-For the model this is **still next-token prediction**, exactly what the GPT-2 code on this site trains for. The training data contains many lists of "A => B" pairs. To predict the next token well, the model has to notice the pattern in the earlier lines and apply it to the last one. No gradient is computed: the "learning" happens entirely in the forward pass, where [attention](#info:causal_analogy_notes) reads the earlier examples.
+For the model this is **still next-token prediction**, the same task the GPT-2 code on this site trains for. It helps to separate two stages.
+
+**Stage 1, training (gradients, the weights change).** Web text already contains many lists of pairs, for example a vocabulary page:
+
+\`\`\`text
+cat => chat
+dog => chien
+house => maison
+\`\`\`
+
+To predict the token after "dog =>", the words "dog =>" alone are not enough: the answer could be French, Spanish, or an explanation. To get "chien" right, the model has to **look back at the earlier lines**: "cat => chat" shows this is an English-to-French list, so French belongs here too. After seeing many thousands of such lists, gradient descent shapes the weights into a general skill: **find the pattern in the earlier lines and apply it to the current one.** That skill is stored in the weights; it was learned in training.
+
+**Stage 2, using GPT-3 (no gradients, the weights stay fixed).** Given the prompt
+
+\`\`\`text
+sea otter => loutre de mer
+peppermint => menthe poivrée
+cheese =>
+\`\`\`
+
+the model runs one forward pass, like the forward pass in this site's code, with no backward and no optimizer step. Inside it, the [attention](#info:causal_analogy_notes) at the "cheese =>" position reads the earlier lines; using the skill from training, it recognizes "English to French" and outputs "fromage".
+
+**Why "learning" is in quotes.** From outside the model seems to have learned the task, but:
+
+- **Not one weight changed.** Nothing new was learned; the model used a skill it already had from training.
+- **It only lasts for this one input.** With a different prompt the examples are gone, and so is the "learning".
+
+\`\`\`text
+                       fine-tuning                in-context learning
+weights change?        yes (gradient descent)     no
+where the task lives   in the weights             only in the prompt
+how long it lasts      permanently                only for this input
+\`\`\`
+
+🆕 **How the model does it inside.** In 2022, researchers at Anthropic found a kind of attention head they called an **induction head**. It does something simple: if "A B" appeared earlier and the current token is "A", predict "B". That is the most basic form of "find the pattern earlier, apply it here", and it is done by attention.
 
 ### It gets stronger with scale
 
@@ -94,6 +152,7 @@ This is why making models larger became the main direction. The next question, h
 ## References
 
 1. **Language Models are Few-Shot Learners** (GPT-3). Brown et al., 2020. [arXiv:2005.14165 ↗](https://arxiv.org/abs/2005.14165)
+2. **In-context Learning and Induction Heads.** Olsson et al. (Anthropic), 2022. [arXiv:2209.11895 ↗](https://arxiv.org/abs/2209.11895)
 `,
     },
     zh: {
@@ -132,7 +191,31 @@ embedding:   (50257 + 2048) × 12288      ≈   0.6B
 ### 真正改了什么
 
 1. **上下文长度**从 1024 加倍到 2048 个 token。
-2. **交替使用两种注意力**：一层是正常的全注意力（dense），下一层是只看附近 token 的 "locally banded sparse" 注意力，来自 Sparse Transformer。这个做法后来没有流行。后来流行的局部注意力是 Mistral 的 sliding window（滑动窗口）。
+2. **交替使用两种注意力** 🆕：一层是正常的全注意力（dense），下一层是只看附近 token 的 "locally banded sparse" 注意力，来自 Sparse Transformer。下面详细说明。
+
+### 局部带状注意力（locally banded attention）
+
+在普通的 GPT-2 层里，[causal mask](#info:causal_mask_notes) 让第 $i$ 个 token 能看到它前面的**所有** token：$0, 1, \\dots, i$。局部带状的层再砍掉一部分：第 $i$ 个 token 只看最近的 $w$ 个 token，即 $i - w + 1, \\dots, i$（对角线旁边的一条"带"）。
+
+$T = 6$ 个 token、窗口 $w = 3$ 时（1 = 可以看，0 = 被屏蔽）：
+
+\`\`\`text
+普通 causal（GPT-2）           局部带状，w = 3
+1 0 0 0 0 0                   1 0 0 0 0 0
+1 1 0 0 0 0                   1 1 0 0 0 0
+1 1 1 0 0 0                   1 1 1 0 0 0
+1 1 1 1 0 0                   0 1 1 1 0 0      ← 第 3 个 token 看不到第 0 个了
+1 1 1 1 1 0                   0 0 1 1 1 0
+1 1 1 1 1 1                   0 0 0 1 1 1
+\`\`\`
+
+GPT-3 页面上的代码在 \`make_local\` 里构造它：\`torch.triu(..., diagonal=-(w - 1))\` 保留 $j \\ge i - (w - 1)$ 的位置，再乘上 causal mask，同时保留 $j \\le i$。每隔一层（\`i % 2 == 1\`）变成局部的。
+
+- **为什么这样做：** 局部的层每个 token 只算 $w$ 个分数，而不是最多 $T$ 个，序列很长时能省下计算量。
+- **为什么效果还行：** 中间夹着的 dense 层仍然把每个 token 和它前面所有的 token 连在一起；而且局部层叠起来，能看到的范围会变宽（两层 $w = 3$ 就已经能看到往前 4 个 token）。
+- 论文没有说 GPT-3 的带有多宽；代码里的窗口 256 只是示意。
+
+这个做法后来没有流行。后来流行的局部注意力是 Mistral 的 **sliding window**（滑动窗口）注意力，用的也是这种带状 mask 的思路。
 
 ### 训练设置
 
@@ -173,7 +256,41 @@ cheese =>                             ← 模型接着生成: fromage
 
 ### 为什么这样能行
 
-对模型来说，这**仍然只是 next-token prediction**，和这个网站的 GPT-2 代码训练的任务完全一样。训练数据里有大量"A => B"这样的对照列表。要准确预测下一个 token，模型就得看出前面几行的规律，再把它用到最后一行上。整个过程没有计算任何梯度："学习"完全发生在 forward 里，是 [attention](#info:causal_analogy_notes) 读到了前面的例子。
+对模型来说，这**仍然只是 next-token prediction**，和这个网站的 GPT-2 代码训练的任务一样。把它分成两个阶段来看就清楚了。
+
+**阶段 1：训练时（有梯度，权重在变）。** 网上的文本里本来就有很多"对照列表"，比如一个背单词的网页：
+
+\`\`\`text
+cat => chat
+dog => chien
+house => maison
+\`\`\`
+
+要预测 "dog =>" 后面的下一个 token，只看 "dog =>" 这几个字是不够的：后面可能是法文，可能是西班牙文，也可能是一句解释。要预测对 "chien"，模型必须**回头看前面几行**："cat => chat" 说明这是一个英译法的列表，所以这里也该接法文。训练时见过成千上万个这样的列表以后，梯度下降就把权重调整成具备一种通用能力：**看出前面几行的规律，再套用到当前这一行上。** 这个能力存在权重里，是训练学到的。
+
+**阶段 2：用 GPT-3 时（没有梯度，权重不变）。** 给它这样的 prompt：
+
+\`\`\`text
+sea otter => loutre de mer
+peppermint => menthe poivrée
+cheese =>
+\`\`\`
+
+模型只做一次 forward，和这个网站代码里的 forward 一样，没有 backward，也没有 optimizer 那一步。在 forward 里，"cheese =>" 这个位置的 [attention](#info:causal_analogy_notes) 去读前面几行；靠训练时学到的那个能力，它认出"这是英译法"，于是输出 "fromage"。
+
+**"学习"为什么要加引号。** 从外面看，模型好像学会了这个任务，但其实：
+
+- **权重一个数都没变。** 它没有学到任何新东西，只是用上了训练时就已经具备的能力。
+- **只在这一次输入里有效。** 换一个 prompt，前面的例子不在了，这个"学会"也就没了。
+
+\`\`\`text
+                    fine-tuning              in-context learning
+权重变不变           变（梯度下降）           不变
+任务信息在哪         写进权重                 只在 prompt 里
+效果持续多久         永久                     只在这一次输入里
+\`\`\`
+
+🆕 **模型内部大概是怎么做的。** 2022 年，Anthropic 的研究者发现了一类注意力头，叫 **induction head**。它做的事情很简单：如果前面出现过 "A B"，现在又看到 "A"，就预测下一个是 "B"。这就是"看出前面的规律、套用到当前位置"最基本的形式，而它是由 attention 实现的。
 
 ### 规模越大，能力越强
 
@@ -186,6 +303,7 @@ cheese =>                             ← 模型接着生成: fromage
 ## 参考资料
 
 1. **Language Models are Few-Shot Learners**（GPT-3）。Brown 等人，2020。[arXiv:2005.14165 ↗](https://arxiv.org/abs/2005.14165)
+2. **In-context Learning and Induction Heads**。Olsson 等人（Anthropic），2022。[arXiv:2209.11895 ↗](https://arxiv.org/abs/2209.11895)
 `,
     },
   },

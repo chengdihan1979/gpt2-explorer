@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { SelectionContext } from "./components/diagram/SelectionContext";
+import { DiagramSpecContext } from "./components/diagram/DiagramSpecContext";
 import { CATEGORY, DETAIL_LINE, LINE } from "./components/diagram/palette";
 import CodeWithActions from "./components/CodeWithActions";
 import InfoPanel from "./components/InfoPanel";
@@ -66,7 +67,7 @@ export default function ModelExplorer({ model }) {
             <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-[13px] font-bold text-white shadow-sm">
               {model.badge}
             </div>
-            <div className="min-w-0">
+            <div className="hidden min-w-0 sm:block">
               <h1 className="truncate text-[15px] font-semibold tracking-tight text-slate-900">LLM Explorer</h1>
               <p className="hidden truncate text-xs text-slate-500 sm:block">
                 Click a block to see its code · click underlined code to open the notes
@@ -132,7 +133,9 @@ export default function ModelExplorer({ model }) {
                 </filter>
               </defs>
 
-              <Diagram onSelect={handleSelect} />
+              <DiagramSpecContext.Provider value={model.diagram.spec}>
+                <Diagram onSelect={handleSelect} />
+              </DiagramSpecContext.Provider>
             </svg>
           </SelectionContext.Provider>
         </section>

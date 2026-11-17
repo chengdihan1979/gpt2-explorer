@@ -20,7 +20,12 @@ export default {
   id: "gpt2",
   name: "GPT-2",
   badge: "G2",
-  diagram: { Component: GPT2Diagram, viewBox: "0 0 836 848", label: "GPT-2 architecture diagram" },
+  diagram: {
+    Component: GPT2Diagram,
+    viewBox: "0 0 836 848",
+    label: "GPT-2 architecture diagram",
+    spec: { labels: {}, newIds: new Set() },
+  },
   defaultSelected: "token_embed",
   content,
   resolveCodeId: (id) => CODE_ID[id] ?? id,

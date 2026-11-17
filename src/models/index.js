@@ -1,7 +1,8 @@
 import gpt2 from "./gpt2";
+import gpt3 from "./gpt3";
 
 // Models in the order they appear in the top navigation. Each page is reached at "#/<id>".
-export const MODELS = [gpt2];
+export const MODELS = [gpt2, gpt3];
 
 export const DEFAULT_MODEL_ID = "gpt2";
 
