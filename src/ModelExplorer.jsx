@@ -1,26 +1,13 @@
 import React, { useMemo, useState } from "react";
-import Node from "./components/diagram/Node";
-import Arrow from "./components/diagram/Arrow";
-import GPT2OuterFrame from "./components/diagram/GPT2OuterFrame";
-import TransformerBlockGroup from "./components/diagram/TransformerBlockGroup";
-import MLPSubDiagram from "./components/diagram/MLPSubDiagram";
-import AttnSubDiagram from "./components/diagram/AttnSubDiagram";
 import { SelectionContext } from "./components/diagram/SelectionContext";
 import { CATEGORY, DETAIL_LINE, LINE } from "./components/diagram/palette";
 import CodeWithActions from "./components/CodeWithActions";
 import InfoPanel from "./components/InfoPanel";
 import { buildCodeHtml } from "./utils/highlight";
-import { attnCode, content, gpt2TrainingCode, mlpCode, transformerBlockCode } from "./content/snippets";
 import { useInfo } from "./context/InfoContext";
+import { MODELS } from "./models";
 
-const FILE_NAMES = new Map([
-  [gpt2TrainingCode, "train_gpt2.py"],
-  [transformerBlockCode, "block.py"],
-  [attnCode, "attention.py"],
-  [mlpCode, "mlp.py"],
-]);
-
-const REPO_URL = "https://github.com/chengdihan1979/gpt2-explorer";
+const REPO_URL = "https://github.com/chengdihan1979/llm-explorer";
 
 function Legend() {
   return (
@@ -35,29 +22,41 @@ function Legend() {
   );
 }
 
-export default function GPT2DecoderExplorerInner() {
+// Top navigation between model pages ("#/<id>"); the current one is highlighted.
+function ModelNav({ currentId }) {
+  return (
+    <nav aria-label="Models" className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 text-xs font-medium shadow-sm">
+      {MODELS.map((m) => (
+        <a
+          key={m.id}
+          href={`#/${m.id}`}
+          aria-current={m.id === currentId ? "page" : undefined}
+          className={`rounded-md px-2.5 py-1 ${m.id === currentId ? "bg-slate-800 text-white" : "text-slate-600 hover:text-slate-900"}`}
+        >
+          {m.name}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+// One model's page: architecture diagram on the left, its code on the right, notes in a drawer.
+// Everything model-specific comes from the `model` config (see src/models/).
+export default function ModelExplorer({ model }) {
   const { close, lang, setLang } = useInfo();
-  const [selectedId, setSelectedId] = useState("token_embed");
+  const [selectedId, setSelectedId] = useState(model.defaultSelected);
 
   const handleSelect = (id) => {
     setSelectedId(id);
     close();
   };
 
-  const effectiveId = ["mlp_linear1", "mlp_linear2", "mlp_gelu", "mlp_dropout"].includes(selectedId)
-    ? "mlp_subdiagram"
-    : (selectedId === "emb_dropout"
-        || selectedId === "gpt2_blocks"
-        || selectedId === "final_ln"
-        || selectedId === "lm_head"
-        ? "gpt2"
-        : (selectedId === "block_attn_plus" ? "block_attn" : (selectedId === "block_mlp_plus" ? "block_mlp" : selectedId)));
-
-  const component = content[effectiveId] || { title: "Unknown", summary: "No data", code: "", anchors: [] };
+  const component = model.content[model.resolveCodeId(selectedId)] || { title: "Unknown", summary: "No data", code: "", anchors: [] };
+  const Diagram = model.diagram.Component;
 
   const codeHtml = useMemo(() => buildCodeHtml({ component, selectedId }), [component, selectedId]);
   const lineCount = component.code ? component.code.split("\n").length : 0;
-  const fileName = FILE_NAMES.get(component.code) ?? "code.py";
+  const fileName = model.fileNames.get(component.code) ?? "code.py";
 
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-800">
@@ -65,16 +64,17 @@ export default function GPT2DecoderExplorerInner() {
         <div className="mx-auto flex h-full max-w-[1680px] items-center justify-between gap-4 px-4 sm:px-6">
           <div className="flex min-w-0 items-center gap-3">
             <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-[13px] font-bold text-white shadow-sm">
-              G2
+              {model.badge}
             </div>
             <div className="min-w-0">
-              <h1 className="truncate text-[15px] font-semibold tracking-tight text-slate-900">GPT-2 Decoder Explorer</h1>
+              <h1 className="truncate text-[15px] font-semibold tracking-tight text-slate-900">LLM Explorer</h1>
               <p className="hidden truncate text-xs text-slate-500 sm:block">
                 Click a block to see its code · click underlined code to open the notes
               </p>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-3">
+          <ModelNav currentId={model.id} />
           <div
             role="group"
             aria-label="Notes language"
@@ -119,7 +119,7 @@ export default function GPT2DecoderExplorerInner() {
           </div>
 
           <SelectionContext.Provider value={selectedId}>
-            <svg viewBox="0 0 836 848" className="h-auto w-full" role="group" aria-label="GPT-2 architecture diagram">
+            <svg viewBox={model.diagram.viewBox} className="h-auto w-full" role="group" aria-label={model.diagram.label}>
               <defs>
                 <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
                   <polygon points="0 0, 8 3, 0 6" fill={LINE} />
@@ -132,39 +132,7 @@ export default function GPT2DecoderExplorerInner() {
                 </filter>
               </defs>
 
-              <GPT2OuterFrame onClick={handleSelect} />
-
-              {/* Input data and tokenizer stacked directly above embeddings */}
-              <Node id="input_data" label="Input Data (Text)" x={20} y={50} w={180} h={40} onClick={handleSelect} />
-              <Arrow x1={110} y1={90} x2={110} y2={110} />
-              <Node id="tokenizer" label="Tokenizer" x={20} y={110} w={180} h={40} onClick={handleSelect} />
-
-              <Arrow x1={110} y1={150} x2={110} y2={170} />
-              <Node id="token_embed" label="Token Embeddings" x={20} y={170} w={180} h={40} onClick={handleSelect} />
-              <text x={210} y={190} textAnchor="middle" dominantBaseline="central" fontSize={16} fontWeight={500} fill="#64748B">+</text>
-              <Node id="pos_embed" label="Positional Embeddings" x={220} y={170} w={180} h={40} onClick={handleSelect} />
-
-              <Arrow x1={210} y1={210} x2={210} y2={240} />
-              <Node id="emb_dropout" label="Dropout" x={20} y={240} w={380} h={40} onClick={handleSelect} />
-
-              <Arrow x1={210} y1={280} x2={210} y2={300} />
-              <TransformerBlockGroup x={20} y={300} onClick={handleSelect} />
-              {/* Residual connection from the embedding Dropout output into the attention residual add */}
-              <polyline points="215,290 500,290 500,455 220,455" stroke={LINE} strokeWidth={1.25} fill="none" markerEnd="url(#arrowhead)" />
-
-              <Arrow x1={210} y1={590} x2={210} y2={620} />
-              <Node id="final_ln" label="Final LayerNorm" x={20} y={620} w={380} h={40} onClick={handleSelect} />
-
-              <Arrow x1={210} y1={660} x2={210} y2={700} />
-              <Node id="lm_head" label="LM Head (Linear Layer)" x={20} y={700} w={380} h={40} onClick={handleSelect} />
-
-              <Arrow x1={210} y1={740} x2={210} y2={780} />
-              <Node id="loss_fn" label="Training Objective (CrossEntropyLoss)" x={20} y={780} w={380} h={40} onClick={handleSelect} />
-
-              <MLPSubDiagram x={600} y={530} onClick={handleSelect} />
-              <AttnSubDiagram x={600} y={40} onClick={handleSelect} />
-              {/* Attention block expands into the Causal Self-Attention sub-diagram */}
-              <Arrow x1={400} y1={410} x2={600} y2={120} variant="detail" />
+              <Diagram onSelect={handleSelect} />
             </svg>
           </SelectionContext.Provider>
         </section>

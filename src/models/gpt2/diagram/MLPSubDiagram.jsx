@@ -1,7 +1,7 @@
 import React from "react";
-import Node from "./Node";
-import Arrow from "./Arrow";
-import FrameTitle from "./FrameTitle";
+import Node from "../../../components/diagram/Node";
+import Arrow from "../../../components/diagram/Arrow";
+import FrameTitle from "../../../components/diagram/FrameTitle";
 
 export default function MLPSubDiagram({ x, y, onClick }) {
   return (

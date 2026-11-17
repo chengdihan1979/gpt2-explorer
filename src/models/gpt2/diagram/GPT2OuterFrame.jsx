@@ -1,5 +1,5 @@
 import React from "react";
-import FrameTitle from "./FrameTitle";
+import FrameTitle from "../../../components/diagram/FrameTitle";
 
 export default function GPT2OuterFrame({ onClick }) {
   return (

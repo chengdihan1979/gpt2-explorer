@@ -2,11 +2,13 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 
 export const InfoContext = createContext(null);
 
-const LANG_KEY = "gpt2-explorer:notes-lang";
+const LANG_KEY = "llm-explorer:notes-lang";
+const OLD_LANG_KEY = "gpt2-explorer:notes-lang"; // before the rename; still read so the choice carries over
 
 function readLang() {
   try {
-    return window.localStorage.getItem(LANG_KEY) === "zh" ? "zh" : "en";
+    const saved = window.localStorage.getItem(LANG_KEY) ?? window.localStorage.getItem(OLD_LANG_KEY);
+    return saved === "zh" ? "zh" : "en";
   } catch {
     return "en";
   }

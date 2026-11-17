@@ -1,9 +1,9 @@
 import React from "react";
-import Node from "./Node";
-import Arrow from "./Arrow";
-import FrameTitle from "./FrameTitle";
-import { LINE } from "./palette";
-import { useSelectedId } from "./SelectionContext";
+import Node from "../../../components/diagram/Node";
+import Arrow from "../../../components/diagram/Arrow";
+import FrameTitle from "../../../components/diagram/FrameTitle";
+import { LINE } from "../../../components/diagram/palette";
+import { useSelectedId } from "../../../components/diagram/SelectionContext";
 
 // Encircled plus marking a residual add; clickable.
 function ResidualPlus({ id, cx, cy, onClick }) {

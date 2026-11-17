@@ -6,15 +6,7 @@ import rehypeKatex from "rehype-katex";
 import rehypeSlug from "rehype-slug";
 import "katex/dist/katex.min.css";
 import { useInfo } from "../context/InfoContext";
-import { INFO } from "../content/info";
-import { INFO_ZH } from "../content/info_zh";
-
-// The note to show in the chosen language; a note with no Chinese version falls back to English.
-function getNote(id, lang) {
-  const en = INFO[id];
-  const zh = lang === "zh" ? INFO_ZH[id] : null;
-  return { title: zh?.title ?? en?.title, md: zh?.md ?? en?.md, missingZh: lang === "zh" && !zh };
-}
+import { NOTES, getNote } from "../content/notes";
 
 // GFM adds tables; singleTilde is off so a lone "~" (as in "~10×") never becomes strikethrough.
 const REMARK_PLUGINS = [remarkMath, [remarkGfm, { singleTilde: false }]];
@@ -143,7 +135,7 @@ export default function InfoPanel() {
       if (href && href.startsWith("#info:")) {
         const id = href.slice("#info:".length);
         return (
-          <a href={href} onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (INFO[id]) open(id); }} className="note-link" {...props}>
+          <a href={href} onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (NOTES[id]) open(id); }} className="note-link" {...props}>
             {children}
           </a>
         );
@@ -238,7 +230,7 @@ export default function InfoPanel() {
         {note.md || "_No content_"}
       </ReactMarkdown>
       {popups.map((pp, i) =>
-        INFO[pp.id] ? <Popup key={`${i}:${pp.id}`} id={pp.id} anchor={pp.anchor} level={i} lang={lang} components={makeComponents(i)} /> : null
+        NOTES[pp.id] ? <Popup key={`${i}:${pp.id}`} id={pp.id} anchor={pp.anchor} level={i} lang={lang} components={makeComponents(i)} /> : null
       )}
       </div>
     </aside>
