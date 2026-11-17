@@ -32,7 +32,7 @@ function ModelNav({ currentId }) {
           key={m.id}
           href={`#/${m.id}`}
           aria-current={m.id === currentId ? "page" : undefined}
-          className={`rounded-md px-2.5 py-1 ${m.id === currentId ? "bg-slate-800 text-white" : "text-slate-600 hover:text-slate-900"}`}
+          className={`rounded-md px-2 py-1 sm:px-2.5 ${m.id === currentId ? "bg-slate-800 text-white" : "text-slate-600 hover:text-slate-900"}`}
         >
           {m.name}
         </a>
@@ -74,7 +74,7 @@ export default function ModelExplorer({ model }) {
               </p>
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-3">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-3">
           <ModelNav currentId={model.id} />
           <div
             role="group"
@@ -88,7 +88,7 @@ export default function ModelExplorer({ model }) {
                 type="button"
                 onClick={() => setLang(code)}
                 aria-pressed={lang === code}
-                className={`rounded-md px-2.5 py-1 ${lang === code ? "bg-indigo-600 text-white" : "text-slate-600 hover:text-slate-900"}`}
+                className={`rounded-md px-2 py-1 sm:px-2.5 ${lang === code ? "bg-indigo-600 text-white" : "text-slate-600 hover:text-slate-900"}`}
               >
                 {label}
               </button>

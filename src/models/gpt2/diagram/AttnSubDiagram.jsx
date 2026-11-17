@@ -3,6 +3,7 @@ import Node from "../../../components/diagram/Node";
 import Arrow from "../../../components/diagram/Arrow";
 import FrameTitle from "../../../components/diagram/FrameTitle";
 
+// GPT-2's steps; other models pass their own list of [id, label].
 const STEPS = [
   ["attn_linear_qkv", "Linear for Q, K, V"],
   ["attn_matmul_qk", "Matmul (Q × Kᵀ)"],
@@ -14,17 +15,17 @@ const STEPS = [
   ["attn_resid_dropout", "Residual dropout"],
 ];
 
-export default function AttnSubDiagram({ x, y, onClick }) {
+export default function AttnSubDiagram({ x, y, onClick, steps = STEPS }) {
   return (
     <g>
       <rect x={x} y={y} width={220} height={480} rx={12} fill="#F8FAFC" stroke="#C7D2FE" strokeDasharray="5 4" />
       <FrameTitle id="attn_class" label="Causal Self-Attention" x={x + 110} y={y + 24} onClick={onClick} />
-      {STEPS.map(([id, label], i) => {
+      {steps.map(([id, label], i) => {
         const top = y + 50 + i * 54;
         return (
           <React.Fragment key={id}>
             <Node id={id} label={label} x={x + 20} y={top} w={180} h={28} onClick={onClick} />
-            {i < STEPS.length - 1 && <Arrow x1={x + 110} y1={top + 28} x2={x + 110} y2={top + 54} />}
+            {i < steps.length - 1 && <Arrow x1={x + 110} y1={top + 28} x2={x + 110} y2={top + 54} />}
           </React.Fragment>
         );
       })}

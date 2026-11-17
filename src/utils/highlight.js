@@ -11,6 +11,8 @@ export function buildCodeHtml({ component, selectedId }) {
     const esc = escapeHtml(needle);
     html = html.replace(esc, `<mark>${esc}</mark>`);
   };
+  // Generic: a content entry can list exact code strings to highlight (used by newer model pages).
+  (component.highlight || []).forEach(mark);
 
   if (["mlp_linear1", "mlp_linear2", "mlp_gelu", "mlp_dropout"].includes(selectedId) && anchors.length) {
     anchors.forEach((a) => {
@@ -209,6 +211,9 @@ export function buildCodeHtml({ component, selectedId }) {
   if (selectedId === "attn_matmul_v") {
     html = html.replace(/(<span[^>]*data-action=\"open:att_v_product_notes\"[^>]*>)([\s\S]*?)(<\/span>)/, '$1<mark>$2</mark>$3');
   }
+
+  // LLaMA: rotary position embedding
+  html = html.replace(/apply_rope/g, '<span data-action="open:rope_notes" style="text-decoration: underline; cursor: pointer;">apply_rope</span>');
 
   // GPT-3: the locally banded attention layers
   html = html.replace(/make_local/g, '<span data-action="open:gpt3_notes" style="text-decoration: underline; cursor: pointer;">make_local</span>');
