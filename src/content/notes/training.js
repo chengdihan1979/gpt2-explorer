@@ -762,7 +762,7 @@ The eras below say what language models **used** at the time; several of these m
 ### 2019–2021: scaling up (GPT-2/3, T5)
 
 - **[AdamW](#info:adamw_notes)** becomes the default for large language models, used with warmup + cosine decay, global-norm [gradient clipping](#hover:clip_grad_norm_notes), and no decay on norm/bias weights.
-- The GPT-2 paper gives no optimizer details. The GPT-3 paper does: Adam with $\\beta_1 = 0.9$, $\\beta_2 = 0.95$, gradient clipping at 1.0, weight decay 0.1, and warmup followed by cosine decay. This site's code uses the same values.
+- The GPT-2 paper gives no optimizer details. The [GPT-3](#info:gpt3_notes) paper does: Adam with $\\beta_1 = 0.9$, $\\beta_2 = 0.95$, gradient clipping at 1.0, weight decay 0.1, and warmup followed by cosine decay. This site's code uses the same values.
 - **Adafactor** (memory-efficient and Adam-like, with factored second moments) is used for T5/mT5 when optimizer memory is tight.
 
 ### 2022–2023: AdamW holds
@@ -866,7 +866,7 @@ SGD
 ### 2019–2021：规模扩大（GPT-2/3、T5）
 
 - **[AdamW](#info:adamw_notes)** 成为大语言模型的默认选择，搭配 warmup + cosine 衰减、全局范数的[梯度裁剪](#hover:clip_grad_norm_notes)，并且对 norm/bias 的权重不做 decay。
-- GPT-2 论文没有公布 optimizer 的细节。GPT-3 论文公布了：Adam，$\\beta_1 = 0.9$、$\\beta_2 = 0.95$，梯度裁剪阈值 1.0，weight decay 0.1，先 warmup 再 cosine 衰减。这个网站的代码用的就是这些值。
+- GPT-2 论文没有公布 optimizer 的细节。[GPT-3](#info:gpt3_notes) 论文公布了：Adam，$\\beta_1 = 0.9$、$\\beta_2 = 0.95$，梯度裁剪阈值 1.0，weight decay 0.1，先 warmup 再 cosine 衰减。这个网站的代码用的就是这些值。
 - **Adafactor**（省内存、类似 Adam，对二阶矩做分解）在 optimizer 内存紧张时被 T5/mT5 采用。
 
 ### 2022–2023：AdamW 站稳

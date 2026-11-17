@@ -10,8 +10,9 @@ import norm from "./norm.js";
 import output from "./output.js";
 import training from "./training.js";
 import pytorch from "./pytorch.js";
+import scaling from "./scaling.js";
 
-const TOPICS = { model, input, embedding, position, attention, mlp, residual, norm, output, training, pytorch };
+const TOPICS = { model, input, embedding, position, attention, mlp, residual, norm, output, training, pytorch, scaling };
 
 export const NOTES = {};
 for (const [topic, notes] of Object.entries(TOPICS)) {
