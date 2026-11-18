@@ -55,7 +55,7 @@ export default function ModelExplorer({ model }) {
   const component = model.content[model.resolveCodeId(selectedId)] || { title: "Unknown", summary: "No data", code: "", anchors: [] };
   const Diagram = model.diagram.Component;
 
-  const codeHtml = useMemo(() => buildCodeHtml({ component, selectedId }), [component, selectedId]);
+  const codeHtml = useMemo(() => buildCodeHtml({ component, selectedId, noteOverrides: model.noteOverrides }), [component, selectedId, model.noteOverrides]);
   const lineCount = component.code ? component.code.split("\n").length : 0;
   const fileName = model.fileNames.get(component.code) ?? "code.py";
 

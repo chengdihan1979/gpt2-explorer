@@ -102,6 +102,147 @@ one-hot 的 token 向量长度是 $\\text{vocab\\_size}$，而且极其稀疏。
     },
   },
 
+  llama_embedding_notes: {
+    en: {
+      title: "LLaMA token embedding: no position embedding",
+      md: `
+**LLaMA's token embedding works exactly like [GPT-2's](#info:embedding_tok): each token id selects one row of a table. What changed is around it: the table is much larger, and there is no position embedding at all.**
+
+## The lookup: the same, at a larger size
+
+\`\`\`python
+self.tok_emb = nn.Embedding(vocab_size, n_embd)   # weight (V, C)
+x = self.tok_emb(idx)                             # (B, T) -> (B, T, C)
+\`\`\`
+
+| | Table shape | Parameters |
+|---|---|---|
+| GPT-2 small | $50257 \\times 768$ | 38.6M |
+| LLaMA 3 8B | $128256 \\times 4096$ | 525M |
+
+The rows are the [bigger vocabulary](#info:llama_tokenizer_notes) (128,256 tokens); the columns are the model width (4096).
+
+## How the table is learned
+
+Exactly as in GPT-2:
+
+1. **Random at the start.** Every entry is drawn from a normal distribution. This site's code uses PyTorch's default for \`nn.Embedding\` (standard deviation 1); the Hugging Face LLaMA implementation uses 0.02, as GPT-2 did. Meta's papers do not specify it.
+2. **Trained together with everything else.** There is no separate step: each \`loss.backward()\` computes a gradient for the table too, and \`optimizer.step()\` updates it.
+3. **After training,** tokens with similar meanings end up with nearby vectors. Nobody tells the model which tokens are similar; it falls out of next-token prediction.
+
+LLaMA 3's new tokenizer numbers its tokens differently from LLaMA 2's, so its table was also trained from scratch, not copied from LLaMA 2.
+
+### Where the gradient comes from: one difference from GPT-2
+
+- **GPT-2** uses [weight tying](#info:weight_tying_notes): the embedding table is also the LM head's weight. The LM head gives **every** one of the 50,257 rows a gradient at every step (the softmax has an output for every token), so every row is updated every step.
+- **LLaMA 3 8B** does not tie them: the table is used only at the input. A row gets a gradient **only when its token appears in the batch's input**; all other rows get 0 at that step.
+
+So in LLaMA, the embedding of a rare token rarely gets a gradient. (In between, [AdamW](#info:adamw_notes) still moves it a little: its momentum $m$ fades out over the following steps, and weight decay shrinks it.) This is the "input side only touches the looked-up rows" effect from the [weight tying](#info:weight_tying_notes) note, without the output-side gradient that GPT-2 adds on top.
+
+## No position embedding
+
+The first line of the forward pass, side by side:
+
+\`\`\`python
+# GPT-2: token vector + position vector
+x = self.tok_emb(idx) + self.pos_emb(pos)[None, :, :]
+
+# LLaMA: token vector only
+x = self.tok_emb(idx)
+\`\`\`
+
+GPT-2's [position embedding](#info:embedding_pos) table (1024 × 768) is gone. The $x$ that enters the first block says **which** token is at each position, but not **where** it is.
+
+### Position information is still needed
+
+Attention compares every pair of tokens and takes a weighted sum, and that computation by itself ignores order: reorder the earlier tokens and the result for the last token does not change. For example, with one attention layer and no position information, the last token's output is identical for the inputs \`[5, 17, 42, 8]\` and \`[42, 5, 17, 8]\`. The model could not tell "dog bites man" from "man bites dog". (The [position embedding](#info:embedding_pos) note shows why with permutation matrices, and why the causal mask alone is a weak substitute.)
+
+So LLaMA still needs position information; it only puts it somewhere else.
+
+### Where position goes instead: RoPE inside attention
+
+- **GPT-2** adds a position **vector** to $x$ once, at the start. From then on, position is mixed into $x$ and flows through every layer with it.
+- **LLaMA** keeps position out of $x$. In **every** attention layer, after computing $q$ and $k$, it **rotates** them by an angle that depends on the position ([RoPE](#info:rope_notes)). As a result, the score $q \\cdot k$ depends only on the **relative distance** between the two tokens: a query at position 5 and a key at position 3 give the same score as positions 12 and 10.
+
+This is why the diagram labels the node "Token Embeddings (no position embedding)", and why RoPE appears as a step inside the attention sub-diagram.
+
+## References
+
+1. **LLaMA: Open and Efficient Foundation Language Models.** Touvron et al., 2023. [arXiv:2302.13971 ↗](https://arxiv.org/abs/2302.13971)
+2. **RoFormer: Enhanced Transformer with Rotary Position Embedding.** Su et al., 2021. [arXiv:2104.09864 ↗](https://arxiv.org/abs/2104.09864)
+`,
+    },
+    zh: {
+      title: "LLaMA 的 token embedding：没有位置 embedding",
+      md: `
+**LLaMA 的 token embedding 和 [GPT-2 的](#info:embedding_tok)完全一样：用每个 token id 去表里取一行。变化在它周围：表大了很多，而且完全没有位置 embedding。**
+
+## 查表：一样的做法，更大的表
+
+\`\`\`python
+self.tok_emb = nn.Embedding(vocab_size, n_embd)   # weight (V, C)
+x = self.tok_emb(idx)                             # (B, T) -> (B, T, C)
+\`\`\`
+
+| | 表的形状 | 参数量 |
+|---|---|---|
+| GPT-2 small | $50257 \\times 768$ | 3860 万 |
+| LLaMA 3 8B | $128256 \\times 4096$ | 5.25 亿 |
+
+行数是[更大的词表](#info:llama_tokenizer_notes)（128,256 个 token），列数是模型宽度（4096）。
+
+## 这张表是怎么学出来的
+
+和 GPT-2 完全一样：
+
+1. **开始时随机初始化。** 表里每个数都从正态分布里随机抽取。这个网站的代码用的是 PyTorch \`nn.Embedding\` 的默认值（标准差 1）；Hugging Face 的 LLaMA 实现用 0.02，和 GPT-2 一样。Meta 的论文没有写明。
+2. **和其他参数一起训练。** 没有单独的训练步骤：每次 \`loss.backward()\` 也会算出这张表的梯度，\`optimizer.step()\` 再更新它。
+3. **训练结束后，** 意思相近的 token，向量也会靠得近。没有人告诉模型哪些词意思相近，这是 next-token prediction 训练出来的结果。
+
+LLaMA 3 换了新的 tokenizer，token 的编号和 LLaMA 2 完全不同，所以它的表也是从头训练的，没有沿用 LLaMA 2 的。
+
+### 梯度从哪里来：和 GPT-2 的一个区别
+
+- **GPT-2** 用了 [weight tying](#info:weight_tying_notes)：embedding 表同时也是 LM head 的权重。LM head 每一步都会给 50,257 行中的**每一行**梯度（softmax 对每个词都有输出），所以每一行每一步都会被更新。
+- **LLaMA 3 8B** 不共享：这张表只在输入端用到。一行**只有在它的 token 出现在这个 batch 的输入里时**才会拿到梯度；其他行在这一步的梯度是 0。
+
+所以在 LLaMA 里，很少出现的 token，它的 embedding 很少拿到梯度。（没有梯度的那些步，[AdamW](#info:adamw_notes) 仍然会让它动一点：动量 $m$ 在之后几步里慢慢衰减，weight decay 也会把它缩小一点。）这就是 [weight tying](#info:weight_tying_notes) note 里讲的"输入端只碰到查到的那几行"，只是 LLaMA 没有 GPT-2 那份来自输出端的梯度来补。
+
+## 没有位置 embedding
+
+把 forward 的第一行并排比较：
+
+\`\`\`python
+# GPT-2：token 向量 + 位置向量
+x = self.tok_emb(idx) + self.pos_emb(pos)[None, :, :]
+
+# LLaMA：只有 token 向量
+x = self.tok_emb(idx)
+\`\`\`
+
+GPT-2 的[位置 embedding](#info:embedding_pos) 表（1024 × 768）没有了。进入第一个 block 的 $x$ 里，只有每个位置上是**哪个** token，没有它在**第几个**位置。
+
+### 位置信息仍然是必需的
+
+attention 计算的是每对 token 之间的相似度，再加权求和，这个计算本身不关心顺序：把前面的 token 换个顺序，最后一个 token 的结果不变。例如，只用一层不带位置信息的 attention，输入 \`[5, 17, 42, 8]\` 和 \`[42, 5, 17, 8]\` 时，最后一个 token 的输出完全相同。模型分不清 "狗咬人" 和 "人咬狗"。（[位置 embedding](#info:embedding_pos) note 里用置换矩阵说明了原因，也解释了为什么光靠 causal mask 不够。）
+
+所以 LLaMA 仍然需要位置信息，只是放到了别的地方。
+
+### 位置改放在哪里：attention 里的 RoPE
+
+- **GPT-2** 在最开始，把一个位置**向量**加到 $x$ 上，只加一次。之后位置信息混在 $x$ 里，跟着 $x$ 流过所有层。
+- **LLaMA** 不把位置放进 $x$。在**每一层** attention 里，算出 $q$ 和 $k$ 之后，按位置把它们**旋转**一个角度（[RoPE](#info:rope_notes)）。这样分数 $q \\cdot k$ 只取决于两个 token 的**相对距离**：位置 5 的 query 和位置 3 的 key，算出的分数和位置 12、10 的一样。
+
+这就是图上把这个方框标成 "Token Embeddings (no position embedding)" 的原因，也是 RoPE 出现在 attention sub-diagram 里的原因。
+
+## 参考资料
+
+1. **LLaMA: Open and Efficient Foundation Language Models.** Touvron 等人，2023。[arXiv:2302.13971 ↗](https://arxiv.org/abs/2302.13971)
+2. **RoFormer: Enhanced Transformer with Rotary Position Embedding.** Su 等人，2021。[arXiv:2104.09864 ↗](https://arxiv.org/abs/2104.09864)
+`,
+    },
+  },
+
   weight_tying_notes: {
     en: {
       title: "Weight Tying",

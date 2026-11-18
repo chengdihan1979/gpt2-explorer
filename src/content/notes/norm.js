@@ -138,7 +138,7 @@ Among recent open-weight LLMs, **RMSNorm** is the default more often than LayerN
 - **Qwen:** model cards list the architecture as "transformers with RoPE, SwiGLU, RMSNorm …" (e.g. Qwen2.5-1.5B). [Qwen2.5-1.5B ↗](https://huggingface.co/Qwen/Qwen2.5-1.5B)
 - **Gemma:** Hugging Face's Gemma docs describe the model as using GeGLU activations and RMSNorm. [Gemma docs ↗](https://huggingface.co/docs/transformers/en/model_doc/gemma)
 
-See a [tiny numeric example](#hover:rmsnorm_gradient_example_notes) of how RMSNorm works.
+See the [RMSNorm](#info:rmsnorm_notes) note for how it works and why the mean subtraction can be dropped.
 
 ## References
 
@@ -307,7 +307,7 @@ $$
 - **Qwen：** 模型卡上写的架构是 "transformers with RoPE, SwiGLU, RMSNorm …"（例如 Qwen2.5-1.5B）。[Qwen2.5-1.5B ↗](https://huggingface.co/Qwen/Qwen2.5-1.5B)
 - **Gemma：** Hugging Face 的 Gemma 文档说明它使用 GeGLU 激活和 RMSNorm。[Gemma 文档 ↗](https://huggingface.co/docs/transformers/en/model_doc/gemma)
 
-看一个[很小的数值例子](#hover:rmsnorm_gradient_example_notes)，了解 RMSNorm 怎么算。
+RMSNorm 怎么算、为什么可以不减均值，见 [RMSNorm](#info:rmsnorm_notes) note。
 
 ## 参考资料
 
@@ -352,7 +352,7 @@ $$
 
 ## Shared by all tokens within one LayerNorm
 
-Take block 3's \`ln1\`. Every token that passes through it, from every sequence in the batch and at every position, uses **the same** $\\gamma$ and $\\beta$.
+Pick any one LayerNorm, for example the \`ln1\` of some block. Every token that passes through it, from every sequence in the batch and at every position, uses **the same** $\\gamma$ and $\\beta$.
 
 ## Separate for each LayerNorm
 
@@ -402,7 +402,7 @@ That is about 0.03% of GPT-2 small's roughly 124M parameters.
 
 ## 同一个 LayerNorm 里，所有 token 共用
 
-以第 3 个 block 的 \`ln1\` 为例。穿过它的每个 token，不管来自 batch 里哪个序列、在哪个位置，用的都是**同一套** $\\gamma$ 和 $\\beta$。
+任取一个 LayerNorm，比如某个 block 的 \`ln1\`。穿过它的每个 token，不管来自 batch 里哪个序列、在哪个位置，用的都是**同一套** $\\gamma$ 和 $\\beta$。
 
 ## 每个 LayerNorm 各有一套
 
@@ -615,7 +615,7 @@ Now the prediction depends only on the **direction** of $x$, not on how much the
 
 The original Transformer is post-LN: after every sublayer, $x$ itself is replaced by $\\text{LN}(x + \\text{sublayer}(x))$, so the stream leaving the last layer is already normalized. GPT-2 moved to pre-LN, so it has to add this one normalization at the end. The GPT-2 paper: "an additional layer normalization was added after the final self-attention block". See [LayerNorm](#info:layernorm) for pre-LN vs post-LN.
 
-> 🆕 Modern models such as LLaMA keep this final norm but use RMSNorm instead of LayerNorm (no mean subtraction, no β).
+> 🆕 Modern models such as LLaMA keep this final norm but use [RMSNorm](#info:rmsnorm_notes) instead of LayerNorm (no mean subtraction, no β).
 `,
     },
     zh: {
@@ -684,7 +684,7 @@ logits  = [0.949, -0.949, 0.316]   →   softmax = [0.59, 0.09, 0.32]
 
 原始 Transformer 用 post-LN：每个子层之后，$x$ 本身会被替换成 $\\text{LN}(x + \\text{sublayer}(x))$，所以最后一层输出的残差流已经归一化过了。GPT-2 改成 pre-LN，就得在最后补这一次归一化。GPT-2 论文原话："an additional layer normalization was added after the final self-attention block"。pre-LN 和 post-LN 的对比见 [LayerNorm](#info:layernorm)。
 
-> 🆕 LLaMA 等现代模型保留了这个最后的 norm，但把 LayerNorm 换成了 RMSNorm（不减均值，没有 β）。
+> 🆕 LLaMA 等现代模型保留了这个最后的 norm，但把 LayerNorm 换成了 [RMSNorm](#info:rmsnorm_notes)（不减均值，没有 β）。
 `,
     },
   },
@@ -1528,11 +1528,11 @@ $$
     },
   },
 
-  rmsnorm_gradient_example_notes: {
+  rmsnorm_notes: {
     en: {
-      title: "RMSNorm gradient example",
+      title: "RMSNorm",
       md: `
-**A tiny numeric example to illustrate how RMSNorm works.**
+**RMSNorm is LayerNorm with two parts removed: it does not subtract the mean, and it has no shift $\\beta$. It only rescales each token's vector to a fixed size. LLaMA uses it in place of [LayerNorm](#info:layernorm) everywhere: before attention, before the MLP, and as the final norm.**
 
 ## The formula
 
@@ -1540,16 +1540,43 @@ $$
 \\mathrm{RMSNorm}(x) = \\gamma \\cdot \\frac{x}{\\sqrt{\\frac{1}{d} \\sum_{i}x_i^2 + \\epsilon}}
 $$
 
-- $\\gamma$ is a learnable scaling factor; we'll talk about what it's used for later.
+- The denominator is the **RMS** (root mean square) of $x$: square every entry, take the mean, take the square root.
+- $\\gamma$ is a learnable scale, one value per dimension (see "Why do we need the scale factor $\\gamma$?" below).
 - $\\epsilon$ is a small constant to avoid division by zero.
 
-## Setup
+Side by side with LayerNorm:
+
+$$
+\\mathrm{LayerNorm}(x) = \\gamma \\cdot \\frac{x - \\mu}{\\sqrt{\\sigma^2 + \\epsilon}} + \\beta
+$$
+
+LayerNorm does two things: it **shifts** $x$ so its mean is 0 (subtract $\\mu$), then **scales** it so its standard deviation is 1. RMSNorm only does the scaling. Since it does not subtract the mean first, it divides by the RMS instead of the standard deviation (the standard deviation is the RMS of $x - \\mu$).
+
+## In the code
+
+\`\`\`python
+class RMSNorm(nn.Module):
+    def __init__(self, dim, eps=1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))    # γ, shape (C,); no bias
+
+    def forward(self, x):                              # x: (B, T, C)
+        rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)   # (B, T, 1)
+        return x / rms * self.weight                   # (B, T, C)
+\`\`\`
+
+As with LayerNorm, each token's vector is normalized on its own, over the last dimension ($C = 4096$ in LLaMA 3 8B).
+
+## A worked example
+
+Take
 
 $$
 x = \\begin{bmatrix}2, -1, 3, 0\\end{bmatrix}, \\quad \\gamma = [1.0, 0.5, 2.0, 1.5]
 $$
 
-So in this example $d = 4$. We'll also ignore the $\\epsilon$ term for simplicity.
+So $d = 4$. We ignore $\\epsilon$ for simplicity.
 
 ### Step 1: compute the RMS
 
@@ -1557,31 +1584,84 @@ $$
 \\mathrm{RMS}(x) = \\sqrt{\\frac{1}{d} \\sum_{i=1}^d x_i^2} = \\sqrt{\\frac{1}{4} (2^2 + (-1)^2 + 3^2 + 0^2)} = \\sqrt{\\frac{1}{4} (4 + 1 + 9 + 0)} = \\sqrt{\\frac{14}{4}} = \\sqrt{3.5} \\approx 1.8708
 $$
 
-### Step 2: normalize by the RMS
+### Step 2: divide by the RMS
 
 $$
 \\hat{x} = \\frac{x}{\\mathrm{RMS}(x)} = \\begin{bmatrix}2/1.8708, -1/1.8708, 3/1.8708, 0/1.8708\\end{bmatrix} = \\begin{bmatrix}1.0690, -0.5345, 1.6036, 0.0000\\end{bmatrix}
 $$
 
-### Step 3: apply per-feature scaling
+### Step 3: scale each dimension by $\\gamma$
 
 $$
 y = \\begin{bmatrix}1.0690 \\cdot 1.0, -0.5345 \\cdot 0.5, 1.6036 \\cdot 2.0, 0.0000 \\cdot 1.5\\end{bmatrix} = \\begin{bmatrix}1.0690, -0.2673, 3.2071, 0.0000\\end{bmatrix}
 $$
 
-This is the RMSNorm output.
+This is the RMSNorm output. Note that $x$ was divided directly, with no mean subtracted first, and nothing was added at the end.
 
-Compared with LayerNorm, RMSNorm skips two things: it does not subtract the mean (the $x$ above is divided directly, with no centering), and it has no shift $\\beta$.
+## LayerNorm changes the direction; RMSNorm does not
+
+Run both norms (with $\\gamma = 1$, $\\beta = 0$) on $x = [1, 2, 3, 6]$. To compare directions, use the [cosine similarity](#hover:cosine_similarity_notes) with $x$: 1 means the same direction, smaller means the direction moved.
+
+\`\`\`text
+x = [1, 2, 3, 6]
+
+LayerNorm:
+  mean = 3,  x − mean = [−2, −1, 0, 3]
+  std  = √((4 + 1 + 0 + 9) / 4) = 1.871
+  output = [−1.069, −0.535, 0, 1.604]            cosine with x: 0.53
+
+RMSNorm:
+  rms  = √((1 + 4 + 9 + 36) / 4) = √12.5 = 3.536
+  output = x / 3.536 = [0.283, 0.566, 0.849, 1.697]   cosine with x: 1.00
+\`\`\`
+
+- **RMSNorm** divides $x$ by one positive number, so the direction is unchanged; only the length changes. Every output has RMS 1.
+- **LayerNorm**'s division does not change the direction either. The **mean subtraction** does: it subtracts the same number from every entry, which moves the vector along the direction $[1, 1, 1, 1]$. (If $x$ already has mean 0, there is nothing to subtract and LayerNorm keeps the direction too: for $[-1, 0, 1, 0]$ the cosine is 1.00.)
+
+This holds for the normalization step only. Multiplying by $\\gamma$ scales each dimension differently, so it changes the direction in both norms. For example, with $\\gamma = [2, 1, 1, 1]$ the RMSNorm output above becomes $[0.566, 0.566, 0.849, 1.697]$, and its cosine with $x$ drops to 0.99. LayerNorm's $\\beta$ changes it too.
+
+## Why the mean subtraction can be dropped
+
+LayerNorm's output stays the same under two kinds of change to its input:
+
+\`\`\`text
+                 LayerNorm output               RMSNorm output
+x                [−1.069, −0.535, 0, 1.604]     [0.283, 0.566, 0.849, 1.697]
+10 × x           [−1.069, −0.535, 0, 1.604]     [0.283, 0.566, 0.849, 1.697]   ← both unchanged
+x + 5            [−1.069, −0.535, 0, 1.604]     [0.730, 0.852, 0.974, 1.339]   ← only LayerNorm unchanged
+\`\`\`
+
+- **Scale invariance:** multiply the input by 10 and the output does not change. This comes from dividing by the standard deviation or the RMS, so both norms have it.
+- **Shift invariance:** add 5 to every entry and the output does not change. This comes from subtracting the mean, so only LayerNorm has it.
+
+The RMSNorm paper (Zhang & Sennrich, 2019) proposes that **scale invariance is what makes LayerNorm work, and shift invariance matters much less**:
+
+- **Why scale invariance matters:** the [residual stream](#info:residual_why_notes) gets something added to it in every layer, so its vectors can grow longer and longer. However long the incoming vector is, the norm brings it back to a fixed size, so attention and the MLP always see inputs in a stable range, and training stays stable.
+- **Why shift invariance matters less:** if the vector has an overall offset, the model can learn to deal with it (or to avoid producing it); the norm does not need to remove it every time.
+
+In their experiments RMSNorm performed about as well as LayerNorm, and LLaMA, Mistral, Qwen, DeepSeek and others have since used it (see the list in the [LayerNorm](#info:layernorm) note).
+
+## What is saved
+
+1. **One fewer pass over the vector.** LayerNorm reads the vector once to compute the mean, then again for the variance. RMSNorm needs one pass to compute the mean of the squares. The arithmetic is small, but the whole vector has to be read from GPU memory, so fewer passes means faster. The paper reports 7% to 64% less running time, depending on the model.
+2. **No bias parameters.** This saving is tiny: LLaMA 3 8B has 65 norms (2 in each of the 32 blocks, plus the final one), each without a 4096-entry $\\beta$. That is 266K parameters, 0.003% of 8B.
+
+So RMSNorm is chosen because it is **simpler and faster** with about the same quality, not to save parameters.
 
 ## Why do we need the scale factor $\\gamma$?
 
-Pure normalization fixes the RMS of the output to $\\approx 1$, which is too restrictive and not ideal. $\\gamma$ lets the model learn and reshape that constraint per feature: different features can be scaled up or down as training discovers which directions are useful.
+Pure normalization fixes the RMS of the output to $\\approx 1$, which is too restrictive. $\\gamma$ lets the model reshape that per dimension: as training finds which dimensions are useful, it can scale them up or down. $\\gamma$ starts at all ones (\`torch.ones(dim)\`), so at the start of training RMSNorm is pure normalization.
+
+## References
+
+1. **Root Mean Square Layer Normalization.** Zhang & Sennrich, 2019. [arXiv:1910.07467 ↗](https://arxiv.org/abs/1910.07467)
+2. **Layer Normalization.** Ba, Kiros & Hinton, 2016. [arXiv:1607.06450 ↗](https://arxiv.org/abs/1607.06450)
 `,
     },
     zh: {
-      title: "RMSNorm 的例子",
+      title: "RMSNorm",
       md: `
-**一个很小的数值例子，说明 RMSNorm 怎么算。**
+**RMSNorm 就是去掉了两部分的 LayerNorm：不减均值，也没有平移项 $\\beta$。它只把每个 token 的向量缩放到固定的大小。LLaMA 在所有用 [LayerNorm](#info:layernorm) 的地方都换成了它：attention 之前、MLP 之前，以及最后的 norm。**
 
 ## 公式
 
@@ -1589,16 +1669,43 @@ $$
 \\mathrm{RMSNorm}(x) = \\gamma \\cdot \\frac{x}{\\sqrt{\\frac{1}{d} \\sum_{i}x_i^2 + \\epsilon}}
 $$
 
-- $\\gamma$ 是可学习的缩放因子，它的用处后面再讲。
+- 分母是 $x$ 的 **RMS**（root mean square，均方根）：每个元素平方，求平均，再开根号。
+- $\\gamma$ 是可学习的缩放因子，每个维度一个值（见下面的"为什么需要缩放因子 $\\gamma$？"）。
 - $\\epsilon$ 是一个很小的常数，防止除以 0。
 
-## 设定
+和 LayerNorm 并排对比：
+
+$$
+\\mathrm{LayerNorm}(x) = \\gamma \\cdot \\frac{x - \\mu}{\\sqrt{\\sigma^2 + \\epsilon}} + \\beta
+$$
+
+LayerNorm 做两件事：先**平移**，减去均值 $\\mu$，让均值变成 0；再**缩放**，让标准差变成 1。RMSNorm 只做缩放。因为没有先减均值，所以除的不是标准差，而是 RMS（标准差就是 $x - \\mu$ 的 RMS）。
+
+## 在代码里
+
+\`\`\`python
+class RMSNorm(nn.Module):
+    def __init__(self, dim, eps=1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))    # γ，形状 (C,)；没有 bias
+
+    def forward(self, x):                              # x: (B, T, C)
+        rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)   # (B, T, 1)
+        return x / rms * self.weight                   # (B, T, C)
+\`\`\`
+
+和 LayerNorm 一样，每个 token 的向量单独归一化，作用在最后一维上（LLaMA 3 8B 里 $C = 4096$）。
+
+## 算一个例子
+
+取
 
 $$
 x = \\begin{bmatrix}2, -1, 3, 0\\end{bmatrix}, \\quad \\gamma = [1.0, 0.5, 2.0, 1.5]
 $$
 
-所以这个例子里 $d = 4$。为了简单，也忽略 $\\epsilon$。
+所以 $d = 4$。为了简单，忽略 $\\epsilon$。
 
 ### 第 1 步：算 RMS
 
@@ -1612,19 +1719,163 @@ $$
 \\hat{x} = \\frac{x}{\\mathrm{RMS}(x)} = \\begin{bmatrix}2/1.8708, -1/1.8708, 3/1.8708, 0/1.8708\\end{bmatrix} = \\begin{bmatrix}1.0690, -0.5345, 1.6036, 0.0000\\end{bmatrix}
 $$
 
-### 第 3 步：逐维度缩放
+### 第 3 步：每个维度乘以 $\\gamma$
 
 $$
 y = \\begin{bmatrix}1.0690 \\cdot 1.0, -0.5345 \\cdot 0.5, 1.6036 \\cdot 2.0, 0.0000 \\cdot 1.5\\end{bmatrix} = \\begin{bmatrix}1.0690, -0.2673, 3.2071, 0.0000\\end{bmatrix}
 $$
 
-这就是 RMSNorm 的输出。
+这就是 RMSNorm 的输出。注意 $x$ 是直接拿来除的，没有先减均值，最后也没有加任何东西。
 
-和 LayerNorm 相比，RMSNorm 少了两步：不减均值（上面的 $x$ 没有先减去均值），也没有平移项 $\\beta$。
+## LayerNorm 会改变方向，RMSNorm 不会
+
+在 $x = [1, 2, 3, 6]$ 上分别算两种 norm（取 $\\gamma = 1$，$\\beta = 0$）。用和 $x$ 的 [cosine 相似度](#hover:cosine_similarity_notes)来比较方向：1 表示方向完全相同，越小表示方向偏得越多。
+
+\`\`\`text
+x = [1, 2, 3, 6]
+
+LayerNorm:
+  mean = 3,  x − mean = [−2, −1, 0, 3]
+  std  = √((4 + 1 + 0 + 9) / 4) = 1.871
+  结果 = [−1.069, −0.535, 0, 1.604]              和 x 的 cosine：0.53
+
+RMSNorm:
+  rms  = √((1 + 4 + 9 + 36) / 4) = √12.5 = 3.536
+  结果 = x / 3.536 = [0.283, 0.566, 0.849, 1.697]   和 x 的 cosine：1.00
+\`\`\`
+
+- **RMSNorm** 只是把 $x$ 除以一个正数，所以方向完全不变，只改变长度。每个输出的 RMS 都是 1。
+- **LayerNorm** 的除法本身也不改变方向，改变方向的是**减均值**：每个元素减去同一个数，相当于把向量沿 $[1, 1, 1, 1]$ 方向移动了一段。（如果 $x$ 的均值本来就是 0，就没有东西可减，LayerNorm 也不改变方向：比如 $[-1, 0, 1, 0]$，cosine 是 1.00。）
+
+这只是对归一化这一步而言。乘以 $\\gamma$ 时每个维度的倍数不同，所以两种 norm 都会因此改变方向。例如 $\\gamma = [2, 1, 1, 1]$ 时，上面 RMSNorm 的结果变成 $[0.566, 0.566, 0.849, 1.697]$，和 $x$ 的 cosine 降到 0.99。LayerNorm 的 $\\beta$ 也会改变方向。
+
+## 为什么可以不减均值
+
+LayerNorm 的输出，对输入的两种变化都"免疫"：
+
+\`\`\`text
+                 LayerNorm 结果                 RMSNorm 结果
+x                [−1.069, −0.535, 0, 1.604]     [0.283, 0.566, 0.849, 1.697]
+10 × x           [−1.069, −0.535, 0, 1.604]     [0.283, 0.566, 0.849, 1.697]   ← 两者都不变
+x + 5            [−1.069, −0.535, 0, 1.604]     [0.730, 0.852, 0.974, 1.339]   ← 只有 LayerNorm 不变
+\`\`\`
+
+- **缩放不变：** 输入整体乘以 10，输出不变。这来自"除以标准差 / RMS"那一步，两种 norm 都有。
+- **平移不变：** 每个元素都加 5，输出不变。这来自"减均值"那一步，只有 LayerNorm 有。
+
+RMSNorm 的论文（Zhang & Sennrich, 2019）提出：**LayerNorm 真正起作用的是缩放不变，平移不变没那么重要。**
+
+- **缩放不变为什么重要：** [residual stream](#info:residual_why_notes) 每过一层都会加上新的东西，向量可能越来越长。不管进来的向量有多长，norm 之后都是固定的大小，后面的 attention 和 MLP 拿到的输入就一直在稳定的范围内，训练也就稳定。
+- **平移不变为什么没那么重要：** 就算向量里有一个整体的偏移，模型也可以自己学着处理（或者干脆不让它出现），不需要 norm 每次替它减掉。
+
+论文的实验里，RMSNorm 的效果和 LayerNorm 差不多。之后 LLaMA、Mistral、Qwen、DeepSeek 等都用了 RMSNorm（见 [LayerNorm](#info:layernorm) note 里的列表）。
+
+## 省了什么
+
+1. **少过一遍向量。** LayerNorm 先把向量读一遍算均值，再读一遍算方差。RMSNorm 只要读一遍，算平方的均值。计算量本身很小，但整个向量都要从 GPU 显存里读出来，读得越少越快。论文报告运行时间减少了 7%～64%，不同模型上不一样。
+2. **没有 bias 参数。** 这个省得很少：LLaMA 3 8B 有 65 个 norm（32 个 block 各 2 个，再加最后一个），每个少一个 4096 维的 $\\beta$，合计 26.6 万个参数，只占 80 亿的 0.003%。
+
+所以换成 RMSNorm，主要是因为它**更简单、更快**，效果基本不变，而不是为了省参数。
 
 ## 为什么需要缩放因子 $\\gamma$？
 
-只做归一化，会把输出的 RMS 固定在 $\\approx 1$，这个限制太死，并不理想。$\\gamma$ 让模型可以按维度学习、调整这个限制：训练中发现哪些方向有用，就可以把对应的维度放大或缩小。
+只做归一化，会把输出的 RMS 固定在 $\\approx 1$，这个限制太死。$\\gamma$ 让模型可以按维度调整：训练中发现哪些维度有用，就把它们放大或缩小。$\\gamma$ 一开始全是 1（\`torch.ones(dim)\`），所以训练刚开始时，RMSNorm 就是单纯的归一化。
+
+## 参考资料
+
+1. **Root Mean Square Layer Normalization.** Zhang & Sennrich，2019。[arXiv:1910.07467 ↗](https://arxiv.org/abs/1910.07467)
+2. **Layer Normalization.** Ba、Kiros & Hinton，2016。[arXiv:1607.06450 ↗](https://arxiv.org/abs/1607.06450)
+`,
+    },
+  },
+
+  cosine_similarity_notes: {
+    en: {
+      title: "Cosine similarity",
+      md: `
+**Cosine similarity is the cosine of the angle between two vectors. It compares their directions and ignores their lengths.**
+
+$$
+\\cos(a, b) = \\frac{a \\cdot b}{|a|\\,|b|}
+$$
+
+- **Numerator:** the dot product: multiply matching entries and add them up.
+- **Denominator:** the two lengths multiplied, where $|a| = \\sqrt{\\sum_i a_i^2}$. Dividing by them removes the lengths, so only the direction is left.
+
+## Example: $x$ and $x$ minus its mean
+
+\`\`\`text
+x = [1, 2, 3, 6]
+c = [−2, −1, 0, 3]
+
+dot product   x · c = 1×(−2) + 2×(−1) + 3×0 + 6×3 = −2 − 2 + 0 + 18 = 14
+lengths       |x| = √(1 + 4 + 9 + 36) = √50 = 7.071
+              |c| = √(4 + 1 + 0 + 9)  = √14 = 3.742
+
+cosine = 14 / (7.071 × 3.742) = 14 / 26.458 = 0.529    (an angle of about 58°)
+\`\`\`
+
+## Scaling by a positive number gives 1
+
+Let $s = c / k$ for some $k > 0$. Then $c \\cdot s = (c \\cdot c)/k$ and $|s| = |c|/k$, so
+
+$$
+\\cos(c, s) = \\frac{(c \\cdot c)/k}{|c| \\cdot |c|/k} = \\frac{c \\cdot c}{|c|^2} = 1
+$$
+
+$k$ cancels, and $c \\cdot c = |c|^2$. Multiplying or dividing a vector by any positive number never changes its direction.
+
+## Reading the value
+
+\`\`\`text
+ 1   same direction (0°)
+ 0   perpendicular (90°)
+−1   opposite directions (180°)
+\`\`\`
+`,
+    },
+    zh: {
+      title: "cosine 相似度",
+      md: `
+**cosine 相似度就是两个向量夹角的余弦。它只比较方向，不管长度。**
+
+$$
+\\cos(a, b) = \\frac{a \\cdot b}{|a|\\,|b|}
+$$
+
+- **分子：** 点积，对应位置相乘再加起来。
+- **分母：** 两个向量的长度相乘，长度 $|a| = \\sqrt{\\sum_i a_i^2}$。除以长度，就把长短的影响去掉了，只剩下方向。
+
+## 例子：$x$ 和减去均值后的 $x$
+
+\`\`\`text
+x = [1, 2, 3, 6]
+c = [−2, −1, 0, 3]
+
+点积   x · c = 1×(−2) + 2×(−1) + 3×0 + 6×3 = −2 − 2 + 0 + 18 = 14
+长度   |x| = √(1 + 4 + 9 + 36) = √50 = 7.071
+       |c| = √(4 + 1 + 0 + 9)  = √14 = 3.742
+
+cosine = 14 / (7.071 × 3.742) = 14 / 26.458 = 0.529    （夹角约 58°）
+\`\`\`
+
+## 乘以或除以一个正数，cosine 是 1
+
+设 $s = c / k$，$k > 0$。那么 $c \\cdot s = (c \\cdot c)/k$，$|s| = |c|/k$，所以
+
+$$
+\\cos(c, s) = \\frac{(c \\cdot c)/k}{|c| \\cdot |c|/k} = \\frac{c \\cdot c}{|c|^2} = 1
+$$
+
+$k$ 在分子分母里正好约掉，而 $c \\cdot c$ 就等于 $|c|^2$。所以把向量乘以或除以任何正数，方向都不会变。
+
+## 怎么读这个数
+
+\`\`\`text
+ 1   方向完全相同（0°）
+ 0   互相垂直（90°）
+−1   方向完全相反（180°）
+\`\`\`
 `,
     },
   },

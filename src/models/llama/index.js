@@ -27,6 +27,11 @@ export default {
   defaultSelected: "token_embed",
   content,
   resolveCodeId: (id) => id,
+  // Shared code-link rules that should open a LLaMA note instead of the GPT-2 one.
+  noteOverrides: {
+    embedding_tok: "llama_embedding_notes",
+    lm_head_notes: "llama_lm_head_notes",
+  },
   fileNames: new Map([
     [llamaTrainingCode, "train_llama.py"],
     [blockCode, "block.py"],

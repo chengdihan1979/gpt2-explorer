@@ -102,6 +102,157 @@ logits:  (B, T, 50304)      # 每个位置，对每个词都有一个分数
     },
   },
 
+  llama_lm_head_notes: {
+    en: {
+      title: "LLaMA LM head: not tied to the embedding",
+      md: `
+**LLaMA's LM head does the same job as [GPT-2's](#info:lm_head_notes): it takes the dot product of the final vector with one row per token, which gives every token a score. The difference is that its weight matrix is its own, not shared with the [token embedding](#info:llama_embedding_notes).**
+
+## In the code
+
+\`\`\`python
+# GPT-2: one matrix, used at both ends
+self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
+self.lm_head.weight = self.tok_emb.weight
+
+# LLaMA 3 8B: the same layer, without the tying line
+self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)   # weight (128256, 4096)
+logits = self.lm_head(x)                                   # (B, T, 4096) -> (B, T, 128256)
+\`\`\`
+
+The LM head's weight and the embedding table have the same shape, $(V, C) = (128256, 4096)$, about 525M parameters each. In LLaMA they are two separate parameters, each trained on its own.
+
+## Why not tie: the two ends do different jobs
+
+Row $i$ has a different job in each matrix:
+
+- **Token embedding:** what token $i$ means when it is read as **context**, for the tokens after it to use.
+- **LM head:** it **scores** token $i$: the dot product of the final vector with this row is token $i
+
+The two jobs are related (tokens with similar meanings tend to follow similar contexts), but they are not the same. Tying forces one vector to do both; untying lets each end learn the vector that suits its own job. (The [weight tying](#info:weight_tying_notes) note shows how a tied row gets gradients from both ends.)
+
+## Why GPT-2 tied: what the saving is worth
+
+Tying removes one $V \\times C$ matrix. How much that saves depends on the size of the rest of the model:
+
+| Model | Tied? | One $V \\times C$ matrix | Saved by tying |
+|---|---|---|---|
+| GPT-2 small | yes | 38.6M | 24% (124M instead of 163M) |
+| LLaMA 3.2 1B | yes | 263M | 18% (1.24B instead of 1.50B) |
+| LLaMA 3.2 3B | yes | 394M | 11% (3.2B instead of 3.6B) |
+| LLaMA 3 8B | no | 525M | would be 6.5% (7.5B instead of 8.0B) |
+
+Each percentage is one matrix divided by the parameter count without tying, e.g. 38.6M / 163M ≈ 24%.
+
+- **Small models:** the embedding is a large part of the model, so tying saves up to a quarter of the parameters. GPT-2 ties, and so do LLaMA 3.2 1B and 3B, the small models meant to run on phones and other devices.
+- **Large models:** almost all the parameters are in the transformer blocks (about 7.0B of LLaMA 3 8B's 8.0B). Saving 6.5% is not worth making both ends share one vector, so LLaMA 1, 2 and 3 at 7B/8B and above do not tie.
+
+Other model families make the same choice by size; see "Recent developments" in the [weight tying](#info:weight_tying_notes) note.
+
+## A side effect on the gradients
+
+The LM head's softmax has an output for every token, so **every row of the LM head** gets a gradient at every step, as in GPT-2.
+
+Without tying, none of that reaches the embedding table. An embedding row gets a gradient only when its token appears in the input batch. So for a rare token, the output row is trained every step, but the input row only now and then (see [LLaMA token embedding](#info:llama_embedding_notes)).
+
+## References
+
+1. **Using the Output Embedding to Improve Language Models.** Press & Wolf, 2016. [arXiv:1608.05859 ↗](https://arxiv.org/abs/1608.05859)
+2. **The Llama 3 Herd of Models.** Llama Team, Meta, 2024. [arXiv:2407.21783 ↗](https://arxiv.org/abs/2407.21783)
+s score. So this row has to learn what the final vector looks like when the next token should be $i$.
+
+The two jobs are related (tokens with similar meanings tend to follow similar contexts), but they are not the same. Tying forces one vector to do both; untying lets each end learn the vector that suits its own job. (The [weight tying](#info:weight_tying_notes) note shows how a tied row gets gradients from both ends.)
+
+## Why GPT-2 tied: what the saving is worth
+
+Tying removes one $V \\times C$ matrix. How much that saves depends on the size of the rest of the model:
+
+| Model | Tied? | One $V \\times C$ matrix | Saved by tying |
+|---|---|---|---|
+| GPT-2 small | yes | 38.6M | 24% (124M instead of 163M) |
+| LLaMA 3.2 1B | yes | 263M | 18% (1.24B instead of 1.50B) |
+| LLaMA 3.2 3B | yes | 394M | 11% (3.2B instead of 3.6B) |
+| LLaMA 3 8B | no | 525M | would be 6.5% (7.5B instead of 8.0B) |
+
+Each percentage is one matrix divided by the parameter count without tying, e.g. 38.6M / 163M ≈ 24%.
+
+- **Small models:** the embedding is a large part of the model, so tying saves up to a quarter of the parameters. GPT-2 ties, and so do LLaMA 3.2 1B and 3B, the small models meant to run on phones and other devices.
+- **Large models:** almost all the parameters are in the transformer blocks (about 7.0B of LLaMA 3 8B's 8.0B). Saving 6.5% is not worth making both ends share one vector, so LLaMA 1, 2 and 3 at 7B/8B and above do not tie.
+
+Other model families make the same choice by size; see "Recent developments" in the [weight tying](#info:weight_tying_notes) note.
+
+## A side effect on the gradients
+
+The LM head's softmax has an output for every token, so **every row of the LM head** gets a gradient at every step, as in GPT-2.
+
+Without tying, none of that reaches the embedding table. An embedding row gets a gradient only when its token appears in the input batch. So for a rare token, the output row is trained every step, but the input row only now and then (see [LLaMA token embedding](#info:llama_embedding_notes)).
+
+## References
+
+1. **Using the Output Embedding to Improve Language Models.** Press & Wolf, 2016. [arXiv:1608.05859 ↗](https://arxiv.org/abs/1608.05859)
+2. **The Llama 3 Herd of Models.** Llama Team, Meta, 2024. [arXiv:2407.21783 ↗](https://arxiv.org/abs/2407.21783)
+`,
+    },
+    zh: {
+      title: "LLaMA 的 LM head：不和 embedding 共享权重",
+      md: `
+**LLaMA 的 LM head 做的事和 [GPT-2 的](#info:lm_head_notes)一样：用最后的向量和每个 token 的一行做点积，给每个 token 一个分数。区别是它的权重矩阵是自己的，不和 [token embedding](#info:llama_embedding_notes) 共享。**
+
+## 在代码里
+
+\`\`\`python
+# GPT-2：一个矩阵，两端都用
+self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
+self.lm_head.weight = self.tok_emb.weight
+
+# LLaMA 3 8B：同样的层，只是没有共享那一行
+self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)   # weight (128256, 4096)
+logits = self.lm_head(x)                                   # (B, T, 4096) -> (B, T, 128256)
+\`\`\`
+
+LM head 的权重和 embedding 表形状一样，都是 $(V, C) = (128256, 4096)$，各约 5.25 亿参数。在 LLaMA 里它们是两套独立的参数，各自训练。
+
+## 为什么不共享：两端做的事不一样
+
+第 $i$ 行在两个矩阵里的作用不同：
+
+- **token embedding：** token $i$ **作为上下文**被读进来时是什么意思，供它后面的 token 使用。
+- **LM head：** 用来给 token $i$ **打分**：最后的向量和这一行做点积，得到的就是 token $i$ 的分数。所以这一行要学的是：当下一个 token 应该是 $i$ 时，最后的向量是什么样子。
+
+这两件事相关（意思相近的词，往往出现在相似的上下文之后），但并不相同。共享权重，就是强迫一个向量同时做两件事；不共享，每一端都能学到最适合自己的向量。（[weight tying](#info:weight_tying_notes) note 里讲了共享时，一行怎样同时从两端拿到梯度。）
+
+## GPT-2 为什么共享：省下的参数值多少
+
+共享省掉的是一个 $V \\times C$ 矩阵。它值多少，要看模型其余部分有多大：
+
+| 模型 | 共享？ | 一个 $V \\times C$ 矩阵 | 共享省下的比例 |
+|---|---|---|---|
+| GPT-2 small | 是 | 3860 万 | 24%（1.24 亿，不共享是 1.63 亿） |
+| LLaMA 3.2 1B | 是 | 2.63 亿 | 18%（12.4 亿，不共享是 15.0 亿） |
+| LLaMA 3.2 3B | 是 | 3.94 亿 | 11%（32 亿，不共享是 36 亿） |
+| LLaMA 3 8B | 否 | 5.25 亿 | 共享的话能省 6.5%（75 亿，现在是 80 亿） |
+
+比例 = 一个矩阵的参数量 ÷ 不共享时的总参数量，例如 3860 万 ÷ 1.63 亿 ≈ 24%。
+
+- **小模型：** embedding 占了模型的很大一块，共享能省下最多四分之一的参数。GPT-2 共享；LLaMA 3.2 1B 和 3B（面向手机等设备的小模型）也共享。
+- **大模型：** 参数几乎都在 transformer block 里（LLaMA 3 8B 的 80 亿里约 70 亿）。为了省 6.5% 而让两端共用一个向量，不划算，所以 LLaMA 1、2、3 的 7B/8B 及更大的模型都不共享。
+
+其他模型家族也是按大小来选，见 [weight tying](#info:weight_tying_notes) note 里的 "🆕 近期发展" 一节。
+
+## 对梯度的一个影响
+
+LM head 的 softmax 对每个 token 都有输出，所以 **LM head 的每一行**每一步都会拿到梯度，这和 GPT-2 一样。
+
+不共享时，这些梯度都不会传到 embedding 表。embedding 的一行只有在它的 token 出现在这个 batch 的输入里时才有梯度。所以对一个很少出现的 token，输出端那一行每一步都在训练，输入端那一行却只是偶尔被训练（见 [LLaMA 的 token embedding](#info:llama_embedding_notes)）。
+
+## 参考资料
+
+1. **Using the Output Embedding to Improve Language Models.** Press & Wolf，2016。[arXiv:1608.05859 ↗](https://arxiv.org/abs/1608.05859)
+2. **The Llama 3 Herd of Models.** Llama Team，Meta，2024。[arXiv:2407.21783 ↗](https://arxiv.org/abs/2407.21783)
+`,
+    },
+  },
+
   lm_head_insights_notes: {
     en: {
       title: "lm_head_insights_notes",

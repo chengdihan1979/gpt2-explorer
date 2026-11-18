@@ -2,7 +2,7 @@ export function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-export function buildCodeHtml({ component, selectedId }) {
+export function buildCodeHtml({ component, selectedId, noteOverrides = {} }) {
   if (!component?.code) return null;
   let html = escapeHtml(component.code);
   const anchors = component.anchors || [];
@@ -172,6 +172,7 @@ export function buildCodeHtml({ component, selectedId }) {
   // 8) LayerNorm, Embeddings, loss, attention ops
   html = html.replace(/TransformerBlock/g, '<span data-action="open:highlevel_transformer_introduction_notes" style="text-decoration: underline; cursor: pointer;">TransformerBlock</span>');
   html = html.replace(/nn\.LayerNorm\([^)]*\)/g, (m) => `<span data-action="open:layernorm" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
+  html = html.replace(/\bRMSNorm\((n_embd|nn\.Module)\)/g, (m) => `<span data-action="open:rmsnorm_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
   html = html.replace(/nn\.Embedding\(vocab_size,\s*n_embd\)/g, '<span data-action="open:embedding_tok" style="text-decoration: underline; cursor: pointer;">nn.Embedding(vocab_size, n_embd)</span>');
   html = html.replace(/nn\.Embedding\(max_toks,\s*n_embd\)/g, '<span data-action="open:embedding_pos" style="text-decoration: underline; cursor: pointer;">nn.Embedding(max_toks, n_embd)</span>');
   html = html.replace(/F\.cross_entropy(\([^)]*\))/g, '<span data-action="open:cross_entropy_notes" style="text-decoration: underline; cursor: pointer;">F.cross_entropy($1)</span>');
@@ -212,6 +213,8 @@ export function buildCodeHtml({ component, selectedId }) {
     html = html.replace(/(<span[^>]*data-action=\"open:att_v_product_notes\"[^>]*>)([\s\S]*?)(<\/span>)/, '$1<mark>$2</mark>$3');
   }
 
+  // LLaMA: tokenizer
+  html = html.replace(/AutoTokenizer\.from_pretrained\("meta-llama\/Meta-Llama-3-8B"\)/g, (m) => `<span data-action="open:llama_tokenizer_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
   // LLaMA: rotary position embedding
   html = html.replace(/apply_rope/g, '<span data-action="open:rope_notes" style="text-decoration: underline; cursor: pointer;">apply_rope</span>');
 
@@ -220,6 +223,9 @@ export function buildCodeHtml({ component, selectedId }) {
 
   // 9) Optimizer: make torch.optim.AdamW clickable to open notes
   html = html.replace(/torch\.optim\.AdamW/g, (m) => `<span data-action="open:optim_adamw_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
+
+  // Per-model retargeting: a model page can send a shared link rule to its own note (e.g. LLaMA's embedding).
+  for (const [from, to] of Object.entries(noteOverrides)) html = html.split(`data-action="open:${from}"`).join(`data-action="open:${to}"`);
 
   // 10) Presentation: links get a class instead of inline styles, then Python syntax colors.
   html = html.split('style="text-decoration: underline; cursor: pointer;"').join('class="code-link"');

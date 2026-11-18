@@ -155,6 +155,8 @@ Learned absolute positional embeddings, as used in GPT-2, are not widely used in
 
 How RoPE works, step by step: [RoPE](#info:rope_notes)
 
+🆕 LLaMA, for example, has no position embedding table at all: see [LLaMA token embedding](#info:llama_embedding_notes).
+
 ## References
 
 1. **Transformer positional encodings**
@@ -351,6 +353,8 @@ $$
 GPT-2 所用的可学习绝对位置嵌入，在最新的 state-of-the-art LLM 中已经不常用了。这些模型大多转向了相对位置方法，比如 [RoPE（旋转位置编码）↗](https://arxiv.org/pdf/2104.09864) 或 [ALiBi（带线性偏置的 attention）↗](https://arxiv.org/pdf/2108.12409)。
 
 RoPE 是如何一步步工作的：[RoPE](#info:rope_notes)
+
+🆕 比如 LLaMA 就完全没有位置 embedding 表：见 [LLaMA 的 token embedding](#info:llama_embedding_notes)。
 
 ## 参考文献
 

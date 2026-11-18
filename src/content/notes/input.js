@@ -105,7 +105,7 @@ BPE is still the mainstream approach today. What has changed most is the vocabul
 - GPT-2: ~50K tokens
 - GPT-4 (\`cl100k_base\`): ~100K
 - GPT-4o (\`o200k_base\`): ~200K
-- Llama 3: ~128K
+- Llama 3: ~128K (measured comparison: [LLaMA's tokenizer](#info:llama_tokenizer_notes))
 
 With a larger vocabulary, the same text splits into fewer tokens, so generation is faster, and non-English languages such as Chinese are handled better.
 The cost is a larger embedding table and output layer: both have shape $(V, n\\_embd)$, so they gain one row per token as $V$ grows, while the vector size $n\\_embd$ stays the same.
@@ -234,7 +234,7 @@ BPE 至今仍是主流做法。变化最大的是词表大小：
 - GPT-2：约 50K 个 token
 - GPT-4（\`cl100k_base\`）：约 100K
 - GPT-4o（\`o200k_base\`）：约 200K
-- Llama 3：约 128K
+- Llama 3：约 128K（实测对比见 [LLaMA 的 tokenizer](#info:llama_tokenizer_notes)）
 
 词表越大，同样的文本切出的 token 越少，所以生成更快，而且对中文等非英语语言处理得更好。
 代价是 embedding 表和输出层更大：两者的形状都是 $(V, n\\_embd)$，所以 $V$ 每增加一个 token，它们就各多一行，而向量大小 $n\\_embd$ 不变。
@@ -763,6 +763,163 @@ GPT-2 的 tokenizer 自带一个映射，实际上就表示了这些 rank。在�
 
 GPT-2 是 byte-level 的。空格是字节的一部分，很多 token 把"空格+单词"编码成一个 token（在可视化中通常显示为带前导 \`Ġ\`）。这些 token 来自特定的合并规则及其 rank。
 
+`,
+    },
+  },
+
+  llama_tokenizer_notes: {
+    en: {
+      title: "LLaMA tokenizer: a bigger vocabulary",
+      md: `
+**LLaMA still uses BPE, like [GPT-2](#info:tokenizer_notes), but with a different implementation and, in LLaMA 3, a vocabulary 2.5× larger.** The same text becomes far fewer tokens, especially for non-English text and code.
+
+## Three tokenizers
+
+| | Implementation | Vocabulary size |
+|---|---|---|
+| GPT-2 | byte-level BPE (OpenAI's own) | 50,257 |
+| LLaMA 1 / 2 | SentencePiece BPE | 32,000 |
+| LLaMA 3 | byte-level BPE (tiktoken style) | **128,256** |
+
+LLaMA 3's vocabulary is the 100,000 tokens of OpenAI's tiktoken tokenizer plus 28,000 new tokens, added mainly to support languages other than English better.
+
+## How many tokens the same text becomes
+
+Measured with the three real tokenizers:
+
+\`\`\`text
+                              GPT-2    LLaMA 2    LLaMA 3
+English sentence (90 chars)     18       22         18
+Chinese sentence (20 chars)     42       27         14
+Python code (44 chars)          24       18         15
+\`\`\`
+
+The Chinese sentence was "大语言模型通过预测下一个词元来学习语言。" ("Large language models learn language by predicting the next token."). The three split it very differently:
+
+\`\`\`text
+GPT-2:    '大', '�', '�', '�', ...            ← mostly byte pieces
+LLaMA 2:  '大', '语', '言', '模', '型', ...     ← mostly one per character
+LLaMA 3:  '大', '语言', '模型', '通过', ...     ← common words are one token
+\`\`\`
+
+LLaMA 2 still splits rarer characters into bytes. GPT-2's vocabulary was learned mostly from English web text, so a Chinese character, which takes 3 bytes in UTF-8, usually has no token of its own and is split into byte pieces (each shown as '�' because a single byte is not a complete character).
+
+## Why a bigger vocabulary matters
+
+For the same text, fewer tokens means:
+
+- **More fits in the context window.** In an 8,192-token window, about 3× as much Chinese text fits as with GPT-2's tokenizer (42 vs 14 tokens for the sentence above).
+- **Cheaper training and inference.** Compute grows with the number of tokens (see [Chinchilla](#info:chinchilla_notes): $C \\approx 6ND$).
+- **Each prediction carries more.** One step can produce "模型" (two characters) instead of three byte pieces.
+
+## The cost
+
+The [token embedding](#info:embedding_tok) and the [LM head](#info:lm_head_notes) are both $V \\times C$ matrices:
+
+\`\`\`text
+LLaMA 3 8B:  128,256 × 4,096 ≈ 525M parameters per matrix
+two of them (not tied): about 1.05B, 13% of the 8B parameters
+\`\`\`
+
+And the softmax at every position runs over 128,256 entries instead of 50,257.
+
+So the vocabulary size is a trade-off: a bigger vocabulary makes text shorter, but makes both ends of the model heavier.
+
+## How numbers are split
+
+The switch also changed how digits are split: LLaMA 1/2 split every number into single digits, while LLaMA 3 groups digits into chunks of at most 3 (in the table's test, \`12345678\` became 8 tokens in LLaMA 2 and \`123\`, \`456\`, \`78\` in LLaMA 3). Why this matters for arithmetic is explained in the [GPT-2 tokenizer](#info:tokenizer_notes) note, under "How numbers are split".
+
+## In the code
+
+\`\`\`python
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B")  # BPE, 128,256 tokens
+ids = tokenizer.encode(text)
+\`\`\`
+
+Everything after this line works as in GPT-2: the ids index the embedding table, now of shape $(128256, 4096)$.
+
+## References
+
+1. **The Llama 3 Herd of Models.** Llama Team, Meta, 2024. [arXiv:2407.21783 ↗](https://arxiv.org/abs/2407.21783)
+2. **Llama 2: Open Foundation and Fine-Tuned Chat Models.** Touvron et al., 2023. [arXiv:2307.09288 ↗](https://arxiv.org/abs/2307.09288)
+3. **SentencePiece.** Kudo & Richardson, 2018. [arXiv:1808.06226 ↗](https://arxiv.org/abs/1808.06226)
+`,
+    },
+    zh: {
+      title: "LLaMA 的 tokenizer：更大的词表",
+      md: `
+**LLaMA 仍然用 BPE，和 [GPT-2](#info:tokenizer_notes) 一样，但实现方式不同，而且 LLaMA 3 的词表大了 2.5 倍。** 同样的文字会切成少得多的 token，非英语文字和代码尤其明显。
+
+## 三种 tokenizer
+
+| | 实现 | 词表大小 |
+|---|---|---|
+| GPT-2 | 字节级 BPE（OpenAI 自己写的） | 50,257 |
+| LLaMA 1 / 2 | SentencePiece BPE | 32,000 |
+| LLaMA 3 | 字节级 BPE（tiktoken 风格） | **128,256** |
+
+LLaMA 3 的词表 = OpenAI tiktoken tokenizer 的 10 万个 token，再加 2.8 万个新 token，新增的主要用来更好地支持英语以外的语言。
+
+## 同一段文字切成多少个 token
+
+用三个真实的 tokenizer 实测：
+
+\`\`\`text
+                         GPT-2    LLaMA 2    LLaMA 3
+英文句子（90 字符）         18       22         18
+中文句子（20 个字）         42       27         14
+Python 代码（44 字符）      24       18         15
+\`\`\`
+
+中文那句是 "大语言模型通过预测下一个词元来学习语言。"，三者的切法完全不同：
+
+\`\`\`text
+GPT-2:    '大', '�', '�', '�', ...              ← 大部分汉字被拆成 2~3 个字节碎片
+LLaMA 2:  '大', '语', '言', '模', '型', ...       ← 基本一字一个，生僻的字仍拆成字节
+LLaMA 3:  '大', '语言', '模型', '通过', '预', '测', '下', '一个', ...   ← 常见词是一个 token
+\`\`\`
+
+GPT-2 的词表主要是从英文网页学出来的。一个汉字在 UTF-8 里占 3 个字节，通常没有属于自己的 token，只好拆成字节碎片（显示成 '�'，因为单独一个字节不是完整的字符）。
+
+## 为什么词表大很重要
+
+同一段文字，token 越少：
+
+- **上下文能装下更多内容。** 在 8,192 个 token 的窗口里，中文内容能比用 GPT-2 的 tokenizer 多放约 3 倍（上面那句是 42 对 14）。
+- **训练和推理更便宜。** 计算量随 token 数增长（见 [Chinchilla](#info:chinchilla_notes)：$C \\approx 6ND$）。
+- **每一步预测的信息量更大。** 一步就能生成 "模型" 两个字，而不是三个字节碎片。
+
+## 代价
+
+[token embedding](#info:embedding_tok) 和 [LM head](#info:lm_head_notes) 都是 $V \\times C$ 的矩阵：
+
+\`\`\`text
+LLaMA 3 8B:  128,256 × 4,096 ≈ 每个矩阵 5.25 亿参数
+两个（不共享权重）合计约 10.5 亿，占 8B 的 13%
+\`\`\`
+
+而且每个位置的 softmax 要在 128,256 个词上算，而不是 50,257 个。
+
+所以词表大小是一个取舍：更大的词表让文字更"短"，但模型两头更"重"。
+
+## 数字是怎么切分的
+
+换 tokenizer 也改变了数字的切分方式：LLaMA 1/2 把每个数字拆成单个数位，LLaMA 3 则把数字按最多 3 位一组来切（实测 \`12345678\` 在 LLaMA 2 里是 8 个 token，在 LLaMA 3 里是 \`123\`、\`456\`、\`78\`）。这对算术有什么影响，见 [GPT-2 tokenizer](#info:tokenizer_notes) note 里的"数字是怎么切分的"一节。
+
+## 在代码里
+
+\`\`\`python
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B")  # BPE, 128,256 tokens
+ids = tokenizer.encode(text)
+\`\`\`
+
+这之后的流程和 GPT-2 一样：用 id 去查 embedding 表，只是表的形状变成了 $(128256, 4096)$。
+
+## 参考资料
+
+1. **The Llama 3 Herd of Models.** Llama Team，Meta，2024。[arXiv:2407.21783 ↗](https://arxiv.org/abs/2407.21783)
+2. **Llama 2: Open Foundation and Fine-Tuned Chat Models.** Touvron 等人，2023。[arXiv:2307.09288 ↗](https://arxiv.org/abs/2307.09288)
+3. **SentencePiece.** Kudo & Richardson，2018。[arXiv:1808.06226 ↗](https://arxiv.org/abs/1808.06226)
 `,
     },
   },
