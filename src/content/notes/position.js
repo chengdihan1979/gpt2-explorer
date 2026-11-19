@@ -720,7 +720,7 @@ RoPE 是如何一步步工作的：[RoPE](#info:rope_notes)
     en: {
       title: "RoPE (Rotary Position Embedding)",
       md: `
-**RoPE (Rotary Position Embedding) is how most LLMs today encode position. GPT-2 does not use it (it uses a [learned position embedding](#info:embedding_pos)), but it is easiest to understand right at the $q \\cdot k$ step.**
+**RoPE (Rotary Position Embedding) is how LLaMA and most LLMs today encode position. GPT-2 does not use it (it uses a [learned position embedding](#info:embedding_pos)). RoPE is easiest to understand at the $q \\cdot k$ step, because that is where it acts.**
 
 ## 1. Where the position information goes
 
@@ -752,12 +752,23 @@ Three differences:
 
 Think of $q$ and $k$ as two arrows in a plane. Their dot product depends on their lengths and the **angle between them**.
 
-Now say the vector at position $m$ is rotated by $m \\times \\theta$, with $\\theta = 10°$:
+Now rotate the vector at position $m$ by $m \\times \\theta$, with $\\theta = 10°$:
 
 - q at position 5 turns 50°, k at position 3 turns 30°: the angle between them changes by $50° - 30° = 20°$.
-- Shift both far along, q at 105 and k at 103: q turns 1050°, k turns 1030°, and the change is still $20°$.
+- Move both far along, q at 105 and k at 103: q turns 1050°, k turns 1030°, and the change is still $20°$.
+
+In general, q at position $m$ turns $m\\theta$ and k at position $n$ turns $n\\theta$, so the angle between them changes by $(m - n)\\,\\theta$. The absolute positions cancel; only the distance $m - n$ is left.
 
 > **After rotation, the score depends only on the distance between the two positions** ($5 - 3 = 2$), not on where they are. "The previous word" or "two words back" is scored by the same rule at position 5 and at position 1000.
+
+**This only works because q and k use the same $\\theta$.** If q turned 10° per position and k 7°:
+
+- q at 5, k at 3: $50° - 21° = 29°$;
+- q at 105, k at 103: $1050° - 721° = 329°$.
+
+Same distance, different result, so the score would depend on absolute positions again.
+
+> "Same rule" means the same *rotation*, not the same *vector*. q and k are still different vectors, computed with different weights; RoPE only rotates each of them afterwards according to its position. A token's own q and k are at the same position, so they turn by the same angle.
 
 ## 3. Why "only relative distance" is a good property
 
@@ -767,7 +778,7 @@ Now say the vector at position $m$ is rotated by $m \\times \\theta$, with $\\th
 - \`it\` usually refers to something **a little earlier**.
 - A verb often comes **a few positions after** its subject.
 
-These rules say "$n$ positions back", never "position 37". The same rule holds at the start of a text and at token 800.
+These rules say "$n$ positions back", never "position 37", and they hold at the start of a text and at token 800 alike.
 
 **With absolute positions, the same rule has to be learned many times.** Suppose \`black cat\` appears twice:
 
@@ -776,21 +787,21 @@ positions 3, 4      :  black cat
 positions 503, 504  :  black cat
 \`\`\`
 
-- **Relative distance only (RoPE):** both pairs are 1 apart, so the position part of the score is automatically the same. Learned once, it works everywhere.
-- **Absolute positions:** the model sees "3 and 4" and "503 and 504", two unrelated pairs of numbers. That they are the same relation must be learned from data.
-
-It is like teaching "look one seat ahead", which works in every seat, versus separately training "from seat 3, look at seat 2", "from seat 503, look at seat 502", and so on.
+- **Relative distance only (RoPE):** both pairs are 1 apart, so the position part of the score is automatically the same. Learned once, it works everywhere, like the instruction "look at the seat in front of you", which works from every seat.
+- **Absolute positions:** the model sees "3 and 4" and "503 and 504", two unrelated pairs of numbers, and has to learn from data that they are the same relation.
 
 > **Content still matters.** "Only relative distance" applies to the **position** part of the score. q and k are still computed from the tokens, so at the same distance 1, \`black → cat\` may score high and \`the → of\` low. What RoPE guarantees is that the same content at the same distance gets the same score wherever it appears.
 
 ## 4. From 2-D to 64-D: rotate in pairs
 
-Each head's q and k have $hs = 64$ dims. RoPE groups them into **32 pairs** and treats each pair as a 2-D vector that rotates in its own plane:
+Each head's q and k have $hs = 64$ dims (128 in LLaMA 3 8B). RoPE groups them into **32 pairs** and treats each pair as a 2-D arrow that rotates in its own plane:
 
 \`\`\`text
 q (64 dims) = [ (q0, q1), (q2, q3), (q4, q5), ..., (q62, q63) ]
                  pair 0    pair 1    pair 2         pair 31
 \`\`\`
+
+k is split the same way. So "pair 0" is not a token: it is **dimensions 0 and 1**, and every token's q and k have a pair 0, a pair 1, …, a pair 31.
 
 At position $m$, pair $i$ is rotated by the angle $m\\,\\theta_i$, using the ordinary 2-D rotation:
 
@@ -806,38 +817,88 @@ $$
 
 - **Pair 0:** $\\theta = 1$ radian per position, about 57.3°. One full turn every $2\\pi \\approx 6.3$ positions.
 - **Pair 16:** $\\theta = 0.01$ radian, about 0.57°. One full turn every ≈ 628 positions.
-- **Pair 31:** $\\theta \\approx 0.00013$ radian. One full turn every ≈ 47,000 positions.
+- **Pair 31:** $\\theta \\approx 0.00013$ radian, about 0.0076°. One full turn every ≈ 47,000 positions.
 
 > **Radians.** Angles here are in radians, as in \`torch.sin\` / \`torch.cos\`. A full turn is $360° = 2\\pi \\approx 6.283$ radians, so 1 radian $= 180°/\\pi \\approx 57.3°$: the angle subtended by an arc as long as the radius.
 
-**Why mix fast and slow pairs?**
+q and k use the **same** 32 speeds (section 2 shows why they must). Only the angle differs, because it is set by each vector's own position: q at position $m$ turns pair $i$ by $m\\,\\theta_i$, k at position $n$ by $n\\,\\theta_i$.
 
-- **Fast pairs** turn a lot between neighbors, so they can tell "adjacent" from "two apart". But they wrap around after a few positions, so on their own they can't tell far distances apart.
-- **Slow pairs** barely change between neighbors, but their angles spread out over long distances, so they can tell "100 apart" from "1000 apart".
+## 5. Why mix fast and slow pairs?
 
-Together they cover both near and far, like the second, minute and hour hands of a clock.
+### What a pair sees: the distance $d$
 
-### q and k are rotated by the same rule
+Attention scores one query against one key. Call the distance between them
 
-Both use the **same** rule with the **same** 32 speeds $\\theta_i$. Only the angle differs, because it is set by each vector's own position:
+$$
+d = \\text{query position} - \\text{key position}
+$$
 
-- q at position $m$: pair $i$ turns $m\\,\\theta_i$;
-- k at position $n$: pair $i$ turns $n\\,\\theta_i$.
+As in section 2, pair $i$ changes the angle between that query and key by $d \\times \\theta_i$. That angle is all the pair knows about the distance, and it repeats every 360°: a full turn looks the same as no turn at all. So a pair can tell two distances apart only if their angles are clearly different.
 
-A token's own q and k sit at the same position, so they turn by the same angle.
+### One query, five keys
 
-**Why the rule must be shared.** In the 2-D example ($\\theta = 10°$), q at 5 and k at 3 turn 50° and 30°, and the difference is $(5 - 3) \\times 10° = 20°$. Both angles are "position × the same $\\theta$", so the absolute positions cancel and only the distance is left.
+Take a long text. The current token is at **position 1000** and is scored against earlier tokens:
 
-If q used 10° and k used 7° instead:
+\`\`\`text
+key at position 999   →  d = 1
+key at position 998   →  d = 2
+key at position 956   →  d = 44
+key at position 900   →  d = 100
+key at position 0     →  d = 1000
+\`\`\`
 
-- q at 5 and k at 3: $50° - 21° = 29°$;
-- q at 105 and k at 103: $1050° - 721° = 329°$.
+### Pair 0 (dims 0, 1): fast, 57.3° per position
 
-Same distance, different result: the score would no longer depend only on relative distance.
+\`\`\`text
+d = 1 (key at 999):     query turns 1000 × 57.3°,  key turns 999 × 57.3°
+                        extra angle = 1 × 57.3° = 57.3°
+d = 1000 (key at 0):    query turns 1000 × 57.3°,  key turns 0
+                        extra angle = 1000 × 57.3° = 57,296° = 159 full turns + 55.8°
+\`\`\`
 
-> "Same rule" means the same *rotation*, not the same *vector*. q and k are still different vectors, made by \`c_attn\` with different weights; RoPE only rotates each of them according to its position afterwards.
+57.3° and 55.8° are almost the same. **Looking only at dims 0 and 1, the model cannot tell whether the key is the previous token or 1000 tokens back.**
 
-## 5. Relation to sinusoidal encoding
+### Pair 16 (dims 32, 33): slow, 0.57° per position
+
+\`\`\`text
+d = 1 (key at 999):     extra angle = 1 × 0.57° = 0.57°
+d = 1000 (key at 0):    extra angle = 1000 × 0.57° = 573° = 1 full turn + 213°
+\`\`\`
+
+One has barely turned, the other has turned 213°: pair 16 tells them apart easily.
+
+### But pair 16 cannot tell near distances apart
+
+\`\`\`text
+                 pair 0     pair 16
+d = 1            57.3°      0.57°
+d = 2            114.6°     1.15°
+\`\`\`
+
+For pair 16 both angles are close to 0, so the difference barely changes the score. Pair 0 separates them by almost 60°.
+
+### All five distances, three pairs
+
+\`\`\`text
+distance d                     1        2       44      100     1000
+pair 0   (57.3° per pos.)    57.3°   114.6°    1.0°   329.6°    55.8°
+pair 16  (0.57° per pos.)     0.6°     1.1°   25.2°    57.3°   213.0°
+pair 31  (0.0076° per pos.)   0.0°     0.0°    0.3°     0.8°     7.6°
+\`\`\`
+
+- **Pair 0** wraps around every 6.3 positions, so far distances get mixed up: $d = 44$ gives 1.0°, almost the same as $d = 0$.
+- **Pair 31** is close to 0° for all of these; it only starts to move meaningfully at thousands to tens of thousands of positions.
+
+### Together
+
+The score $q \\cdot k$ adds up the contributions of all 32 pairs, so every distance is seen through all 32 angles at once:
+
+- telling 1 from 2 relies on fast pairs like pair 0;
+- telling 1 from 1000 relies on slow pairs like pair 16.
+
+A distance that one pair confuses, another pair separates. Fast pairs give the fine detail nearby; slow pairs tell near from far. It is like a clock: the second hand tells 1 second from 2 seconds but looks the same at 0 and 60 seconds; the hour hand barely moves in a few seconds but tells 1 o'clock from 5 o'clock. Reading all the hands gives the exact time.
+
+## 6. Relation to sinusoidal encoding
 
 The [sinusoidal encoding](#info:sinusoidal_pos_notes) of the original Transformer is:
 
@@ -854,7 +915,7 @@ The sinusoidal note shows that shifting by $k$ positions is a rotation. RoPE app
 
 > 🆕 **The base.** The 10000 in the formula is called the base (\`rope_theta\` in Hugging Face configs). Llama 2 uses 10000; Llama 3 raises it to 500000, which slows the slowest pairs further to support longer contexts.
 
-## 6. Beyond the training length
+## 7. Beyond the training length
 
 What happens when the sequence is longer than the model was trained on?
 
@@ -867,27 +928,24 @@ pos_emb = nn.Embedding(max_toks, n_embd)    # real GPT-2: 1024 rows × 768
 pos_emb(pos)                                 # pos = 0, 1, ..., T-1
 \`\`\`
 
-- Positions 0 to 1023 each have their own trained row.
-- Position 1024 has no row, so the lookup fails with an index error.
-
-So GPT-2 can see **at most 1024 tokens** at once. And since each row is learned separately, adding a new row would not help: it was never trained, so the model would not know what it means.
+Positions 0 to 1023 each have a trained row; position 1024 has none, so the lookup fails with an index error. GPT-2 can therefore see **at most 1024 tokens** at once. Adding a row would not help: it was never trained, so the model would not know what it means.
 
 ### How GPT-2 generates past 1024 tokens: a sliding window
 
-During generation the context also includes the tokens the model has generated so far, so prompt + generated tokens quickly reach the limit. Generation code therefore crops the input at every step to the **most recent** 1024 tokens (nanoGPT's \`generate\` crops to \`block_size\`):
+During generation the context also includes the tokens generated so far, so prompt + generated tokens quickly reach the limit. Generation code therefore crops the input at every step to the **most recent** 1024 tokens (nanoGPT's \`generate\` crops to \`block_size\`):
 
 \`\`\`text
 idx_cond = idx[:, -1024:]     # keep only the last 1024 tokens
 logits = model(idx_cond)
 \`\`\`
 
-This is **not** splitting the text into separate chunks. Chunking would cut it into non-overlapping pieces:
+This is **not** splitting the text into separate chunks. Chunking would cut it into non-overlapping pieces, and token 1024 could not even see token 1023 right next to it:
 
 \`\`\`text
 [0 ~ 1023] [1024 ~ 2047] [2048 ~ 2999]
 \`\`\`
 
-and token 1024 could not even see token 1023, right next to it. The sliding window instead moves forward by one token per step:
+The sliding window instead moves forward by one token per step:
 
 \`\`\`text
 generating token 3000: sees [1976 ~ 2999]
@@ -895,15 +953,13 @@ generating token 3001: sees [1977 ~ 3000]
 generating token 3002: sees [1978 ~ 3001]
 \`\`\`
 
-Consecutive windows share 1023 tokens, so nearby context is always continuous: every token sees the 1023 tokens before it.
-
-What is lost is everything **more than 1023 tokens back**. When generating token 3000, tokens 0 to 1975 are simply invisible, not remembered vaguely. If a name was mentioned at token 100, GPT-2 cannot use it at token 3000. GPT-2 has a short-term memory of about 1024 tokens.
+Consecutive windows share 1023 tokens, so every token sees the 1023 tokens before it. What is lost is everything **more than 1023 tokens back**: when generating token 3000, tokens 0 to 1975 are simply invisible, not remembered vaguely. If a name was mentioned at token 100, GPT-2 cannot use it at token 3000.
 
 > 🆕 This limit is a major reason later models pushed context length much further; many current models support 128K tokens or more.
 
 ### RoPE: any position has an angle
 
-There is no table, only the rule "pair $i$ at position $m$ turns $m\\,\\theta_i$". Position 5000 can be plugged in directly, so nothing breaks. Combined with the relative-distance property (section 3), two tokens 3 apart get the same position part of the score at position 10 and at position 5000.
+There is no table, only the rule "pair $i$ at position $m$ turns $m\\,\\theta_i$". Position 5000 can be plugged in directly, so nothing breaks, and two tokens 3 apart get the same position part of the score at position 10 and at position 5000 (section 3).
 
 **But "computable" is not "works well".** A model trained on length 4096 and run on length 32,000 usually gets noticeably worse. The cause is the slowest pairs:
 
@@ -938,14 +994,14 @@ In short: GPT-2 can never see more than 1024 tokens at once, and a sliding windo
     zh: {
       title: "RoPE（旋转位置编码）",
       md: `
-**RoPE（Rotary Position Embedding，旋转位置编码）是今天大多数 LLM 编码位置的方式。GPT-2 没有用它（GPT-2 用的是[可学习位置嵌入](#info:embedding_pos)），但放在 $q \\cdot k$ 这一步来理解最容易。**
+**RoPE（Rotary Position Embedding，旋转位置编码）是 LLaMA 和今天大多数 LLM 编码位置的方式。GPT-2 没有用它（GPT-2 用的是[可学习的位置 embedding](#info:embedding_pos)）。RoPE 作用在 $q \\cdot k$ 这一步，所以放在这一步来理解最容易。**
 
 ## 1. 位置信息放在哪里
 
 **GPT-2：在一开始加到 $x$ 上，只加一次。**
 
 \`\`\`text
-x = token embedding + position embedding    <- position mixed into x before block 1 (在 block 1 之前把位置混进 x)
+x = token embedding + position embedding    <- 在 block 1 之前把位置混进 x
 q = x · W_qᵀ,   k = x · W_kᵀ
 score = q · k
 \`\`\`
@@ -953,10 +1009,10 @@ score = q · k
 **RoPE：$x$ 保持不动；$q$ 和 $k$ 在算分数之前被旋转。**
 
 \`\`\`text
-x = token embedding                          <- no position embedding (没有位置嵌入)
+x = token embedding                          <- 没有位置 embedding
 q = x · W_qᵀ,   k = x · W_kᵀ
-q' = rotate q by an angle set by its position
-k' = rotate k by an angle set by its position
+q' = 按 q 的位置旋转 q
+k' = 按 k 的位置旋转 k
 score = q' · k'
 \`\`\`
 
@@ -970,12 +1026,23 @@ score = q' · k'
 
 把 $q$ 和 $k$ 想成平面上的两根箭头。它们的点积取决于两者的长度和**它们之间的夹角**。
 
-现在假设位置 $m$ 上的向量被旋转 $m \\times \\theta$，其中 $\\theta = 10°$：
+现在把位置 $m$ 上的向量旋转 $m \\times \\theta$，其中 $\\theta = 10°$：
 
 - 位置 5 的 q 转 50°，位置 3 的 k 转 30°：两者之间的夹角变化了 $50° - 30° = 20°$。
 - 把两者都移到很远，q 在 105、k 在 103：q 转 1050°，k 转 1030°，变化仍然是 $20°$。
 
+一般地，位置 $m$ 的 q 转 $m\\theta$，位置 $n$ 的 k 转 $n\\theta$，所以两者之间的夹角变化 $(m - n)\\,\\theta$。绝对位置抵消掉了，只剩下距离 $m - n$。
+
 > **旋转之后，分数只取决于两个位置之间的距离**（$5 - 3 = 2$），而与它们具体在哪里无关。"前一个词"或"往前数两个词"在位置 5 和位置 1000 上用的是同一条打分规则。
+
+**这要求 q 和 k 用同一个 $\\theta$。** 如果 q 每个位置转 10°，而 k 转 7°：
+
+- 位置 5 的 q 和位置 3 的 k：$50° - 21° = 29°$；
+- 位置 105 的 q 和位置 103 的 k：$1050° - 721° = 329°$。
+
+距离相同，结果却不同，分数又会依赖绝对位置了。
+
+> "同一规则"指的是同一种*旋转*，而不是同一个*向量*。q 和 k 仍然是用不同权重算出的不同向量；RoPE 只是在之后按各自的位置分别旋转它们。同一个 token 自己的 q 和 k 在同一个位置，所以转过的角度相同。
 
 ## 3. 为什么"只依赖相对距离"是个好性质
 
@@ -985,30 +1052,30 @@ score = q' · k'
 - \`it\` 通常指代**稍早一点**出现的东西。
 - 动词通常出现在主语**之后几个位置**。
 
-这些规则说的都是"往前 $n$ 个位置"，从不说"第 37 个位置"。同一条规则在文本开头和第 800 个 token 处都成立。
+这些规则说的都是"往前 $n$ 个位置"，从不说"第 37 个位置"，在文本开头和第 800 个 token 处都一样成立。
 
 **如果用绝对位置，同一条规则得学很多遍。** 假设 \`black cat\` 出现了两次：
 
 \`\`\`text
-positions 3, 4      :  black cat
-positions 503, 504  :  black cat
+位置 3, 4      :  black cat
+位置 503, 504  :  black cat
 \`\`\`
 
-- **只看相对距离（RoPE）：** 两对的距离都是 1，所以分数中的位置部分自动相同。学一次，处处适用。
-- **绝对位置：** 模型看到的是"3 和 4"以及"503 和 504"，两对毫不相关的数字。它们其实是同一种关系，这一点必须从数据中学出来。
-
-这就像教"看你前面一个座位"——在每个座位上都适用；对比分别训练"从 3 号座位看 2 号座位"、"从 503 号座位看 502 号座位"，等等。
+- **只看相对距离（RoPE）：** 两对的距离都是 1，所以分数中的位置部分自动相同。学一次，处处适用，就像"看你前面那个座位"这条指令，坐在哪个座位都适用。
+- **绝对位置：** 模型看到的是"3 和 4"以及"503 和 504"，两对毫不相关的数字，它们是同一种关系这一点，只能从数据中学出来。
 
 > **内容依然重要。** "只依赖相对距离"说的是分数中的**位置**部分。q 和 k 仍然是从 token 算出来的，所以同样是距离 1，\`black → cat\` 可能得分很高，而 \`the → of\` 得分很低。RoPE 保证的是：同样的内容、同样的距离，无论出现在哪里，都得到同样的分数。
 
 ## 4. 从二维到 64 维：两两成对旋转
 
-每个 head 的 q 和 k 有 $hs = 64$ 维。RoPE 把它们分成 **32 对**，把每一对当作一个二维向量，在各自的平面里旋转：
+每个 head 的 q 和 k 有 $hs = 64$ 维（LLaMA 3 8B 里是 128 维）。RoPE 把它们分成 **32 对**，把每一对当作一根二维箭头，在各自的平面里旋转：
 
 \`\`\`text
-q (64 dims) = [ (q0, q1), (q2, q3), (q4, q5), ..., (q62, q63) ]
-                 pair 0    pair 1    pair 2         pair 31
+q（64 维）= [ (q0, q1), (q2, q3), (q4, q5), ..., (q62, q63) ]
+               第 0 对    第 1 对    第 2 对         第 31 对
 \`\`\`
+
+k 也一样分。所以"第 0 对"不是某个 token，而是**维度 0 和 1**；每个 token 的 q 和 k 里都有第 0 对、第 1 对……第 31 对。
 
 在位置 $m$，第 $i$ 对被旋转角度 $m\\,\\theta_i$，用的就是普通的二维旋转：
 
@@ -1024,38 +1091,88 @@ $$
 
 - **第 0 对：** 每个位置 $\\theta = 1$ 弧度，约 57.3°。每 $2\\pi \\approx 6.3$ 个位置转一整圈。
 - **第 16 对：** $\\theta = 0.01$ 弧度，约 0.57°。每 ≈ 628 个位置转一整圈。
-- **第 31 对：** $\\theta \\approx 0.00013$ 弧度。每 ≈ 47,000 个位置转一整圈。
+- **第 31 对：** $\\theta \\approx 0.00013$ 弧度，约 0.0076°。每 ≈ 47,000 个位置转一整圈。
 
-> **弧度。** 这里的角度用弧度表示，和 \`torch.sin\` / \`torch.cos\` 一样。一整圈是 $360° = 2\\pi \\approx 6.283$ 弧度，所以 1 弧度 $= 180°/\\pi \\approx 57.3°$：即弧长等于半径时所对的角。
+> **弧度。** 这里的角度用弧度表示，和 \`torch.sin\` / \`torch.cos\` 一样。一整圈是 $360° = 2\\pi \\approx 6.283$ 弧度，所以 1 弧度 $= 180°/\\pi \\approx 57.3°$，即弧长等于半径时所对的角。
 
-**为什么要把快的对和慢的对混在一起？**
+q 和 k 用的是**同样的** 32 个速度（第 2 节说明了为什么必须这样）。只有角度不同，因为角度由各自的位置决定：位置 $m$ 的 q，第 $i$ 对转 $m\\,\\theta_i$；位置 $n$ 的 k，第 $i$ 对转 $n\\,\\theta_i$。
 
-- **快的对**在相邻位置之间转得多，所以能区分"相邻"和"隔两个"。但它们转几个位置就绕回来了，所以单靠它们无法区分远距离。
-- **慢的对**在相邻位置之间几乎不变，但在长距离上角度会拉开，所以能区分"相隔 100"和"相隔 1000"。
+## 5. 为什么要把快的对和慢的对混在一起
 
-两者合在一起，近和远都能覆盖，就像时钟的秒针、分针和时针。
+### 一对能"看到"什么：距离 $d$
 
-### q 和 k 按同一规则旋转
+attention 每次给一个 query 和一个 key 打分。把它们之间的距离记作
 
-两者使用**同一条**规则、**同样的** 32 个速度 $\\theta_i$。只有角度不同，因为角度由各自向量的位置决定：
+$$
+d = \\text{query 的位置} - \\text{key 的位置}
+$$
 
-- 位置 $m$ 的 q：第 $i$ 对转 $m\\,\\theta_i$；
-- 位置 $n$ 的 k：第 $i$ 对转 $n\\,\\theta_i$。
+和第 2 节一样，第 $i$ 对会让这个 query 和 key 之间的夹角变化 $d \\times \\theta_i$。这个角度就是这一对关于距离知道的全部信息，而且角度每 360° 循环一次：转了整整一圈，和完全没转看起来一样。所以，只有两个距离对应的角度明显不同时，这一对才能把它们区分开。
 
-同一个 token 自己的 q 和 k 位于同一个位置，所以转过的角度相同。
+### 一个 query，五个 key
 
-**为什么规则必须共享。** 在二维例子中（$\\theta = 10°$），位置 5 的 q 和位置 3 的 k 分别转 50° 和 30°，差是 $(5 - 3) \\times 10° = 20°$。两个角度都是"位置 × 同一个 $\\theta$"，所以绝对位置抵消掉，只剩下距离。
+假设一段很长的文字，当前 token 在**位置 1000**，要和前面的 token 算分数：
 
-如果 q 用 10°，而 k 用 7°：
+\`\`\`text
+key 在位置 999   →  d = 1
+key 在位置 998   →  d = 2
+key 在位置 956   →  d = 44
+key 在位置 900   →  d = 100
+key 在位置 0     →  d = 1000
+\`\`\`
 
-- 位置 5 的 q 和位置 3 的 k：$50° - 21° = 29°$；
-- 位置 105 的 q 和位置 103 的 k：$1050° - 721° = 329°$。
+### 第 0 对（维度 0、1）：快，每个位置转 57.3°
 
-距离相同，结果却不同：分数就不再只依赖相对距离了。
+\`\`\`text
+d = 1（key 在 999）：   query 转 1000 × 57.3°，key 转 999 × 57.3°
+                       多出的夹角 = 1 × 57.3° = 57.3°
+d = 1000（key 在 0）：  query 转 1000 × 57.3°，key 转 0
+                       多出的夹角 = 1000 × 57.3° = 57,296° = 159 整圈 + 55.8°
+\`\`\`
 
-> "同一规则"指的是同一种*旋转*，而不是同一个*向量*。q 和 k 仍然是不同的向量，由 \`c_attn\` 用不同的权重算出；RoPE 只是在之后按各自的位置分别旋转它们。
+57.3° 和 55.8° 几乎一样。**只看维度 0、1，模型分不清这个 key 是前一个 token，还是 1000 个位置之前的 token。**
 
-## 5. 与正弦编码的关系
+### 第 16 对（维度 32、33）：慢，每个位置转 0.57°
+
+\`\`\`text
+d = 1（key 在 999）：   多出的夹角 = 1 × 0.57° = 0.57°
+d = 1000（key 在 0）：  多出的夹角 = 1000 × 0.57° = 573° = 1 整圈 + 213°
+\`\`\`
+
+一个几乎没转，一个转了 213°，第 16 对一眼就能分开。
+
+### 但第 16 对分不开近距离
+
+\`\`\`text
+                 第 0 对     第 16 对
+d = 1            57.3°       0.57°
+d = 2            114.6°      1.15°
+\`\`\`
+
+对第 16 对来说，两个角度都接近 0，差别对分数几乎没有影响。第 0 对则把它们分开了将近 60°。
+
+### 五个距离、三对的完整表
+
+\`\`\`text
+距离 d                         1        2       44      100     1000
+第 0 对  （每个位置 57.3°）    57.3°   114.6°    1.0°   329.6°    55.8°
+第 16 对 （每个位置 0.57°）     0.6°     1.1°   25.2°    57.3°   213.0°
+第 31 对 （每个位置 0.0076°）   0.0°     0.0°    0.3°     0.8°     7.6°
+\`\`\`
+
+- **第 0 对**每 6.3 个位置转一圈，所以远距离会被搞混：$d = 44$ 是 1.0°，几乎和 $d = 0$ 一样。
+- **第 31 对**在这些距离上都接近 0°，要到几千、几万个位置才开始明显转动。
+
+### 合起来
+
+分数 $q \\cdot k$ 是 32 对的贡献加起来的，所以每个距离都是同时通过 32 个角度来"看"的：
+
+- 区分 1 和 2，靠第 0 对这样的快对；
+- 区分 1 和 1000，靠第 16 对这样的慢对。
+
+一对分不开的距离，另一对能分开。快的对负责近处的细节，慢的对负责分清远近。就像时钟：秒针能区分 1 秒和 2 秒，但 0 秒和 60 秒看起来一样；时针在几秒内几乎不动，却能区分 1 点和 5 点。把所有指针一起看，才能读出准确的时间。
+
+## 6. 与正弦编码的关系
 
 原始 Transformer 的[正弦编码](#info:sinusoidal_pos_notes)是：
 
@@ -1068,11 +1185,11 @@ $$
 - **正弦编码：** sin/cos 值被**加**到 $x$ 上，只在输入处加一次，然后混进残差流。
 - **RoPE：** sin/cos 值用来**旋转**（相乘）$q$ 和 $k$，在每一个 attention 层都做，并且不碰其他任何东西。
 
-正弦编码那篇笔记说明了：平移 $k$ 个位置就是一个旋转。RoPE 把这个旋转**直接作用在 q 和 k 上**，所以 $q \\cdot k$ 自动只依赖相对距离。
+正弦编码那篇 note 说明了：平移 $k$ 个位置就是一个旋转。RoPE 把这个旋转**直接作用在 q 和 k 上**，所以 $q \\cdot k$ 自动只依赖相对距离。
 
 > 🆕 **base（底数）。** 公式中的 10000 叫作 base（在 Hugging Face 配置里是 \`rope_theta\`）。Llama 2 用 10000；Llama 3 把它提高到 500000，让最慢的几对转得更慢，以支持更长的上下文。
 
-## 6. 超出训练长度
+## 7. 超出训练长度
 
 当序列比模型训练时的长度更长时，会发生什么？
 
@@ -1081,47 +1198,42 @@ $$
 GPT-2 从一张查找表里取位置，每个位置对应一行学出来的向量：
 
 \`\`\`text
-pos_emb = nn.Embedding(max_toks, n_embd)    # real GPT-2: 1024 rows × 768
+pos_emb = nn.Embedding(max_toks, n_embd)    # 真实的 GPT-2：1024 行 × 768
 pos_emb(pos)                                 # pos = 0, 1, ..., T-1
 \`\`\`
 
-- 位置 0 到 1023 各有自己训练好的一行。
-- 位置 1024 没有对应的行，所以查表会报索引错误（index error）。
-
-所以 GPT-2 一次**最多只能看到 1024 个 token**。而且由于每一行都是单独学出来的，加一行新的也没用：它从未被训练过，模型不会知道它是什么意思。
+位置 0 到 1023 各有一行训练好的向量；位置 1024 没有，查表会报索引错误（index error）。所以 GPT-2 一次**最多只能看到 1024 个 token**。加一行新的也没用：它从未被训练过，模型不会知道它是什么意思。
 
 ### GPT-2 怎样生成超过 1024 个 token：滑动窗口
 
 生成时，上下文还包括模型目前已经生成的 token，所以 prompt + 生成的 token 很快就会达到上限。因此生成代码在每一步都把输入裁剪成**最近的** 1024 个 token（nanoGPT 的 \`generate\` 会裁剪到 \`block_size\`）：
 
 \`\`\`text
-idx_cond = idx[:, -1024:]     # keep only the last 1024 tokens (只保留最后 1024 个 token)
+idx_cond = idx[:, -1024:]     # 只保留最后 1024 个 token
 logits = model(idx_cond)
 \`\`\`
 
-这**不是**把文本切成互不相干的块。分块会把文本切成不重叠的片段：
+这**不是**把文本切成互不相干的块。分块会把文本切成不重叠的片段，token 1024 甚至看不到紧挨着它的 token 1023：
 
 \`\`\`text
 [0 ~ 1023] [1024 ~ 2047] [2048 ~ 2999]
 \`\`\`
 
-这样 token 1024 甚至看不到紧挨着它的 token 1023。滑动窗口则是每一步向前移动一个 token：
+滑动窗口则是每一步向前移动一个 token：
 
 \`\`\`text
-generating token 3000: sees [1976 ~ 2999]
-generating token 3001: sees [1977 ~ 3000]
-generating token 3002: sees [1978 ~ 3001]
+生成 token 3000：看到 [1976 ~ 2999]
+生成 token 3001：看到 [1977 ~ 3000]
+生成 token 3002：看到 [1978 ~ 3001]
 \`\`\`
 
-相邻的窗口共享 1023 个 token，所以附近的上下文总是连续的：每个 token 都能看到它前面的 1023 个 token。
-
-丢掉的是**往前超过 1023 个 token** 的所有内容。生成 token 3000 时，token 0 到 1975 直接不可见，而不是被模糊地记住。如果某个名字在 token 100 处被提到，GPT-2 在 token 3000 处就用不上它。GPT-2 的短期记忆大约只有 1024 个 token。
+相邻的窗口共享 1023 个 token，所以每个 token 都能看到它前面的 1023 个 token。丢掉的是**往前超过 1023 个 token** 的所有内容：生成 token 3000 时，token 0 到 1975 直接不可见，而不是被模糊地记住。如果某个名字在 token 100 处被提到，GPT-2 在 token 3000 处就用不上它。
 
 > 🆕 这个限制是后来的模型大幅推高上下文长度的一个主要原因；如今很多模型支持 128K 甚至更多 token。
 
 ### RoPE：任何位置都有对应的角度
 
-没有表，只有一条规则："位置 $m$ 的第 $i$ 对转 $m\\,\\theta_i$"。位置 5000 可以直接代入，所以不会出错。再结合相对距离性质（第 3 节），两个相隔 3 的 token，无论在位置 10 还是位置 5000，分数中的位置部分都一样。
+没有表，只有一条规则："位置 $m$ 的第 $i$ 对转 $m\\,\\theta_i$"。位置 5000 可以直接代入，不会出错；而且两个相隔 3 的 token，无论在位置 10 还是位置 5000，分数中的位置部分都一样（第 3 节）。
 
 **但"能算"不等于"好用"。** 一个在长度 4096 上训练的模型，在长度 32,000 上运行时通常会明显变差。原因在于最慢的那几对：
 
@@ -1132,23 +1244,23 @@ generating token 3002: sees [1978 ~ 3001]
 
 简而言之：GPT-2 一次永远看不到超过 1024 个 token，滑动窗口只是通过丢弃较早的文本来掩盖这一点；RoPE 模型可以接受更长的输入，但需要做些调整才能在那里保持准确。
 
-## 参考文献
+## 参考资料
 
 1. **RoFormer: Enhanced Transformer with Rotary Position Embedding (2021)**
 
-   Su et al. 提出了 RoPE，并证明旋转后的 $q \\cdot k$ 只依赖相对位置。
+   Su 等人提出了 RoPE，并证明旋转后的 $q \\cdot k$ 只依赖相对位置。
 
    [RoFormer ↗](https://arxiv.org/abs/2104.09864)
 
 2. **Extending Context Window of Large Language Models via Positional Interpolation (2023)**
 
-   Chen et al. 把位置按比例缩小，让更长的输入落在 RoPE 角度已训练过的范围内。
+   Chen 等人把位置按比例缩小，让更长的输入落在 RoPE 角度已训练过的范围内。
 
    [Position Interpolation ↗](https://arxiv.org/abs/2306.15595)
 
 3. **YaRN: Efficient Context Window Extension of Large Language Models (2023)**
 
-   Peng et al. 对快的对和慢的对用不同方式重新缩放 RoPE 频率，以扩展上下文长度。
+   Peng 等人对快的对和慢的对用不同方式重新缩放 RoPE 频率，以扩展上下文长度。
 
    [YaRN ↗](https://arxiv.org/abs/2309.00071)
 `,

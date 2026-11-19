@@ -1568,6 +1568,39 @@ class RMSNorm(nn.Module):
 
 As with LayerNorm, each token's vector is normalized on its own, over the last dimension ($C = 4096$ in LLaMA 3 8B).
 
+## Where it goes in LLaMA: pre-norm, as in GPT-2
+
+The block code is the same as GPT-2's; only the type of \`ln1\` and \`ln2\` changed:
+
+\`\`\`python
+# GPT-2
+x = x + self.attn(self.ln1(x))     # ln1 = nn.LayerNorm(n_embd)
+x = x + self.mlp(self.ln2(x))      # ln2 = nn.LayerNorm(n_embd)
+
+# LLaMA
+x = x + self.attn(self.ln1(x))     # ln1 = RMSNorm(n_embd)
+x = x + self.mlp(self.ln2(x))      # ln2 = RMSNorm(n_embd)
+\`\`\`
+
+This is pre-norm (explained in the [LayerNorm](#info:layernorm) note): the norm is applied only to the **copy** of $x$ that goes into attention or the MLP, and the update is added back to the un-normalized $x$. So the residual stream itself is never normalized inside the 32 blocks; it only keeps getting added to. That is why there is one more norm at the end, \`ln_f\`, right before the LM head (see [final norm](#info:final_ln_notes)).
+
+\`\`\`text
+each block:  ln1 (before attention), ln2 (before the MLP)    32 × 2 = 64
+at the end:  ln_f (before the LM head)                        1
+total: 65 RMSNorms, each with its own γ (4096 numbers)
+\`\`\`
+
+GPT-2 small has the same structure with 25 LayerNorms (12 × 2 + 1).
+
+### 🆕 Later models move the norm
+
+LLaMA keeps GPT-2's pre-norm, but some later models place it differently, to keep training stable in very large models:
+
+- **Gemma 2** normalizes both the input and the output of each sublayer ("sandwich norm"): attention's output is normalized once more before it is added back to $x$.
+- **OLMo 2** drops the norm before the sublayer and normalizes only its output: \`x = x + norm(attn(x))\`.
+
+These will be covered with those models.
+
 ## A worked example
 
 Take
@@ -1656,6 +1689,8 @@ Pure normalization fixes the RMS of the output to $\\approx 1$, which is too res
 
 1. **Root Mean Square Layer Normalization.** Zhang & Sennrich, 2019. [arXiv:1910.07467 ↗](https://arxiv.org/abs/1910.07467)
 2. **Layer Normalization.** Ba, Kiros & Hinton, 2016. [arXiv:1607.06450 ↗](https://arxiv.org/abs/1607.06450)
+3. **Gemma 2: Improving Open Language Models at a Practical Size.** Gemma Team, Google DeepMind, 2024. [arXiv:2408.00118 ↗](https://arxiv.org/abs/2408.00118)
+4. **2 OLMo 2 Furious.** OLMo Team, Ai2, 2024. [arXiv:2501.00656 ↗](https://arxiv.org/abs/2501.00656)
 `,
     },
     zh: {
@@ -1696,6 +1731,39 @@ class RMSNorm(nn.Module):
 \`\`\`
 
 和 LayerNorm 一样，每个 token 的向量单独归一化，作用在最后一维上（LLaMA 3 8B 里 $C = 4096$）。
+
+## 在 LLaMA 里放在哪里：和 GPT-2 一样是 pre-norm
+
+block 的代码和 GPT-2 一样，只是 \`ln1\`、\`ln2\` 的类型换了：
+
+\`\`\`python
+# GPT-2
+x = x + self.attn(self.ln1(x))     # ln1 = nn.LayerNorm(n_embd)
+x = x + self.mlp(self.ln2(x))      # ln2 = nn.LayerNorm(n_embd)
+
+# LLaMA
+x = x + self.attn(self.ln1(x))     # ln1 = RMSNorm(n_embd)
+x = x + self.mlp(self.ln2(x))      # ln2 = RMSNorm(n_embd)
+\`\`\`
+
+这就是 pre-norm（[LayerNorm](#info:layernorm) note 里讲过）：norm 只作用在送进 attention 或 MLP 的那份 $x$ 的**副本**上，算出的更新量再加回**没有归一化的** $x$。所以在 32 个 block 里，residual stream 本身从来没有被归一化过，只是不断被加上新的东西。这也是为什么最后还要再加一个 norm \`ln_f\`，放在 LM head 之前（见[最后的 norm](#info:final_ln_notes)）。
+
+\`\`\`text
+每个 block：ln1（attention 前）、ln2（MLP 前）   32 × 2 = 64 个
+最后：      ln_f（LM head 前）                    1 个
+合计 65 个 RMSNorm，每个有自己的 γ（4096 个数）
+\`\`\`
+
+GPT-2 small 是同样的结构，有 25 个 LayerNorm（12 × 2 + 1）。
+
+### 🆕 后来的模型换了 norm 的位置
+
+LLaMA 沿用了 GPT-2 的 pre-norm，但后来有些模型换了放法，为的是让很大的模型训练更稳定：
+
+- **Gemma 2**：每个子层的输入和输出**都**做归一化（"sandwich norm"）：attention 的输出在加回 $x$ 之前，先再归一化一次。
+- **OLMo 2**：去掉子层前的 norm，只归一化子层的输出：\`x = x + norm(attn(x))\`。
+
+讲到这些模型时再细说。
 
 ## 算一个例子
 
@@ -1785,6 +1853,8 @@ RMSNorm 的论文（Zhang & Sennrich, 2019）提出：**LayerNorm 真正起作�
 
 1. **Root Mean Square Layer Normalization.** Zhang & Sennrich，2019。[arXiv:1910.07467 ↗](https://arxiv.org/abs/1910.07467)
 2. **Layer Normalization.** Ba、Kiros & Hinton，2016。[arXiv:1607.06450 ↗](https://arxiv.org/abs/1607.06450)
+3. **Gemma 2: Improving Open Language Models at a Practical Size.** Gemma Team，Google DeepMind，2024。[arXiv:2408.00118 ↗](https://arxiv.org/abs/2408.00118)
+4. **2 OLMo 2 Furious.** OLMo Team，Ai2，2024。[arXiv:2501.00656 ↗](https://arxiv.org/abs/2501.00656)
 `,
     },
   },
