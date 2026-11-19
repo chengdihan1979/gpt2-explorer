@@ -1,16 +1,17 @@
 import React from "react";
 import { InfoProvider } from "./context/InfoContext";
 import ModelExplorer from "./ModelExplorer";
-import { DEFAULT_MODEL_ID, findModel } from "./models";
+import HomePage from "./HomePage";
+import { findModel } from "./models";
 import { useHashRoute } from "./useHashRoute";
 
-// Picks the model page from the URL hash ("#/gpt2"); unknown or missing routes show the default model.
+// Picks the page from the URL hash: "#/<model id>" shows that model; no route (or an unknown one) shows the home page.
 export default function RefExplorer() {
   const route = useHashRoute();
-  const model = findModel(route) ?? findModel(DEFAULT_MODEL_ID);
+  const model = findModel(route);
   return (
     <InfoProvider>
-      <ModelExplorer key={model.id} model={model} />
+      {model ? <ModelExplorer key={model.id} model={model} /> : <HomePage />}
     </InfoProvider>
   );
 }

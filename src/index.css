@@ -294,3 +294,17 @@ body {
   height: auto;
   margin: 0.75em 0;
 }
+
+/* ---------- Home page: architecture evolution ---------- */
+
+/* Highlight ring on the parts a step changed */
+@keyframes evo-pulse {
+  0%, 100% { stroke-opacity: 1; }
+  50% { stroke-opacity: 0.35; }
+}
+.evo-pulse {
+  animation: evo-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .evo-pulse { animation: none; }
+}

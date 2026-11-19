@@ -833,6 +833,8 @@ $$
 
 q and k use the **same** 32 speeds (section 2 shows why they must). Only the angle differs, because it is set by each vector's own position: q at position $m$ turns pair $i$ by $m\\,\\theta_i$, k at position $n$ by $n\\,\\theta_i$.
 
+**In the code,** \`rope_cache\` computes all the angles once, and \`apply_rope\` rotates every pair of every token in one go. [A small example, worked step by step](#hover:apply_rope_example_notes).
+
 ## 5. Why mix fast and slow pairs?
 
 ### What a pair sees: the distance $d$
@@ -1236,6 +1238,8 @@ $$
 
 q 和 k 用的是**同样的** 32 个速度（第 2 节说明了为什么必须这样）。只有角度不同，因为角度由各自的位置决定：位置 $m$ 的 q，第 $i$ 对转 $m\\,\\theta_i$；位置 $n$ 的 k，第 $i$ 对转 $n\\,\\theta_i$。
 
+**代码里**，\`rope_cache\` 先把所有角度一次算好，\`apply_rope\` 再把所有 token 的每一对一次转完。[用一个小例子一步一步算给你看](#hover:apply_rope_example_notes)。
+
 ## 5. 为什么要把快的对和慢的对混在一起
 
 ### 一对能"看到"什么：距离 $d$
@@ -1521,6 +1525,345 @@ LLaMA 3 和 LLaMA 3.1 写在同一篇论文里（"The Llama 3 Herd of Models"）
    Meta 关于 LLaMA 3 / 3.1 的论文：base 500000、从 8K 分步扩展到 128K 的训练过程，以及后训练里的长上下文数据。
 
    [Llama 3 ↗](https://arxiv.org/abs/2407.21783)
+`,
+    },
+  },
+
+  apply_rope_example_notes: {
+    en: {
+      title: "apply_rope: a worked example",
+      md: `
+**A worked example of \`rope_cache\` and \`apply_rope\`, with every intermediate result.**
+
+\`\`\`python
+def rope_cache(hs, max_toks, theta=500000.0):
+    inv_freq = 1.0 / theta ** (torch.arange(0, hs, 2).float() / hs)   # (hs/2,)
+    angles = torch.outer(torch.arange(max_toks).float(), inv_freq)    # (max_toks, hs/2)
+    return angles.cos(), angles.sin()
+
+def apply_rope(x, cos, sin):                         # x: (B, nh, T, hs), cos/sin: (T, hs/2)
+    x1, x2 = x[..., 0::2], x[..., 1::2]
+    out1 = x1 * cos - x2 * sin
+    out2 = x1 * sin + x2 * cos
+    return torch.stack([out1, out2], dim=-1).flatten(-2)
+\`\`\`
+
+## Setup
+
+- Head size $hs = 4$, so 2 pairs: pair 0 is dims 0 and 1, pair 1 is dims 2 and 3.
+- Base 10000.
+- 1 sample ($B = 1$), 1 head ($nh = 1$), 3 positions ($T = 3$).
+- The q vector is $[1, 2, 3, 4]$ at all three positions. The input is the same everywhere, so any difference in the output comes from the position alone.
+
+So $x$ has shape (1, 1, 3, 4):
+
+\`\`\`text
+position 0:  [1, 2, 3, 4]
+position 1:  [1, 2, 3, 4]
+position 2:  [1, 2, 3, 4]
+\`\`\`
+
+## Before: rope_cache computes cos and sin
+
+**(a) The speed of each pair, $\\theta_i$ (\`inv_freq\`):**
+
+\`\`\`text
+torch.arange(0, 4, 2)    = [0, 2]
+divided by hs            = [0, 0.5]
+10000 to that power      = [1, 100]
+reciprocal               = [1, 0.01]
+\`\`\`
+
+Pair 0 turns 1 radian (57.3°) per position; pair 1 turns 0.01 radian (0.57°).
+
+**(b) The angle for each position and pair = position × speed.** \`torch.outer\` multiplies positions $[0, 1, 2]$ by speeds $[1, 0.01]$ in every combination:
+
+\`\`\`text
+              pair 0           pair 1
+position 0    0 × 1 = 0        0 × 0.01 = 0
+position 1    1 × 1 = 1        1 × 0.01 = 0.01
+position 2    2 × 1 = 2        2 × 0.01 = 0.02
+\`\`\`
+
+In degrees: pair 0 is 0°, 57.3°, 114.6°; pair 1 is 0°, 0.57°, 1.15°.
+
+**(c) cos and sin of those angles,** each of shape (3, 2):
+
+\`\`\`text
+cos           pair 0    pair 1       sin           pair 0    pair 1
+position 0    1.0000    1.0000       position 0    0.0000    0.0000
+position 1    0.5403    0.9999       position 1    0.8415    0.0100
+position 2   -0.4161    0.9998       position 2    0.9093    0.0200
+\`\`\`
+
+These tables depend only on the position and the pair, not on q, so they are computed once in \`__init__\` and reused in every forward pass.
+
+All numbers in this note are rounded to 4 decimals for display; the products below use the exact values. For example, $\\cos(0.01) = 0.99995\\ldots$ shows as 0.9999, so  \\times 0.9999 = 2.9997$ by hand, while the table shows  \\times 0.99995 = 2.99985 \\approx 2.9999$. The last digit of a hand calculation can therefore be off by one or two.
+
+## Step 1: split into x1 and x2
+
+\`...\` keeps all the leading dimensions (B, nh, T); the slicing is on the last one only:
+
+- \`0::2\`: start at dim 0 and take every second one, so dims 0 and 2;
+- \`1::2\`: start at dim 1 and take every second one, so dims 1 and 3.
+
+\`\`\`text
+x  = [1, 2, 3, 4]
+x1 = [1, 3]       the first number of each pair  (dims 0, 2)
+x2 = [2, 4]       the second number of each pair (dims 1, 3)
+\`\`\`
+
+x1 and x2 each have shape (1, 1, 3, 2). Now x1, x2, cos and sin all have "position" as the second-to-last dimension and "pair" as the last, so their entries line up one to one.
+
+x1 and x2 are tensors, not single numbers, but every operation below is **element-wise**: entry $i$ only meets entry $i$. So $(x1[i], x2[i])$ is pair $i$, and the code rotates all pairs at once instead of looping over them.
+
+## Step 2: rotate, element by element
+
+**Broadcasting.** x1 has shape (1, 1, 3, 2) and cos has shape (3, 2). PyTorch aligns shapes from the right, so (3, 2) matches the last two dims of x1 and is reused for every sample and every head. Row $m$ of cos meets only the vector at position $m$.
+
+**The four products,** each of shape (3, 2):
+
+\`\`\`text
+x1 * cos            x2 * sin            x1 * sin            x2 * cos
+ 1.0000  3.0000      0.0000  0.0000      0.0000  0.0000      2.0000  4.0000   pos. 0
+ 0.5403  2.9999      1.6829  0.0400      0.8415  0.0300      1.0806  3.9998   pos. 1
+-0.4161  2.9994      1.8186  0.0800      0.9093  0.0600     -0.8323  3.9992   pos. 2
+\`\`\`
+
+**Subtract and add:**
+
+\`\`\`text
+out1 = x1*cos - x2*sin       out2 = x1*sin + x2*cos
+ 1.0000   3.0000              2.0000   4.0000           position 0
+-1.1426   2.9599              1.9221   4.0298           position 1
+-2.2347   2.9194              0.0770   4.0592           position 2
+\`\`\`
+
+**Checking one entry by hand: position 1, pair 0.** The pair is $(a, b) = (1, 2)$ and the angle is 1 radian, with $\\cos = 0.5403$ and $\\sin = 0.8415$:
+
+\`\`\`text
+out1 = a·cos - b·sin = 1 × 0.5403 - 2 × 0.8415 = 0.5403 - 1.6829 = -1.1426
+out2 = a·sin + b·cos = 1 × 0.8415 + 2 × 0.5403 = 0.8415 + 1.0806 =  1.9221
+\`\`\`
+
+The other five entries use the same formula with their own $a$, $b$ and angle.
+
+## Step 3: interleave back into the original order
+
+out1 and out2 are **not** in the vector's original order. Each holds one number from every pair:
+
+\`\`\`text
+out1 = [ 1.0000, 3.0000 ]    new dims 0 and 2  (first number of each pair)
+out2 = [ 2.0000, 4.0000 ]    new dims 1 and 3  (second number of each pair)
+\`\`\`
+
+(Position 0 is shown.) Reading out1 and then out2 would give dims 0, 2, 1, 3. To get dims 0, 1, 2, 3 back, the two must be interleaved: one from out1, one from out2, and so on.
+
+**(a) \`stack(dim=-1)\`** adds a new last dimension and puts the **same entry** of out1 and out2 side by side. Shape (1, 1, 3, 2) becomes (1, 1, 3, 2, 2):
+
+\`\`\`text
+position 0:  [[ 1.0000, 2.0000],  [ 3.0000, 4.0000]]
+position 1:  [[-1.1426, 1.9221],  [ 2.9599, 4.0298]]
+position 2:  [[-2.2347, 0.0770],  [ 2.9194, 4.0592]]
+               pair 0 (out1, out2)  pair 1 (out1, out2)
+\`\`\`
+
+Each innermost bracket is one pair.
+
+**(b) \`flatten(-2)\`** merges the last two dimensions (2 pairs × 2 numbers) into 4 numbers. The shape goes back to (1, 1, 3, 4):
+
+\`\`\`text
+position 0:  [ 1.0000, 2.0000, 3.0000, 4.0000]
+position 1:  [-1.1426, 1.9221, 2.9599, 4.0298]
+position 2:  [-2.2347, 0.0770, 2.9194, 4.0592]
+\`\`\`
+
+The order is again "pair 0's two numbers, then pair 1's", as in the input.
+
+**Why not \`stack(dim=-2)\` or \`cat\`?** Both put out1's whole row before out2's, giving $[1, 3, 2, 4]$ at position 0: dims 0, 2, 1, 3, with each pair split apart. \`dim=-1\` is what keeps the two numbers of a pair next to each other.
+
+## Reading the result
+
+**Position 0 is unchanged:** the angle is 0, so $\\cos = 1$, $\\sin = 0$, and out1 = x1, out2 = x2.
+
+\`\`\`text
+               pair 0 (fast)                    pair 1 (slow)
+position 0     ( 1.0000, 2.0000)                (3.0000, 4.0000)
+position 1     (-1.1426, 1.9221)  turned 57.3°  (2.9599, 4.0298)  turned 0.57°
+position 2     (-2.2347, 0.0770)  turned 114.6° (2.9194, 4.0592)  turned 1.15°
+\`\`\`
+
+**Lengths do not change:** pair 0 has length $\\sqrt{1^2 + 2^2} = 2.2361$ at every position, pair 1 has $\\sqrt{3^2 + 4^2} = 5$. Rotation changes each pair's direction only.
+
+So the same vector $[1, 2, 3, 4]$ comes out differently at each position: a lot for the fast pair, a little for the slow one. That is how position enters q, and k goes through exactly the same function.
+`,
+    },
+    zh: {
+      title: "apply_rope：一个小例子",
+      md: `
+**用一个小例子把 \`rope_cache\` 和 \`apply_rope\` 完整算一遍，每个中间结果都列出来。**
+
+\`\`\`python
+def rope_cache(hs, max_toks, theta=500000.0):
+    inv_freq = 1.0 / theta ** (torch.arange(0, hs, 2).float() / hs)   # (hs/2,)
+    angles = torch.outer(torch.arange(max_toks).float(), inv_freq)    # (max_toks, hs/2)
+    return angles.cos(), angles.sin()
+
+def apply_rope(x, cos, sin):                         # x: (B, nh, T, hs), cos/sin: (T, hs/2)
+    x1, x2 = x[..., 0::2], x[..., 1::2]
+    out1 = x1 * cos - x2 * sin
+    out2 = x1 * sin + x2 * cos
+    return torch.stack([out1, out2], dim=-1).flatten(-2)
+\`\`\`
+
+## 设定
+
+- head size $hs = 4$，所以只有 2 对：第 0 对是第 0、1 维，第 1 对是第 2、3 维。
+- base 取 10000。
+- 1 条样本（$B = 1$），1 个 head（$nh = 1$），3 个位置（$T = 3$）。
+- 三个位置上的 q 都是 $[1, 2, 3, 4]$。输入完全一样，所以输出有什么不同，都只能是位置造成的。
+
+于是 $x$ 的形状是 (1, 1, 3, 4)：
+
+\`\`\`text
+位置 0:  [1, 2, 3, 4]
+位置 1:  [1, 2, 3, 4]
+位置 2:  [1, 2, 3, 4]
+\`\`\`
+
+## 准备：rope_cache 算出 cos 和 sin
+
+**(a) 每一对的速度 $\\theta_i$（\`inv_freq\`）：**
+
+\`\`\`text
+torch.arange(0, 4, 2)    = [0, 2]
+除以 hs                   = [0, 0.5]
+求 10000 的这个次方        = [1, 100]
+取倒数                    = [1, 0.01]
+\`\`\`
+
+第 0 对每个位置转 1 弧度（57.3°），第 1 对每个位置转 0.01 弧度（0.57°）。
+
+**(b) 每个位置、每一对的角度 = 位置 × 速度。** \`torch.outer\` 把位置 $[0, 1, 2]$ 和速度 $[1, 0.01]$ 两两相乘：
+
+\`\`\`text
+              第 0 对          第 1 对
+位置 0        0 × 1 = 0        0 × 0.01 = 0
+位置 1        1 × 1 = 1        1 × 0.01 = 0.01
+位置 2        2 × 1 = 2        2 × 0.01 = 0.02
+\`\`\`
+
+换成角度：第 0 对依次是 0°、57.3°、114.6°，第 1 对依次是 0°、0.57°、1.15°。
+
+**(c) 对这些角度取 cos 和 sin**，形状都是 (3, 2)：
+
+\`\`\`text
+cos          第 0 对    第 1 对       sin          第 0 对    第 1 对
+位置 0       1.0000     1.0000        位置 0       0.0000     0.0000
+位置 1       0.5403     0.9999        位置 1       0.8415     0.0100
+位置 2      -0.4161     0.9998        位置 2       0.9093     0.0200
+\`\`\`
+
+这两张表只跟位置和第几对有关，跟 q 是什么无关。所以在 \`__init__\` 里算一次存起来，以后每次 forward 直接拿来用。
+
+注意：这篇里的数字都四舍五入到 4 位小数，但后面的乘积是用精确值算的。比如 $\\cos(0.01) = 0.99995\\ldots$，显示成 0.9999。用显示的数手算是  \\times 0.9999 = 2.9997$，而表里是  \\times 0.99995 = 2.99985$，四舍五入后是 2.9999。所以拿表里的数手算，最后一位可能差一两个数。
+
+## 第 1 步：拆成 x1 和 x2
+
+\`...\` 表示前面的几维（B、nh、T）原样保留，只在最后一维上取：
+
+- \`0::2\`：从第 0 维开始，隔一个取一个，取到第 0、2 维；
+- \`1::2\`：从第 1 维开始，隔一个取一个，取到第 1、3 维。
+
+\`\`\`text
+x  = [1, 2, 3, 4]
+x1 = [1, 3]       每一对的第一个数（第 0、2 维）
+x2 = [2, 4]       每一对的第二个数（第 1、3 维）
+\`\`\`
+
+x1、x2 的形状都是 (1, 1, 3, 2)。这时 x1、x2、cos、sin 的倒数第二维都是"第几个位置"，最后一维都是"第几对"，四张表的格子正好一一对上。
+
+x1、x2 是张量，不是单个数字。但下面的运算全是**逐元素**的：第 $i$ 格只和第 $i$ 格算。所以 $(x1[i], x2[i])$ 就是第 $i$ 对，代码一次就把所有对都转完了，不用一对一对地循环。
+
+## 第 2 步：逐格旋转
+
+**广播。** x1 的形状是 (1, 1, 3, 2)，cos 是 (3, 2)。PyTorch 从最后一维往前对齐，cos 的 (3, 2) 正好对上 x1 的最后两维，于是每条样本、每个 head 都共用这一张表。cos 的第 $m$ 行只会和位置 $m$ 的向量相乘。
+
+**四个乘积**，形状都是 (3, 2)：
+
+\`\`\`text
+x1 * cos            x2 * sin            x1 * sin            x2 * cos
+ 1.0000  3.0000      0.0000  0.0000      0.0000  0.0000      2.0000  4.0000   位置 0
+ 0.5403  2.9999      1.6829  0.0400      0.8415  0.0300      1.0806  3.9998   位置 1
+-0.4161  2.9994      1.8186  0.0800      0.9093  0.0600     -0.8323  3.9992   位置 2
+\`\`\`
+
+**再相减、相加：**
+
+\`\`\`text
+out1 = x1*cos - x2*sin       out2 = x1*sin + x2*cos
+ 1.0000   3.0000              2.0000   4.0000           位置 0
+-1.1426   2.9599              1.9221   4.0298           位置 1
+-2.2347   2.9194              0.0770   4.0592           位置 2
+\`\`\`
+
+**挑一格手算核对：位置 1 的第 0 对。** 这一对是 $(a, b) = (1, 2)$，角度 1 弧度，$\\cos = 0.5403$，$\\sin = 0.8415$：
+
+\`\`\`text
+out1 = a·cos - b·sin = 1 × 0.5403 - 2 × 0.8415 = 0.5403 - 1.6829 = -1.1426
+out2 = a·sin + b·cos = 1 × 0.8415 + 2 × 0.5403 = 0.8415 + 1.0806 =  1.9221
+\`\`\`
+
+其余 5 格也是同一个公式，只是代入各自的 $a$、$b$ 和角度。
+
+## 第 3 步：交错拼回原来的顺序
+
+out1 和 out2 **并不是**按向量原来的顺序排的，它们各自装的是每一对中的一个数：
+
+\`\`\`text
+out1 = [ 1.0000, 3.0000 ]    新的第 0、2 维（每一对的第一个数）
+out2 = [ 2.0000, 4.0000 ]    新的第 1、3 维（每一对的第二个数）
+\`\`\`
+
+（这里以位置 0 为例。）如果先读 out1 再读 out2，得到的是第 0、2、1、3 维，顺序乱了。要恢复成第 0、1、2、3 维，得交替着取：out1 一个、out2 一个，再 out1 一个、out2 一个。
+
+**(a) \`stack(dim=-1)\`** 在最后新加一维，把 out1 和 out2 **同一格**的数并排放在一起。形状从 (1, 1, 3, 2) 变成 (1, 1, 3, 2, 2)：
+
+\`\`\`text
+位置 0:  [[ 1.0000, 2.0000],  [ 3.0000, 4.0000]]
+位置 1:  [[-1.1426, 1.9221],  [ 2.9599, 4.0298]]
+位置 2:  [[-2.2347, 0.0770],  [ 2.9194, 4.0592]]
+           第 0 对 (out1, out2)  第 1 对 (out1, out2)
+\`\`\`
+
+最里面的每个括号就是一对。
+
+**(b) \`flatten(-2)\`** 把最后两维（2 对 × 每对 2 个数）摊平成 4 个数，形状回到 (1, 1, 3, 4)：
+
+\`\`\`text
+位置 0:  [ 1.0000, 2.0000, 3.0000, 4.0000]
+位置 1:  [-1.1426, 1.9221, 2.9599, 4.0298]
+位置 2:  [-2.2347, 0.0770, 2.9194, 4.0592]
+\`\`\`
+
+顺序又变回"第 0 对的两个数，再是第 1 对的两个数"，和输入一样。
+
+**为什么不用 \`stack(dim=-2)\` 或 \`cat\`？** 这两种都是把 out1 整行放在 out2 整行前面，位置 0 会得到 $[1, 3, 2, 4]$，也就是第 0、2、1、3 维，同一对的两个数被拆开了。只有 \`dim=-1\` 能让同一对的两个数挨在一起。
+
+## 看结果
+
+**位置 0 没有变化**：角度是 0，$\\cos = 1$、$\\sin = 0$，所以 out1 就是 x1，out2 就是 x2。
+
+\`\`\`text
+          第 0 对（快）                      第 1 对（慢）
+位置 0    ( 1.0000, 2.0000)                  (3.0000, 4.0000)
+位置 1    (-1.1426, 1.9221)   转了 57.3°     (2.9599, 4.0298)   转了 0.57°
+位置 2    (-2.2347, 0.0770)   转了 114.6°    (2.9194, 4.0592)   转了 1.15°
+\`\`\`
+
+**长度不变**：第 0 对在每个位置的长度都是 $\\sqrt{1^2 + 2^2} = 2.2361$，第 1 对都是 $\\sqrt{3^2 + 4^2} = 5$。旋转只改每一对的方向。
+
+所以同一个向量 $[1, 2, 3, 4]$ 放在不同位置，转出来就不一样：快的那对变化很大，慢的那对只动一点点。位置信息就是这样进入 q 的，k 也走完全一样的函数。
 `,
     },
   },
