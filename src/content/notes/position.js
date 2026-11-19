@@ -794,7 +794,17 @@ positions 503, 504  :  black cat
 
 ## 4. From 2-D to 64-D: rotate in pairs
 
-Each head's q and k have $hs = 64$ dims (128 in LLaMA 3 8B). RoPE groups them into **32 pairs** and treats each pair as a 2-D arrow that rotates in its own plane:
+The head size differs by model:
+
+\`\`\`text
+                 width / heads     head size    pairs    base
+GPT-2 small       768 / 12            64          32      (no RoPE)
+LLaMA 3 8B       4096 / 32           128          64      500000
+\`\`\`
+
+The examples in this note use **64 dims and base 10000** (the original RoPE setting; Llama 2 also uses base 10000). LLaMA 3 8B works exactly the same way, only with more pairs and a larger base.
+
+With 64 dims, RoPE groups q and k into **32 pairs** and treats each pair as a 2-D arrow that rotates in its own plane:
 
 \`\`\`text
 q (64 dims) = [ (q0, q1), (q2, q3), (q4, q5), ..., (q62, q63) ]
@@ -826,6 +836,8 @@ q and k use the **same** 32 speeds (section 2 shows why they must). Only the ang
 ## 5. Why mix fast and slow pairs?
 
 ### What a pair sees: the distance $d$
+
+(All numbers in this section use the example setting from section 4: 32 pairs, base 10000.)
 
 Attention scores one query against one key. Call the distance between them
 
@@ -913,7 +925,7 @@ The frequencies are **exactly the same**, $1/10000^{2i/d}$, also in sin/cos pair
 
 The sinusoidal note shows that shifting by $k$ positions is a rotation. RoPE applies that rotation **directly to q and k**, so $q \\cdot k$ automatically depends only on relative distance.
 
-> 🆕 **The base.** The 10000 in the formula is called the base (\`rope_theta\` in Hugging Face configs). Llama 2 uses 10000; Llama 3 raises it to 500000, which slows the slowest pairs further to support longer contexts.
+> 🆕 **The base.** The 10000 in the formula is called the base (\`rope_theta\` in Hugging Face configs). Llama 2 uses 10000; LLaMA 3 raises it to 500000. Section 8 explains why.
 
 ## 7. Beyond the training length
 
@@ -966,9 +978,114 @@ There is no table, only the rule "pair $i$ at position $m$ turns $m\\,\\theta_i$
 - During training they only ever turned by small angles. Pair 31 turns about 0.55 radian over 4096 positions, less than a tenth of a full turn.
 - Further out, they reach angles **never seen in training**, and the model does not know how to read them.
 
-> 🆕 Long-context models therefore add extra techniques, such as a larger base (Llama 3 uses 500000) or interpolating/rescaling positions (Position Interpolation, YaRN). The idea in each case is to keep far-away angles within the range seen during training.
+> 🆕 Long-context models therefore add extra techniques, such as a larger base (Llama 3 uses 500000) or interpolating/rescaling positions (Position Interpolation, YaRN). The idea in each case is to keep far-away angles within the range seen during training. Section 8 shows how LLaMA does it.
 
 In short: GPT-2 can never see more than 1024 tokens at once, and a sliding window only hides that by dropping older text; a RoPE model can take longer input, but needs adjustments to stay accurate there.
+
+## 8. 🆕 How LLaMA reaches a 128K context
+
+Two lengths need to be kept apart:
+
+- **Training length:** how many tokens one training sample holds. During training, the distance $d$ between a query and a key never exceeds it.
+- **Supported context length:** how many tokens the model officially accepts at inference.
+
+\`\`\`text
+             base       longest training length     supported context
+LLaMA 1      10000       2K                          2K
+Llama 2      10000       4K                          4K
+LLaMA 3      500000      8K                          8K
+LLaMA 3.1    500000      128K (only at the end)      128K
+             + frequency scaling
+\`\`\`
+
+Every LLaMA version uses RoPE. LLaMA 3 can already be run on more than 8K tokens (section 7: every position has an angle), but quality drops past 8K (explained below), so 8K is all it officially supports. LLaMA 3.1 gets to 128K with two changes below: frequency scaling and long-text training.
+
+### Which angles a pair has seen
+
+In training, pair $i$ meets every distance from 0 up to the training length $L$, so it has seen **every angle in one continuous range**, from 0 to $L \\times \\theta_i$. There are no gaps in this range; the only problem is angles **past its upper end**.
+
+Two consequences:
+
+- A pair that completes a full turn within $L$ has seen every angle from 0° to 360°. It can never meet a new angle, however long the input.
+- A slower pair is safer, not riskier: the same distance gives it a smaller angle, which is more likely to stay inside the seen range.
+
+### Why LLaMA 3 gets worse past 8K at inference
+
+The angle of pair $i$ is set by the **distance $d$ between a query and a key**: it is $d \\times \\theta_i$.
+
+- **Training:** every sample has at most 8K tokens, so $d$ is at most 8K, and pair $i$ only ever sees angles from 0 to $8192 \\times \\theta_i$. Pair 44, for example, only sees 0° to 56.7°.
+- **Inference with more than 8K tokens:** some queries and keys are now more than 8K apart, for example when the last token attends to the first one. At those distances pair 44's angle goes past 56.7°, which never happened in training.
+
+Which pairs are affected? With head size 128 and base 500000:
+
+- **Pairs 0–34** complete at least one full turn within 8K, so they have seen every angle from 0° to 360°. Longer input brings them nothing new.
+- **Pairs 35–63** (29 pairs) do not complete a turn within 8K. Past 8K, all of them move into unseen angles.
+
+The model never learned how to read these 29 pairs at those angles, so attention scores between tokens more than 8K apart become unreliable. That is why LLaMA 3 runs on longer input but performs worse there, and why it officially supports only 8K.
+
+### Base 500000 (LLaMA 3)
+
+LLaMA 3 has head size 128, so 64 pairs with $\\theta_i = 1/\\text{base}^{2i/128}$. Raising the base from 10000 to 500000 leaves pair 0 at 1 radian per position but slows the later pairs a lot (period = positions per full turn):
+
+\`\`\`text
+                       base 10000                   base 500000
+pair 32                0.573° per pos., period 628     0.081°, period 4,443
+pair 48                0.057°, period 6,283            0.0030°, period 118K
+pair 63 (slowest)      0.0066°, period 54K             0.00014°, period 2.56M
+\`\`\`
+
+With base 10000, even the slowest pair goes around 2.4 times over 128K, so every pair wraps there. With base 500000, the slowest pairs turn less than 20° over 128K, so they still give an unambiguous reading of far distances (section 5: slow pairs tell near from far).
+
+The LLaMA 3 paper's stated reason for 500000 is a citation: Xiong et al. (2023) had raised Llama 2's base to 500000, trained further on long text, and found this value works well for contexts up to 32K. Meta took the value from that result rather than tuning it again.
+
+A larger base alone does not give a long context: LLaMA 3 was still trained at 8K and supports 8K.
+
+### Frequency scaling (LLaMA 3.1)
+
+LLaMA 3.1 keeps base 500000 and slows the slow pairs further. The rule (\`rope_scaling\` in the released config, factor 8) looks at each pair's period:
+
+\`\`\`text
+period under 2,048           pairs 0–28     θ_i unchanged
+period 2,048 to 8,192        pairs 29–34    smoothly between "unchanged" and "÷ 8"
+period over 8,192            pairs 35–63    θ_i ÷ 8
+\`\`\`
+
+The pairs divided by 8 are exactly pairs 35–63, the ones that move into unseen angles past 8K (see above). For example, pair 44 (period 52,026):
+
+\`\`\`text
+                           longest distance    largest angle of pair 44
+8K training                 8K                   56.7°
+128K, no scaling            128K                 907°   (2.5 turns)
+128K, θ ÷ 8                 128K                 113.4°
+\`\`\`
+
+- **Without scaling,** every angle from 0° to 360° appears at 128K, but training only saw 0° to 56.7°.
+- **With θ ÷ 8,** the largest angle is 113.4°, about twice the seen range instead of 16 times. The long-text training below covers the rest.
+
+**Fast pairs are left alone.** Pair 0 turns 1,304 times within 8K, so it has seen every angle many times.
+
+**The cost.** After ÷ 8, distance $d$ gives a slow pair the angle that distance $d/8$ used to give: distance 800 looks like the old distance 100. These angles were all seen, but they now mean different distances, so the model has to re-adapt. The cost is small because slow pairs barely move between nearby tokens anyway; near detail comes from the fast pairs, which are unchanged.
+
+This is the same idea as YaRN: treat fast and slow pairs differently.
+
+### Long-text training (LLaMA 3.1)
+
+Why not train at 128K from the start? Attention scores every pair of tokens, so its cost grows with the square of the length: 16× longer samples cost 256× as much attention each. And most training text is short anyway. So the paper trains short first and lengthens at the end:
+
+\`\`\`text
+stage                         sample length               amount
+1. start of pretraining        4K                          first 252M tokens
+2. main pretraining            8K                          most of ~15T tokens
+3. context extension           8K → 128K in 6 steps        ~800B tokens (about 5%)
+4. annealing                   128K                        last 40M tokens
+\`\`\`
+
+- **Stage 1** uses short samples and small batches while training is still unstable.
+- **Stage 3** moves to the next length only once the model has recovered its short-text performance and solves "needle in a haystack" (find one sentence hidden in a long text) perfectly at the current length.
+- **Stage 4** brings the learning rate linearly down to 0, at length 128K.
+- **Post-training** (SFT and preference tuning) also mixes in long-context data, partly synthetic (questions and summaries over long documents, reasoning over whole code repositories), so the chat model works at 128K too.
+
+LLaMA 3 and LLaMA 3.1 come from the same paper, "The Llama 3 Herd of Models". The April 2024 release (LLaMA 3) supported 8K; the July 2024 release (LLaMA 3.1, which also added the 405B model) is the 128K version.
 
 ## References
 
@@ -989,6 +1106,18 @@ In short: GPT-2 can never see more than 1024 tokens at once, and a sliding windo
    Peng et al. rescale RoPE frequencies differently for fast and slow pairs to extend context length.
 
    [YaRN ↗](https://arxiv.org/abs/2309.00071)
+
+4. **Effective Long-Context Scaling of Foundation Models (2023)**
+
+   Xiong et al. raise Llama 2's RoPE base to 500000 and continue training on long text to reach a 32K context.
+
+   [Xiong et al. ↗](https://arxiv.org/abs/2309.16039)
+
+5. **The Llama 3 Herd of Models (2024)**
+
+   Meta's paper for LLaMA 3 / 3.1: base 500000, the staged context extension from 8K to 128K, and the long-context post-training data.
+
+   [Llama 3 ↗](https://arxiv.org/abs/2407.21783)
 `,
     },
     zh: {
@@ -1068,7 +1197,17 @@ score = q' · k'
 
 ## 4. 从二维到 64 维：两两成对旋转
 
-每个 head 的 q 和 k 有 $hs = 64$ 维（LLaMA 3 8B 里是 128 维）。RoPE 把它们分成 **32 对**，把每一对当作一根二维箭头，在各自的平面里旋转：
+不同模型的 head size 不一样：
+
+\`\`\`text
+                 宽度 / head 数    head size    对数     base
+GPT-2 small       768 / 12            64          32      （不用 RoPE）
+LLaMA 3 8B       4096 / 32           128          64      500000
+\`\`\`
+
+这篇 note 的例子用的是 **64 维、base 10000**（RoPE 原始的设置，Llama 2 也用 base 10000）。LLaMA 3 8B 的做法完全一样，只是对数更多、base 更大。
+
+以 64 维为例，RoPE 把 q 和 k 分成 **32 对**，把每一对当作一根二维箭头，在各自的平面里旋转：
 
 \`\`\`text
 q（64 维）= [ (q0, q1), (q2, q3), (q4, q5), ..., (q62, q63) ]
@@ -1100,6 +1239,8 @@ q 和 k 用的是**同样的** 32 个速度（第 2 节说明了为什么必须�
 ## 5. 为什么要把快的对和慢的对混在一起
 
 ### 一对能"看到"什么：距离 $d$
+
+（本节的数字都用第 4 节的例子设置：32 对，base 10000。）
 
 attention 每次给一个 query 和一个 key 打分。把它们之间的距离记作
 
@@ -1187,7 +1328,7 @@ $$
 
 正弦编码那篇 note 说明了：平移 $k$ 个位置就是一个旋转。RoPE 把这个旋转**直接作用在 q 和 k 上**，所以 $q \\cdot k$ 自动只依赖相对距离。
 
-> 🆕 **base（底数）。** 公式中的 10000 叫作 base（在 Hugging Face 配置里是 \`rope_theta\`）。Llama 2 用 10000；Llama 3 把它提高到 500000，让最慢的几对转得更慢，以支持更长的上下文。
+> 🆕 **base（底数）。** 公式中的 10000 叫作 base（在 Hugging Face 配置里是 \`rope_theta\`）。Llama 2 用 10000；LLaMA 3 把它提高到 500000，原因见第 8 节。
 
 ## 7. 超出训练长度
 
@@ -1240,9 +1381,114 @@ logits = model(idx_cond)
 - 训练时它们只转过很小的角度。第 31 对在 4096 个位置内大约只转 0.55 弧度，不到一整圈的十分之一。
 - 再往后，它们会达到**训练中从未见过的角度**，模型不知道该如何解读。
 
-> 🆕 因此长上下文模型会加上额外的技巧，比如更大的 base（Llama 3 用 500000），或者对位置做插值/重新缩放（Position Interpolation、YaRN）。每种方法的思路都是：让远处的角度保持在训练时见过的范围内。
+> 🆕 因此长上下文模型会加上额外的技巧，比如更大的 base（Llama 3 用 500000），或者对位置做插值/重新缩放（Position Interpolation、YaRN）。每种方法的思路都是：让远处的角度保持在训练时见过的范围内。LLaMA 的做法见第 8 节。
 
 简而言之：GPT-2 一次永远看不到超过 1024 个 token，滑动窗口只是通过丢弃较早的文本来掩盖这一点；RoPE 模型可以接受更长的输入，但需要做些调整才能在那里保持准确。
+
+## 8. 🆕 LLaMA 是怎么做到 128K 上下文的
+
+这里要区分两个长度：
+
+- **训练长度**：每条训练样本最多有多少个 token。训练时 query 和 key 相隔再远，也超不过这个长度。
+- **上下文长度**：实际使用（inference）时，官方说一次最多能输入多少个 token。
+
+\`\`\`text
+             base       最长训练长度             上下文长度
+LLaMA 1      10000       2K                      2K
+Llama 2      10000       4K                      4K
+LLaMA 3      500000      8K                      8K
+LLaMA 3.1    500000      128K（只在最后阶段）      128K
+             + 频率缩放
+\`\`\`
+
+LLaMA 每一代都用 RoPE。LLaMA 3 其实也能输入超过 8K 的文本，代码照样能跑（第 7 节：任何位置都能算出角度），只是超过 8K 后效果明显变差（原因见下文），所以官方只说支持 8K。LLaMA 3.1 做了两件事，才把上下文做到 128K：调整各对的旋转速度（频率缩放），以及用长文本训练。
+
+### 每一对"见过"哪些角度
+
+训练时，两个 token 之间的距离可以是 0 到训练长度 $L$ 之间的任何值。所以对第 $i$ 对来说，从 0 到 $L \\times \\theta_i$ 的角度它全都见过，是连续的一整段，中间没有漏掉的。真正的问题是：超出这段上限的角度，它没见过。
+
+由此可以得出两点：
+
+- 如果某一对在 $L$ 之内就能转满一圈，那 0°～360° 它全见过，输入再长也碰不到新角度。
+- 转得慢的对反而更保险：距离相同时，它转过的角度更小，更不容易超出见过的范围。
+
+### 为什么 LLaMA 3 在 inference 时超过 8K 就变差
+
+第 $i$ 对转过的角度，由 **query 和 key 之间的距离 $d$** 决定，等于 $d \\times \\theta_i$。
+
+- **训练时**：每条样本最多 8K 个 token，所以 $d$ 最大就是 8K，第 $i$ 对见过的角度只有 0 到 $8192 \\times \\theta_i$。比如第 44 对，只见过 0°～56.7°。
+- **inference 时输入超过 8K**：这时会有一些 query 和 key 相隔超过 8K，比如最后一个 token 回头看第一个 token。在这样的距离上，第 44 对的角度会超过 56.7°，这在训练时从没出现过。
+
+哪些对会受影响？以 head size 128、base 500000 来算：
+
+- **第 0–34 对**在 8K 之内至少转满一圈，0°～360° 都见过，输入再长也不会出现新角度。
+- **第 35–63 对**（共 29 对）在 8K 内转不满一圈。一旦超过 8K，它们全都会转到没见过的角度。
+
+模型从没学过这 29 对在这些角度上该怎么解读，所以相隔超过 8K 的 token 之间，attention 分数就靠不住了。这就是为什么 LLaMA 3 输入超过 8K 虽然能跑，效果却会变差，官方也只说支持 8K。
+
+### base 改成 500000（LLaMA 3）
+
+LLaMA 3 的 head size 是 128，一共 64 对，$\\theta_i = 1/\\text{base}^{2i/128}$。把 base 从 10000 改成 500000，第 0 对不受影响，还是每个位置转 1 弧度；越往后的对，速度降得越多（"周期"指转一圈要经过多少个位置）：
+
+\`\`\`text
+                       base 10000                  base 500000
+第 32 对               每个位置 0.573°，周期 628      0.081°，周期 4,443
+第 48 对               0.057°，周期 6,283            0.0030°，周期 118K
+第 63 对（最慢）        0.0066°，周期 54K             0.00014°，周期 2.56M
+\`\`\`
+
+base 是 10000 时，就连最慢的那一对，在 128K 的距离上也要转 2.4 圈，没有哪一对不绕回来。改成 500000 后，最慢的几对在 128K 上转不到 20°，所以远处的距离仍然分得清（第 5 节讲过：分辨远近靠的是慢的对）。
+
+为什么偏偏是 500000？LLaMA 3 论文只是引用了一篇文章：Xiong 等人（2023）把 Llama 2 的 base 改成 500000，再用长文本接着训练，发现上下文一直到 32K 效果都很好。Meta 直接沿用了这个数，没有自己再调。
+
+不过光改 base 还不够：LLaMA 3 训练时仍然只用 8K，所以也只支持 8K。
+
+### 频率缩放（LLaMA 3.1）
+
+LLaMA 3.1 的 base 还是 500000，但把慢的对又放慢了一些。具体规则写在发布的配置文件里（\`rope_scaling\`，factor 为 8），按每一对的周期分三种情况：
+
+\`\`\`text
+周期小于 2,048              第 0–28 对     θ_i 不变
+周期在 2,048 到 8,192 之间   第 29–34 对    介于"不变"和"除以 8"之间，平滑过渡
+周期大于 8,192              第 35–63 对    θ_i 除以 8
+\`\`\`
+
+要除以 8 的，恰好就是上面说的第 35–63 对，也就是超过 8K 后会转到没见过的角度的那些对。拿第 44 对（周期 52,026）来看：
+
+\`\`\`text
+                           最大距离       第 44 对的最大角度
+8K 训练                     8K             56.7°
+128K，不缩放                 128K           907°   （转了 2.5 圈）
+128K，θ 除以 8               128K           113.4°
+\`\`\`
+
+- **不缩放**：到了 128K，0°～360° 的角度都会出现，可训练时只见过 0°～56.7°。
+- **θ 除以 8**：最大只到 113.4°，大约是见过范围的 2 倍；不缩放时则是 16 倍。多出来的这一小段，靠后面的长文本训练来适应。
+
+**快的对保持不变。** 第 0 对在 8K 之内就转了 1,304 圈，每个角度都见过很多次。
+
+**代价。** 除以 8 之后，慢的对在距离 $d$ 上转过的角度，相当于原来距离 $d/8$ 的角度。比如距离 800，在这些对上看起来就像以前的距离 100。角度本身都见过，只是对应的距离变了，模型得重新适应。好在慢的对在相邻 token 之间本来就几乎不转，区分近处靠的是快的对，而快的对没动，所以影响不大。
+
+YaRN 也是这个思路：快的对和慢的对分开处理。
+
+### 用长文本训练（LLaMA 3.1）
+
+为什么不从一开始就用 128K 训练？一是太贵：attention 要给每两个 token 打一次分，计算量和长度的平方成正比，样本长度变成 16 倍，每条样本的 attention 计算量就是 256 倍。二是长文本本来就少：训练数据大多很短。所以论文的做法是先用短样本训练，到最后再逐步加长：
+
+\`\`\`text
+阶段                       样本长度                  用量
+1. 预训练开始               4K                        最初的 252M token
+2. 预训练主体               8K                        约 15T token 中的绝大部分
+3. 扩展上下文               8K → 128K，分 6 次加长      约 800B token（约 5%）
+4. 退火                     128K                      最后的 40M token
+\`\`\`
+
+- **阶段 1**：刚开始训练时还不稳定，先用短样本、小 batch。
+- **阶段 3**：每加长一次，都要满足两个条件才继续：短文本上的表现恢复到原来的水平；在当前长度上能完美通过"大海捞针"测试（在一大段文本里找出藏着的一句话）。
+- **阶段 4**：学习率线性降到 0，样本长度保持 128K。
+- **后训练**（SFT 和偏好对齐）也加了长上下文数据，有一部分是合成的，比如针对长文档的问答和摘要、跨整个代码仓库的推理。这样对话模型在 128K 下也能用。
+
+LLaMA 3 和 LLaMA 3.1 写在同一篇论文里（"The Llama 3 Herd of Models"）。2024 年 4 月发布的 LLaMA 3 支持 8K；7 月发布的 LLaMA 3.1 是 128K 的版本，这次还新增了 405B 模型。
 
 ## 参考资料
 
@@ -1263,6 +1509,18 @@ logits = model(idx_cond)
    Peng 等人对快的对和慢的对用不同方式重新缩放 RoPE 频率，以扩展上下文长度。
 
    [YaRN ↗](https://arxiv.org/abs/2309.00071)
+
+4. **Effective Long-Context Scaling of Foundation Models (2023)**
+
+   Xiong 等人把 Llama 2 的 RoPE base 提高到 500000，再用长文本继续训练，把上下文扩展到 32K。
+
+   [Xiong et al. ↗](https://arxiv.org/abs/2309.16039)
+
+5. **The Llama 3 Herd of Models (2024)**
+
+   Meta 关于 LLaMA 3 / 3.1 的论文：base 500000、从 8K 分步扩展到 128K 的训练过程，以及后训练里的长上下文数据。
+
+   [Llama 3 ↗](https://arxiv.org/abs/2407.21783)
 `,
     },
   },
