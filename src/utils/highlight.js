@@ -217,6 +217,8 @@ export function buildCodeHtml({ component, selectedId, noteOverrides = {} }) {
   html = html.replace(/AutoTokenizer\.from_pretrained\("meta-llama\/Meta-Llama-3-8B"\)/g, (m) => `<span data-action="open:llama_tokenizer_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
   // LLaMA: rotary position embedding
   html = html.replace(/\b(apply_rope|rope_cache)\b/g, (m) => `<span data-action="open:rope_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
+  // LLaMA's grouped-query attention: the K/V head count and the head repeat.
+  html = html.replace(/\b(repeat_interleave|GQA)\b/g, (m) => `<span data-action="open:gqa_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
 
   // GPT-3: the locally banded attention layers
   html = html.replace(/make_local/g, '<span data-action="open:gpt3_notes" style="text-decoration: underline; cursor: pointer;">make_local</span>');

@@ -215,6 +215,7 @@ const STEPS = [
       relabel(s, { block_attn: "Grouped-Query Attention" });
     },
     highlight: ["attn_linear_qkv", "attn_repeat_kv", "block_attn"],
+    note: "gqa_notes",
   },
   {
     title: { en: "SwiGLU MLP", zh: "MLP 换成 SwiGLU" },

@@ -3013,4 +3013,466 @@ $$
 `,
     },
   },
+
+  gqa_notes: {
+    en: {
+      title: "Grouped-query attention (GQA) and the KV cache",
+      md: `
+**🆕 In grouped-query attention (GQA), several query heads share one key head and one value head. LLaMA 3 8B has 32 query heads but only 8 key/value heads. The point is to shrink the [KV cache](#info:kv_cache_notes), the k and v that a model stores while it generates text.**
+
+## 1. From MHA to GQA
+
+**GPT-2: every head has its own q, k, v.** GPT-2 small has 12 heads:
+
+\`\`\`text
+head 0:   q0,  k0,  v0
+head 1:   q1,  k1,  v1
+...
+head 11:  q11, k11, v11
+\`\`\`
+
+This is standard multi-head attention (MHA).
+
+**LLaMA 3 8B: 32 query heads, 8 key/value heads.** Since $32 \\div 8 = 4$, every 4 query heads share one k and one v:
+
+\`\`\`text
+q0  q1  q2  q3    ->  share k0, v0
+q4  q5  q6  q7    ->  share k1, v1
+...
+q28 q29 q30 q31   ->  share k7, v7
+\`\`\`
+
+The 32 query heads form 8 groups, hence the name.
+
+## 2. In the code
+
+\`\`\`python
+self.n_head = n_head                         # 32 query heads
+self.n_kv_head = n_kv_head                   # 8 key/value heads (GQA)
+self.q_proj = nn.Linear(n_embd, n_head * hs, bias=False)     # 4096 = 32 × 128
+self.k_proj = nn.Linear(n_embd, n_kv_head * hs, bias=False)  # 1024 =  8 × 128
+self.v_proj = nn.Linear(n_embd, n_kv_head * hs, bias=False)  # 1024 =  8 × 128
+\`\`\`
+
+q is projected to 32 heads, k and v to only 8. Before scoring, each k and v head is repeated 4 times:
+
+\`\`\`python
+rep = self.n_head // self.n_kv_head          # 4
+k = k.repeat_interleave(rep, dim=1)          # (B, 8, T, 128) -> (B, 32, T, 128)
+v = v.repeat_interleave(rep, dim=1)
+\`\`\`
+
+\`repeat_interleave\` repeats each head in place:
+
+\`\`\`text
+before:  k0, k1, ..., k7
+after:   k0, k0, k0, k0, k1, k1, k1, k1, ..., k7, k7, k7, k7
+\`\`\`
+
+Now k and v also have 32 heads, lined up with q, and the rest ($q \\cdot k$, softmax, the weighted sum of v) is exactly as in GPT-2.
+
+The repeat comes **after** [RoPE](#info:rope_notes), so RoPE rotates only the 8 k heads, not 32 copies.
+
+### The heads still differ
+
+The 4 query heads in a group share k and v, but each has its own q. So each computes its own attention weights and can attend to different tokens. What they share is what can be looked up (k) and what is taken (v).
+
+### Parameters saved
+
+The k and v projections of one layer:
+
+\`\`\`text
+MHA (32 k/v heads):  2 × 4096 × 4096 = 33.6M
+GQA ( 8 k/v heads):  2 × 4096 × 1024 =  8.4M
+\`\`\`
+
+That is 25.2M fewer per layer, about 805M over 32 layers, roughly 10% of the 8B model. But saving parameters is not the main reason for GQA. The main reason is the memory used during inference, explained below.
+
+## 3. Why: a 4× smaller KV cache
+
+When generating, the model stores the $k$ and $v$ of every earlier token in every layer, so it does not have to recompute them at each step. This is the [KV cache](#info:kv_cache_notes). Its size is proportional to the number of k/v heads, so with 8 instead of 32, GQA makes it 4 times smaller:
+
+\`\`\`text
+                          per token     8K context     128K context
+MHA (32 k/v heads)        512 KB        4 GB           64 GB
+GQA ( 8 k/v heads)        128 KB        1 GB           16 GB
+\`\`\`
+
+For comparison, the model weights take about 15 GB. With MHA, a 128K context would need a cache more than 4 times the size of the model itself; with GQA it needs 16 GB.
+
+This pays off twice:
+
+- **More requests per GPU.** Each request being served needs its own cache, so a 4× smaller cache fits about 4 times as many at once.
+- **Faster generation.** Each new token requires reading the whole cache from memory, and that reading, not the arithmetic, is what mostly limits speed.
+
+The idea of GQA in one sentence: keep 32 query heads, so each head can still choose what to attend to, but cut k and v, the part that has to be stored and read again and again, to 8 heads.
+
+## References
+
+1. **Fast Transformer Decoding: One Write-Head is All You Need (2019)**
+
+   Shazeer introduces multi-query attention (MQA): all query heads share a single k/v head, the extreme case of GQA.
+
+   [MQA ↗](https://arxiv.org/abs/1911.02150)
+
+2. **GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints (2023)**
+
+   Ainslie et al. propose grouped-query attention, between MHA and MQA: close to MHA's quality with nearly MQA's speed.
+
+   [GQA ↗](https://arxiv.org/abs/2305.13245)
+
+3. **The Llama 3 Herd of Models (2024)**
+
+   LLaMA 3 uses GQA with 8 key/value heads in all model sizes.
+
+   [Llama 3 ↗](https://arxiv.org/abs/2407.21783)
+`,
+    },
+    zh: {
+      title: "分组查询注意力（GQA）与 KV cache",
+      md: `
+**🆕 分组查询注意力（GQA）让几个 query head 共用同一组 key 和 value。LLaMA 3 8B 有 32 个 query head，但 key/value head 只有 8 个。这样做主要是为了缩小 [KV cache](#info:kv_cache_notes)，也就是模型生成文本时一直存着的那些 k 和 v。**
+
+## 1. 从 MHA 到 GQA
+
+**GPT-2：每个 head 都有自己的 q、k、v。** GPT-2 small 有 12 个 head：
+
+\`\`\`text
+head 0:   q0,  k0,  v0
+head 1:   q1,  k1,  v1
+...
+head 11:  q11, k11, v11
+\`\`\`
+
+这就是普通的多头注意力（MHA）。
+
+**LLaMA 3 8B：32 个 query head，8 个 key/value head。** $32 \\div 8 = 4$，所以每 4 个 query head 共用一组 k、v：
+
+\`\`\`text
+q0  q1  q2  q3    ->  共用 k0, v0
+q4  q5  q6  q7    ->  共用 k1, v1
+...
+q28 q29 q30 q31   ->  共用 k7, v7
+\`\`\`
+
+32 个 query head 分成了 8 组，"分组查询"这个名字就是这么来的。
+
+## 2. 代码里怎么做
+
+\`\`\`python
+self.n_head = n_head                         # 32 query heads
+self.n_kv_head = n_kv_head                   # 8 key/value heads (GQA)
+self.q_proj = nn.Linear(n_embd, n_head * hs, bias=False)     # 4096 = 32 × 128
+self.k_proj = nn.Linear(n_embd, n_kv_head * hs, bias=False)  # 1024 =  8 × 128
+self.v_proj = nn.Linear(n_embd, n_kv_head * hs, bias=False)  # 1024 =  8 × 128
+\`\`\`
+
+q 投影出 32 个 head，k 和 v 只投影出 8 个。算分数之前，再把每个 k head、v head 复制 4 份：
+
+\`\`\`python
+rep = self.n_head // self.n_kv_head          # 4
+k = k.repeat_interleave(rep, dim=1)          # (B, 8, T, 128) -> (B, 32, T, 128)
+v = v.repeat_interleave(rep, dim=1)
+\`\`\`
+
+\`repeat_interleave\` 是把每个 head 就地连续复制：
+
+\`\`\`text
+复制前：k0, k1, ..., k7
+复制后：k0, k0, k0, k0, k1, k1, k1, k1, ..., k7, k7, k7, k7
+\`\`\`
+
+复制完以后 k、v 也是 32 个 head，和 q 一一对上。后面的 $q \\cdot k$、softmax、按权重取 v，就和 GPT-2 完全一样了。
+
+复制放在 [RoPE](#info:rope_notes) **之后**，所以 RoPE 只需要转 8 个 k head，不用转 32 份。
+
+### 各个 head 仍然不一样
+
+同一组的 4 个 query head 共用 k 和 v，但每个 head 的 q 都不一样。所以它们各自算出的 attention 权重不同，仍然可以关注不同的 token。共用的只是"被查的内容"（k）和"被取的内容"（v）。
+
+### 省了多少参数
+
+每一层的 k、v 投影：
+
+\`\`\`text
+MHA（32 个 k/v head）：  2 × 4096 × 4096 = 33.6M
+GQA（ 8 个 k/v head）：  2 × 4096 × 1024 =  8.4M
+\`\`\`
+
+每层少 25.2M，32 层一共少了约 805M，大约占 8B 的 10%。不过省参数并不是 GQA 的主要目的，主要是为了 inference 时省内存，下面就讲这个。
+
+## 3. 为什么：KV cache 小了 4 倍
+
+生成文本时，模型会把前面每个 token 在每一层的 $k$、$v$ 都存起来，这样每一步就不用重新算，这就是 [KV cache](#info:kv_cache_notes)。它的大小和 k/v head 数成正比，所以 GQA 把 32 个减到 8 个，KV cache 就小了 4 倍：
+
+\`\`\`text
+                          每个 token     8K 上下文     128K 上下文
+MHA（32 个 k/v head）      512 KB         4 GB          64 GB
+GQA（ 8 个 k/v head）      128 KB         1 GB          16 GB
+\`\`\`
+
+对比一下，模型权重本身大约 15 GB。如果用 MHA，128K 上下文的缓存要比模型本身大 4 倍多；用 GQA 只要 16 GB。
+
+这样有两个好处：
+
+- **一张 GPU 能同时服务更多请求。** 每个请求都要有自己的一份缓存，缓存小了 4 倍，同时能放下的请求也就多了大约 4 倍。
+- **生成更快。** 每生成一个新 token，都要把整个缓存从显存里读一遍，速度主要就卡在这里，而不是卡在计算上。
+
+一句话概括 GQA 的思路：q 保留 32 个 head，让每个 head 仍然能自己决定关注谁；k、v 是要一直存着、反复读取的部分，就只留 8 个 head。
+
+## 参考资料
+
+1. **Fast Transformer Decoding: One Write-Head is All You Need (2019)**
+
+   Shazeer 提出多查询注意力（MQA）：所有 query head 共用唯一一组 k/v，是 GQA 的极端情况。
+
+   [MQA ↗](https://arxiv.org/abs/1911.02150)
+
+2. **GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints (2023)**
+
+   Ainslie 等人提出分组查询注意力，介于 MHA 和 MQA 之间：效果接近 MHA，速度接近 MQA。
+
+   [GQA ↗](https://arxiv.org/abs/2305.13245)
+
+3. **The Llama 3 Herd of Models (2024)**
+
+   LLaMA 3 所有尺寸的模型都用 GQA，key/value head 都是 8 个。
+
+   [Llama 3 ↗](https://arxiv.org/abs/2407.21783)
+`,
+    },
+  },
+
+  kv_cache_notes: {
+    en: {
+      title: "KV cache",
+      md: `
+**When a model generates text, it keeps the $k$ and $v$ of every earlier token in memory, so it does not have to recompute them at every step. This store is the KV cache. It saves a great deal of computation, but at long contexts it takes a lot of memory, and many newer techniques exist just to make it smaller.**
+
+## 1. Why cache anything
+
+A model generates one token at a time. Each new token goes back into the input, and the model runs again to produce the next one.
+
+**Without a cache,** every step runs the whole sequence through the network again:
+
+\`\`\`text
+step 1:  run tokens 1                     -> predict token 2
+step 2:  run tokens 1, 2                  -> predict token 3
+step 3:  run tokens 1, 2, 3               -> predict token 4
+...
+step n:  run tokens 1, 2, ..., n          -> predict token n+1
+\`\`\`
+
+Generating 1,000 tokens this way runs $1 + 2 + \\dots + 1000 = 500{,}500$ token positions through the network. Almost all of that is repeated work: token 1 is processed 1,000 times.
+
+**With a cache,** each step runs **only the new token** through the network. In every attention layer, the new token's $q$ is scored against the stored $k$ of all earlier tokens, its weights are applied to their stored $v$, and its own $k$ and $v$ are appended to the store. Generating 1,000 tokens now runs 1,000 token positions.
+
+## 2. Why the stored k and v stay valid
+
+Caching only works if the $k$ and $v$ of earlier tokens never change when new tokens arrive. They do not, because of the [causal mask](#info:causal_mask_notes):
+
+- In layer 1, token $i$'s $k$ and $v$ are computed from token $i$'s own embedding only.
+- Token $i$'s output from layer 1 mixes in tokens $1, \\dots, i$, but never anything after $i$: the causal mask blocks later tokens.
+- So token $i$'s input to layer 2, and therefore its $k$ and $v$ in layer 2, also depend only on tokens $1, \\dots, i$. The same argument repeats through every layer.
+
+A token that arrives later cannot change anything about token $i$, in any layer. Its $k$ and $v$ are final as soon as they are computed.
+
+$q$ is not cached: an earlier token's $q$ is only used to compute that token's own output, which was already done.
+
+## 3. What is stored, and when
+
+**What.** For each layer, the $k$ and $v$ of every token so far, split into heads:
+
+\`\`\`text
+per layer:  k: (B, n_kv_head, T, hs)    v: (B, n_kv_head, T, hs)
+\`\`\`
+
+In LLaMA the $k$ is stored **after** [RoPE](#info:rope_notes). A token's position never changes, so its rotation never changes either.
+
+**When.** Generation has two phases:
+
+- **Prefill:** the whole prompt is run through the network at once, as in training. This fills the cache with the prompt's $k$ and $v$, and predicts the first new token.
+- **Decode:** after that, one token per step, each appending one entry per layer to the cache.
+
+## 4. How big it gets
+
+For every token, every layer stores one $k$ and one $v$ vector per k/v head:
+
+\`\`\`text
+bytes = 2 (k and v) × layers × k/v heads × head size × tokens × bytes per number
+\`\`\`
+
+With 16-bit numbers (2 bytes each):
+
+\`\`\`text
+                         layers  k/v heads  head size   per token    full context
+GPT-2 small                12        12         64        36 KB      1,024 tokens:     36 MB
+LLaMA 3 8B (if MHA)        32        32        128       512 KB      8K: 4 GB,  128K: 64 GB
+LLaMA 3 8B (GQA)           32         8        128       128 KB      8K: 1 GB,  128K: 16 GB
+\`\`\`
+
+For comparison, LLaMA 3 8B's weights take about 15 GB.
+
+- For GPT-2 the cache is tiny. For a modern model with a long context it can be as large as the model itself.
+- It grows linearly with the context length, and again with the number of requests served at once: each request has its own cache.
+
+## 5. It also limits speed
+
+At every decode step, the GPU reads all the model weights and the whole KV cache from memory, but does only a little arithmetic for the one new token. So decoding speed is limited mostly by **how many bytes must be read**, not by computation. A smaller cache means faster generation, not just less memory.
+
+## 6. 🆕 Ways to make it smaller
+
+Every factor in the size formula above has been attacked:
+
+**Fewer k/v heads.**
+
+- **MQA** (2019): all query heads share a single k/v head. Smallest, with some loss in quality.
+- **GQA** (2023): a few k/v heads, each shared by a group of query heads. LLaMA 3 uses 8. See [GQA](#info:gqa_notes).
+
+**Smaller k and v.**
+
+- **MLA** (DeepSeek-V2, 2024): store one low-dimensional compressed vector per token and reconstruct $k$ and $v$ from it when needed. DeepSeek reports a 93% smaller cache than its earlier 67B model.
+- **Quantization:** store $k$ and $v$ in 8 or 4 bits instead of 16.
+
+**Fewer tokens.**
+
+- **Sliding-window attention** (Mistral 7B, 2023): each token attends only to the last 4,096 tokens, so the cache never holds more than 4,096.
+- **Local and global layers** (Gemma 2 and 3): most layers use a short window; only the global layers need the full cache.
+- **Dropping tokens** (H2O, StreamingLLM, 2023): keep the tokens that receive the most attention plus the first few, and evict the rest.
+
+**Fewer layers with their own cache.**
+
+- **Cross-layer sharing** (CLA, 2024): adjacent layers share one set of $k$ and $v$.
+
+**Better memory management** (serving systems; the model is unchanged).
+
+- **PagedAttention** (vLLM, 2023): allocate the cache in small blocks as it grows, like pages in an operating system, so little memory is wasted and more requests fit on a GPU.
+- **Prefix caching:** requests that start with the same text, such as the same system prompt, share the cache for that part.
+
+## References
+
+1. **Fast Transformer Decoding: One Write-Head is All You Need (2019).** Shazeer introduces multi-query attention. [MQA ↗](https://arxiv.org/abs/1911.02150)
+2. **GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints (2023).** Ainslie et al. [GQA ↗](https://arxiv.org/abs/2305.13245)
+3. **Efficient Memory Management for Large Language Model Serving with PagedAttention (2023).** Kwon et al., the vLLM paper. [PagedAttention ↗](https://arxiv.org/abs/2309.06180)
+4. **Mistral 7B (2023).** Sliding-window attention with a rolling KV cache. [Mistral 7B ↗](https://arxiv.org/abs/2310.06825)
+5. **Efficient Streaming Language Models with Attention Sinks (2023).** Xiao et al., StreamingLLM. [StreamingLLM ↗](https://arxiv.org/abs/2309.17453)
+6. **DeepSeek-V2 (2024).** Introduces multi-head latent attention (MLA). [DeepSeek-V2 ↗](https://arxiv.org/abs/2405.04434)
+`,
+    },
+    zh: {
+      title: "KV cache",
+      md: `
+**模型生成文本时，会把前面每个 token 的 $k$ 和 $v$ 存在内存里，这样每一步就不用重新算。存下来的这些东西就叫 KV cache。它省掉了大量计算，但上下文一长就非常占内存，所以后来出现了很多专门给它"瘦身"的技术。**
+
+## 1. 为什么要缓存
+
+模型一次只生成一个 token。新生成的 token 会接到输入后面，模型再跑一遍，生成下一个。
+
+**不用缓存的话**，每一步都要把整个序列重新跑一遍：
+
+\`\`\`text
+第 1 步：跑 token 1                     -> 预测 token 2
+第 2 步：跑 token 1, 2                  -> 预测 token 3
+第 3 步：跑 token 1, 2, 3               -> 预测 token 4
+...
+第 n 步：跑 token 1, 2, ..., n          -> 预测 token n+1
+\`\`\`
+
+这样生成 1,000 个 token，一共要跑 $1 + 2 + \\dots + 1000 = 500{,}500$ 个 token 位置，几乎全是重复劳动：光 token 1 就被算了 1,000 遍。
+
+**用了缓存**，每一步**只把新 token** 送进网络。在每一层 attention 里，新 token 的 $q$ 和存好的前面所有 token 的 $k$ 算分数，再按权重去取存好的 $v$，最后把新 token 自己的 $k$、$v$ 也存进去。这样生成 1,000 个 token，只要跑 1,000 个 token 位置。
+
+## 2. 为什么存下来的 k、v 一直有效
+
+缓存能成立，前提是新 token 加进来以后，前面 token 的 $k$、$v$ 不会变。它们确实不会变，原因是 [causal mask](#info:causal_mask_notes)：
+
+- 第 1 层里，token $i$ 的 $k$、$v$ 只由 token $i$ 自己的 embedding 算出来。
+- token $i$ 在第 1 层的输出会混入 token $1, \\dots, i$ 的信息，但不会混入 $i$ 后面的任何 token，因为 causal mask 把后面的挡住了。
+- 所以 token $i$ 进入第 2 层的输入，以及它在第 2 层的 $k$、$v$，同样只取决于 token $1, \\dots, i$。往后每一层都是同样的道理。
+
+后来的 token 在任何一层都影响不到 token $i$，所以 token $i$ 的 $k$、$v$ 一算出来就定了。
+
+$q$ 不用存：前面 token 的 $q$ 只用来算它自己那个位置的输出，而那个输出早就算完了。
+
+## 3. 存什么，什么时候存
+
+**存什么。** 每一层都存到目前为止所有 token 的 $k$ 和 $v$，按 head 分开：
+
+\`\`\`text
+每一层：  k: (B, n_kv_head, T, hs)    v: (B, n_kv_head, T, hs)
+\`\`\`
+
+LLaMA 存的 $k$ 是 [RoPE](#info:rope_notes) **转过之后**的。token 的位置不会变，所以转的角度也不会变。
+
+**什么时候存。** 生成分两个阶段：
+
+- **prefill（预填充）**：先把整段 prompt 一次性送进网络，和训练时一样并行计算。这一步把 prompt 的 $k$、$v$ 全部存进缓存，同时预测出第一个新 token。
+- **decode（解码）**：之后每一步只处理一个 token，每层往缓存里追加一份 $k$、$v$。
+
+## 4. 会有多大
+
+每个 token 在每一层、每个 k/v head 上，都要存一个 $k$ 向量和一个 $v$ 向量：
+
+\`\`\`text
+字节数 = 2（k 和 v）× 层数 × k/v head 数 × head size × token 数 × 每个数的字节数
+\`\`\`
+
+用 16 位存（每个数 2 字节）：
+
+\`\`\`text
+                        层数   k/v head 数   head size   每个 token    整个上下文
+GPT-2 small              12       12            64        36 KB      1,024 个 token：36 MB
+LLaMA 3 8B（若用 MHA）    32       32           128       512 KB      8K：4 GB，128K：64 GB
+LLaMA 3 8B（GQA）         32        8           128       128 KB      8K：1 GB，128K：16 GB
+\`\`\`
+
+对比一下，LLaMA 3 8B 的权重本身大约 15 GB。
+
+- GPT-2 的 KV cache 很小；但现在的模型一旦上下文很长，KV cache 可能和模型本身一样大。
+- 它随上下文长度线性增长，还要再乘上同时处理的请求数：每个请求都有自己的一份。
+
+## 5. 它还决定了速度
+
+decode 的每一步，GPU 都要从显存里把所有权重和整个 KV cache 读一遍，但只为一个新 token 做很少的计算。所以生成速度主要卡在**要读多少字节**，而不是计算量。KV cache 越小，不光省内存，生成也越快。
+
+## 6. 🆕 给 KV cache 瘦身的方法
+
+上面公式里的每一项，都有人想办法压缩：
+
+**减少 k/v head 数。**
+
+- **MQA**（2019）：所有 query head 只共用一组 k/v。最省，但效果会差一些。
+- **GQA**（2023）：留几组 k/v，每组由几个 query head 共用。LLaMA 3 留了 8 组，详见 [GQA](#info:gqa_notes)。
+
+**把 k、v 本身变小。**
+
+- **MLA**（DeepSeek-V2，2024）：每个 token 只存一个低维的压缩向量，用的时候再从它还原出 $k$ 和 $v$。DeepSeek 说 KV cache 比他们之前的 67B 模型小了 93%。
+- **量化**：把 $k$、$v$ 从 16 位改成 8 位甚至 4 位来存。
+
+**少存一些 token。**
+
+- **滑动窗口注意力**（Mistral 7B，2023）：每个 token 只看最近 4,096 个 token，所以缓存里最多也只存 4,096 个。
+- **局部层和全局层搭配**（Gemma 2、Gemma 3）：大部分层只看一个短窗口，只有全局层需要完整的缓存。
+- **丢掉不重要的 token**（H2O、StreamingLLM，2023）：只留下得到注意力最多的 token 和开头几个 token，其余的扔掉。
+
+**让几层共用一份缓存。**
+
+- **跨层共享**（CLA，2024）：相邻几层共用同一份 $k$ 和 $v$。
+
+**更好地管理内存**（这是服务端的事，模型本身不变）。
+
+- **PagedAttention**（vLLM，2023）：缓存变长时按小块分配，就像操作系统管理内存分页一样，浪费很少，一张 GPU 能同时跑更多请求。
+- **前缀缓存（prefix caching）**：开头相同的请求，比如用同一段系统提示词，这一段的缓存只算一次，大家共用。
+
+## 参考资料
+
+1. **Fast Transformer Decoding: One Write-Head is All You Need (2019).** Shazeer 提出多查询注意力（MQA）。[MQA ↗](https://arxiv.org/abs/1911.02150)
+2. **GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints (2023).** Ainslie 等人。[GQA ↗](https://arxiv.org/abs/2305.13245)
+3. **Efficient Memory Management for Large Language Model Serving with PagedAttention (2023).** Kwon 等人，即 vLLM 的论文。[PagedAttention ↗](https://arxiv.org/abs/2309.06180)
+4. **Mistral 7B (2023).** 滑动窗口注意力和循环使用的 KV cache。[Mistral 7B ↗](https://arxiv.org/abs/2310.06825)
+5. **Efficient Streaming Language Models with Attention Sinks (2023).** Xiao 等人，即 StreamingLLM。[StreamingLLM ↗](https://arxiv.org/abs/2309.17453)
+6. **DeepSeek-V2 (2024).** 提出多头潜在注意力（MLA）。[DeepSeek-V2 ↗](https://arxiv.org/abs/2405.04434)
+`,
+    },
+  },
 };
