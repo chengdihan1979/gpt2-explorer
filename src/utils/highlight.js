@@ -219,6 +219,12 @@ export function buildCodeHtml({ component, selectedId, noteOverrides = {} }) {
   html = html.replace(/\b(apply_rope|rope_cache)\b/g, (m) => `<span data-action="open:rope_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
   // LLaMA's grouped-query attention: the K/V head count and the head repeat.
   html = html.replace(/\b(repeat_interleave|GQA)\b/g, (m) => `<span data-action="open:gqa_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
+  // LLaMA's SwiGLU MLP: the name.
+  html = html.replace(/\bSwiGLU\b/g, (m) => `<span data-action="open:swiglu_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
+  // LLaMA's block: MLP(...) jumps to the MLP code.
+  html = html.replace(/= (MLP)(?=\(n_embd=n_embd, hidden=hidden\))/g, '= <span data-action="select:mlp_subdiagram" style="text-decoration: underline; cursor: pointer;">$1</span>');
+  // LLaMA's MLP class (GPT-2 has a class with the same name, so only when the code is the gated one).
+  if (component.code.includes("gate_proj")) html = html.replace(/class\s+(MLP)(?=\(nn\.Module\))/g, 'class <span data-action="open:swiglu_notes" style="text-decoration: underline; cursor: pointer;">$1</span>');
 
   // GPT-3: the locally banded attention layers
   html = html.replace(/make_local/g, '<span data-action="open:gpt3_notes" style="text-decoration: underline; cursor: pointer;">make_local</span>');

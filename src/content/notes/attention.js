@@ -3267,7 +3267,17 @@ Generating 1,000 tokens this way runs $1 + 2 + \\dots + 1000 = 500{,}500$ token 
 
 **With a cache,** each step runs **only the new token** through the network. In every attention layer, the new token's $q$ is scored against the stored $k$ of all earlier tokens, its weights are applied to their stored $v$, and its own $k$ and $v$ are appended to the store. Generating 1,000 tokens now runs 1,000 token positions.
 
-## 2. Why the stored k and v stay valid
+## 2. Only when generating, not in training
+
+The KV cache is used only at inference, while the model generates text one token at a time. Training does not use it.
+
+**In training,** the whole text is known in advance. An 8K sample goes through the network in one forward pass: each layer computes $q$, $k$, $v$ for all 8,192 tokens at once, and the [causal mask](#info:causal_mask_notes) lets each token see only the tokens before it. That one pass gives the prediction at every position, and the loss is computed from all of them. Each token's $k$ and $v$ are computed exactly once per layer, so there is no repeated work for a cache to save.
+
+**When generating,** later tokens do not exist yet. They must be produced one at a time, each fed back as input: the step-by-step loop in section 1. That loop is where the repeated work comes from, and the cache is what removes it.
+
+🆕 **Post-training can use it too.** Reinforcement-learning methods such as RLHF and GRPO first let the model generate answers (called rollouts), then score them and update the weights. Generating the answers is inference, so it uses a KV cache, and is often handed to an inference engine such as vLLM. Updating the weights is ordinary training and does not use one.
+
+## 3. Why the stored k and v stay valid
 
 Caching only works if the $k$ and $v$ of earlier tokens never change when new tokens arrive. They do not, because of the [causal mask](#info:causal_mask_notes):
 
@@ -3279,7 +3289,7 @@ A token that arrives later cannot change anything about token $i$, in any layer.
 
 $q$ is not cached: an earlier token's $q$ is only used to compute that token's own output, which was already done.
 
-## 3. What is stored, and when
+## 4. What is stored, and when
 
 **What.** For each layer, the $k$ and $v$ of every token so far, split into heads:
 
@@ -3294,7 +3304,7 @@ In LLaMA the $k$ is stored **after** [RoPE](#info:rope_notes). A token's positio
 - **Prefill:** the whole prompt is run through the network at once, as in training. This fills the cache with the prompt's $k$ and $v$, and predicts the first new token.
 - **Decode:** after that, one token per step, each appending one entry per layer to the cache.
 
-## 4. How big it gets
+## 5. How big it gets
 
 For every token, every layer stores one $k$ and one $v$ vector per k/v head:
 
@@ -3316,11 +3326,11 @@ For comparison, LLaMA 3 8B's weights take about 15 GB.
 - For GPT-2 the cache is tiny. For a modern model with a long context it can be as large as the model itself.
 - It grows linearly with the context length, and again with the number of requests served at once: each request has its own cache.
 
-## 5. It also limits speed
+## 6. It also limits speed
 
 At every decode step, the GPU reads all the model weights and the whole KV cache from memory, but does only a little arithmetic for the one new token. So decoding speed is limited mostly by **how many bytes must be read**, not by computation. A smaller cache means faster generation, not just less memory.
 
-## 6. 🆕 Ways to make it smaller
+## 7. 🆕 Ways to make it smaller
 
 Every factor in the size formula above has been attacked:
 
@@ -3382,7 +3392,17 @@ Every factor in the size formula above has been attacked:
 
 **用了缓存**，每一步**只把新 token** 送进网络。在每一层 attention 里，新 token 的 $q$ 和存好的前面所有 token 的 $k$ 算分数，再按权重去取存好的 $v$，最后把新 token 自己的 $k$、$v$ 也存进去。这样生成 1,000 个 token，只要跑 1,000 个 token 位置。
 
-## 2. 为什么存下来的 k、v 一直有效
+## 2. 只在生成时用，训练不用
+
+KV cache 只用在 inference，准确地说是模型一个一个生成 token 的时候。训练时用不着。
+
+**训练时**，整段文本事先都是已知的。比如一个 8K 的样本，8,192 个 token 一次全部送进网络：每一层一次算出所有 token 的 $q$、$k$、$v$，[causal mask](#info:causal_mask_notes) 保证每个 token 只看得到它前面的 token。跑一遍 forward，每个位置的预测就都有了，再拿它们一起算 loss。每个 token 的 $k$、$v$ 在每层只算一次，本来就没有重复计算，缓存也就没什么可省的。
+
+**生成时**，后面的 token 还不存在，只能一个一个地出：出一个，接到输入后面，再跑下一步，也就是第 1 节那个循环。重复计算正是这个循环带来的，KV cache 就是为了省掉它。
+
+🆕 **post-training 里也会用到。** RLHF、GRPO 这类强化学习方法，要先让模型自己生成回答（叫 rollout），再给回答打分、更新参数。生成回答这一步其实就是 inference，所以会用 KV cache，通常直接交给 vLLM 这类推理引擎来跑。更新参数那一步还是普通的训练，不用缓存。
+
+## 3. 为什么存下来的 k、v 一直有效
 
 缓存能成立，前提是新 token 加进来以后，前面 token 的 $k$、$v$ 不会变。它们确实不会变，原因是 [causal mask](#info:causal_mask_notes)：
 
@@ -3394,7 +3414,7 @@ Every factor in the size formula above has been attacked:
 
 $q$ 不用存：前面 token 的 $q$ 只用来算它自己那个位置的输出，而那个输出早就算完了。
 
-## 3. 存什么，什么时候存
+## 4. 存什么，什么时候存
 
 **存什么。** 每一层都存到目前为止所有 token 的 $k$ 和 $v$，按 head 分开：
 
@@ -3409,7 +3429,7 @@ LLaMA 存的 $k$ 是 [RoPE](#info:rope_notes) **转过之后**的。token 的位
 - **prefill（预填充）**：先把整段 prompt 一次性送进网络，和训练时一样并行计算。这一步把 prompt 的 $k$、$v$ 全部存进缓存，同时预测出第一个新 token。
 - **decode（解码）**：之后每一步只处理一个 token，每层往缓存里追加一份 $k$、$v$。
 
-## 4. 会有多大
+## 5. 会有多大
 
 每个 token 在每一层、每个 k/v head 上，都要存一个 $k$ 向量和一个 $v$ 向量：
 
@@ -3431,11 +3451,11 @@ LLaMA 3 8B（GQA）         32        8           128       128 KB      8K：1 G
 - GPT-2 的 KV cache 很小；但现在的模型一旦上下文很长，KV cache 可能和模型本身一样大。
 - 它随上下文长度线性增长，还要再乘上同时处理的请求数：每个请求都有自己的一份。
 
-## 5. 它还决定了速度
+## 6. 它还决定了速度
 
 decode 的每一步，GPU 都要从显存里把所有权重和整个 KV cache 读一遍，但只为一个新 token 做很少的计算。所以生成速度主要卡在**要读多少字节**，而不是计算量。KV cache 越小，不光省内存，生成也越快。
 
-## 6. 🆕 给 KV cache 瘦身的方法
+## 7. 🆕 给 KV cache 瘦身的方法
 
 上面公式里的每一项，都有人想办法压缩：
 

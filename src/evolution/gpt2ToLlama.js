@@ -228,6 +228,7 @@ const STEPS = [
       relabel(s, { block_mlp: "SwiGLU MLP" });
     },
     highlight: ["mlp_linear1", "mlp_linear_up", "mlp_gelu", "mlp_mul", "mlp_linear2", "block_mlp"],
+    note: "swiglu_notes",
   },
   {
     title: { en: "No biases", zh: "去掉 bias" },

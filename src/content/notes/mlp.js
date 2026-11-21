@@ -1803,4 +1803,169 @@ dropout 放在**分支**（\`mlp(...)\`）上，而不是 \`x\` 上。残差流�
 `,
     },
   },
+
+  swiglu_notes: {
+    en: {
+      title: "SwiGLU: LLaMA's gated MLP",
+      md: `
+**🆕 LLaMA replaces GPT-2's MLP with SwiGLU. GPT-2 widens the vector and passes it through an activation function. LLaMA widens it twice in parallel, passes one copy through an activation function, and uses it to scale the other copy number by number. The scaling copy is called the gate.**
+
+## 1. GPT-2's MLP: two matrices
+
+\`\`\`python
+self.fc_in  = nn.Linear(768, 3072)     # widen 4×
+self.act    = nn.GELU()
+self.fc_out = nn.Linear(3072, 768)     # back to 768
+
+def forward(self, x):
+    return self.fc_out(self.act(self.fc_in(x)))
+\`\`\`
+
+Widen, apply [GELU](#info:gelu), narrow back. Each of the 3072 numbers measures how well the token matches one learned pattern ([details](#info:mlp_fc_in_notes)).
+
+## 2. LLaMA's MLP: three matrices
+
+\`\`\`python
+self.gate_proj = nn.Linear(4096, 14336, bias=False)
+self.up_proj   = nn.Linear(4096, 14336, bias=False)
+self.down_proj = nn.Linear(14336, 4096, bias=False)
+
+def forward(self, x):
+    gate = F.silu(self.gate_proj(x))    # (B, T, 14336)
+    up   = self.up_proj(x)              # (B, T, 14336)
+    return self.down_proj(gate * up)    # (B, T, 4096)
+\`\`\`
+
+Step by step, for an input $x$ of shape $(B, T, 4096)$:
+
+\`\`\`text
+gate_proj(x)       (B, T, 14336)   widen
+  -> SiLU          (B, T, 14336)   activation, shape unchanged: this is the gate
+up_proj(x)         (B, T, 14336)   widen the same x again, with different weights
+gate * up          (B, T, 14336)   element-wise product
+  -> down_proj     (B, T, 4096)    back to 4096
+\`\`\`
+
+\`gate_proj\` and \`up_proj\` both read the same $x$ and have the same shape, but their weights are separate, so they produce different numbers. Only the gate goes through an activation function. \`up\` stays linear.
+
+As in GPT-2, every token goes through the MLP separately. The MLP never mixes information between tokens.
+
+## 3. What the gate does
+
+\`gate * up\` multiplies position by position: the $i$-th number of the gate scales the $i$-th number of \`up\`. A small example with 4 numbers instead of 14336:
+
+\`\`\`text
+gate_proj(x)    = [-4.0,     0.0,   1.0,    3.0   ]
+gate = SiLU(·)  = [-0.0719,  0.0,   0.7311, 2.8577]
+up              = [ 2.0,    -1.0,   3.0,    0.5   ]
+gate * up       = [-0.1439,  0.0,   2.1932, 1.4289]
+\`\`\`
+
+- Position 0: the gate is close to 0, so \`up\`'s 2.0 is almost blocked.
+- Position 1: the gate is exactly 0, so \`up\`'s value is blocked completely.
+- Positions 2 and 3: the gate is clearly positive, so \`up\`'s value passes, scaled by the gate.
+
+So each gate number acts like a valve: it decides how much of the matching \`up\` number gets through.
+
+**The difference from GPT-2.** In GPT-2, GELU decides from a number how much of **that same number** to keep. In SwiGLU, the decision "how much to let through" (the gate) and the content "what to let through" (\`up\`) come from two separate projections, so the model can learn them independently.
+
+## 4. The name
+
+- **GLU** (gated linear unit): the general structure, one projection passed through an activation and multiplied by another projection. The original GLU used sigmoid as the gate's activation.
+- **Swish**: the activation $\\text{Swish}(z) = z \\cdot \\sigma(z)$, where $\\sigma$ is the sigmoid. PyTorch calls it SiLU (\`F.silu\`). Its curve is very close to GELU.
+- **SwiGLU** = a GLU whose gate uses Swish.
+
+## 5. Sizes in LLaMA 3 8B
+
+The hidden size is 14336, which is $14336 / 4096 = 3.5$ times \`n_embd\`, not 4 times as in GPT-2. Each of the three matrices is $4096 \\times 14336 \\approx 58.7\\text{M}$ parameters, so one MLP has about 176M, and none of them have biases.
+
+## References
+
+1. **Language Modeling with Gated Convolutional Networks (2016).** Dauphin et al. introduce the gated linear unit (GLU). [GLU ↗](https://arxiv.org/abs/1612.08083)
+2. **GLU Variants Improve Transformer (2020).** Shazeer tries GLU variants in the Transformer MLP and finds SwiGLU among the best. [GLU Variants ↗](https://arxiv.org/abs/2002.05202)
+3. **LLaMA: Open and Efficient Foundation Language Models (2023).** LLaMA adopts SwiGLU, and LLaMA 2 and 3 keep it. [LLaMA ↗](https://arxiv.org/abs/2302.13971)
+`,
+    },
+    zh: {
+      title: "SwiGLU：LLaMA 的门控 MLP",
+      md: `
+**🆕 LLaMA 把 GPT-2 的 MLP 换成了 SwiGLU。GPT-2 是把向量放大，再过一个激活函数。LLaMA 是同时放大两份，其中一份过激活函数，再拿它去逐个数地缩放另一份。负责缩放的那一份叫做门（gate）。**
+
+## 1. GPT-2 的 MLP：两个矩阵
+
+\`\`\`python
+self.fc_in  = nn.Linear(768, 3072)     # 放大 4 倍
+self.act    = nn.GELU()
+self.fc_out = nn.Linear(3072, 768)     # 缩回 768
+
+def forward(self, x):
+    return self.fc_out(self.act(self.fc_in(x)))
+\`\`\`
+
+放大，过 [GELU](#info:gelu)，再缩回来。放大后的 3072 个数，每一个衡量的是这个 token 和某个学到的模式有多匹配（[详见](#info:mlp_fc_in_notes)）。
+
+## 2. LLaMA 的 MLP：三个矩阵
+
+\`\`\`python
+self.gate_proj = nn.Linear(4096, 14336, bias=False)
+self.up_proj   = nn.Linear(4096, 14336, bias=False)
+self.down_proj = nn.Linear(14336, 4096, bias=False)
+
+def forward(self, x):
+    gate = F.silu(self.gate_proj(x))    # (B, T, 14336)
+    up   = self.up_proj(x)              # (B, T, 14336)
+    return self.down_proj(gate * up)    # (B, T, 4096)
+\`\`\`
+
+输入 $x$ 的形状是 $(B, T, 4096)$，一步一步看：
+
+\`\`\`text
+gate_proj(x)       (B, T, 14336)   放大
+  -> SiLU          (B, T, 14336)   激活函数，形状不变，得到的就是 gate
+up_proj(x)         (B, T, 14336)   同一个 x 再放大一次，用的是另一套权重
+gate * up          (B, T, 14336)   逐元素相乘
+  -> down_proj     (B, T, 4096)    缩回 4096
+\`\`\`
+
+\`gate_proj\` 和 \`up_proj\` 读的是同一个 $x$，输出形状也一样，但权重各是各的，算出来的数不同。只有 gate 过激活函数，\`up\` 保持线性。
+
+和 GPT-2 一样，每个 token 各自过 MLP，MLP 不会在 token 之间交换信息。
+
+## 3. gate 起什么作用
+
+\`gate * up\` 是按位置相乘：gate 的第 $i$ 个数去乘 \`up\` 的第 $i$ 个数。用 4 个数代替 14336 个举个例子：
+
+\`\`\`text
+gate_proj(x)    = [-4.0,     0.0,   1.0,    3.0   ]
+gate = SiLU(·)  = [-0.0719,  0.0,   0.7311, 2.8577]
+up              = [ 2.0,    -1.0,   3.0,    0.5   ]
+gate * up       = [-0.1439,  0.0,   2.1932, 1.4289]
+\`\`\`
+
+- 第 0 位：gate 接近 0，\`up\` 的 2.0 几乎被挡住了。
+- 第 1 位：gate 正好是 0，\`up\` 的值被完全挡住。
+- 第 2、3 位：gate 明显大于 0，\`up\` 的值按 gate 的大小缩放后通过。
+
+所以 gate 的每个数就像一个阀门，决定 \`up\` 里对应的那个数能通过多少。
+
+**和 GPT-2 的区别。** GPT-2 里，GELU 是看一个数本身，来决定**这个数自己**留多少。SwiGLU 里，"放多少"（gate）和"放什么"（\`up\`）来自两个不同的投影，模型可以分开学这两件事。
+
+## 4. 名字的由来
+
+- **GLU**（gated linear unit，门控线性单元）：泛指这种结构，一个投影过激活函数后，去乘另一个投影。最早的 GLU 用 sigmoid 当门的激活函数。
+- **Swish**：激活函数 $\\text{Swish}(z) = z \\cdot \\sigma(z)$，$\\sigma$ 是 sigmoid。PyTorch 里叫 SiLU（\`F.silu\`），曲线和 GELU 非常接近。
+- **SwiGLU** 就是门用 Swish 的 GLU。
+
+## 5. LLaMA 3 8B 里的尺寸
+
+hidden size 是 14336，是 \`n_embd\` 的 $14336 / 4096 = 3.5$ 倍，不是 GPT-2 的 4 倍。三个矩阵每个都是 $4096 \\times 14336 \\approx 58.7\\text{M}$ 个参数，一个 MLP 合计约 176M，而且都没有 bias。
+
+## 参考资料
+
+1. **Language Modeling with Gated Convolutional Networks (2016).** Dauphin 等人提出门控线性单元（GLU）。[GLU ↗](https://arxiv.org/abs/1612.08083)
+2. **GLU Variants Improve Transformer (2020).** Shazeer 在 Transformer 的 MLP 里试了多种 GLU 变体，SwiGLU 是效果最好的几种之一。[GLU Variants ↗](https://arxiv.org/abs/2002.05202)
+3. **LLaMA: Open and Efficient Foundation Language Models (2023).** LLaMA 采用了 SwiGLU，LLaMA 2 和 3 也沿用了下来。[LLaMA ↗](https://arxiv.org/abs/2302.13971)
+`,
+    },
+  },
 };
