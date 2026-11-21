@@ -28,19 +28,14 @@ export function buildCodeHtml({ component, selectedId, noteOverrides = {} }) {
     });
   }
 
-  // 2) Make constructor calls clickable
-  {
-    const attnAssignRaw = "CausalSelfAttention(n_head=n_head, n_embd=n_embd, dropout=dropout)";
-    const esc = escapeHtml(attnAssignRaw);
-    const wrapped = selectedId === "block_attn"
-      ? `<span data-action="select:attn_class" style="text-decoration: underline; cursor: pointer;"><mark>${esc}</mark></span>`
-      : `<span data-action="select:attn_class" style="text-decoration: underline; cursor: pointer;">${esc}</span>`;
-    html = html.replaceAll ? html.replaceAll(esc, wrapped) : html.replace(esc, wrapped);
-  }
-  {
-    const mlpAssignRaw = 'MLP(n_embd=n_embd, dropout=dropout)';
-    const esc = escapeHtml(mlpAssignRaw);
-    const wrapped = `<span data-action="select:mlp_subdiagram" style="text-decoration: underline; cursor: pointer;">${selectedId === "block_mlp" ? `<mark>${esc}</mark>` : esc}</span>`;
+  // 2) Constructor calls: the class name jumps to that class's code; the whole call is marked when its node is selected.
+  for (const [name, args, target, node] of [
+    ["CausalSelfAttention", "(n_head=n_head, n_embd=n_embd, dropout=dropout)", "attn_class", "block_attn"],
+    ["MLP", "(n_embd=n_embd, dropout=dropout)", "mlp_subdiagram", "block_mlp"],
+  ]) {
+    const esc = escapeHtml(name + args);
+    const linked = `<span data-action="select:${target}" style="text-decoration: underline; cursor: pointer;">${name}</span>${escapeHtml(args)}`;
+    const wrapped = selectedId === node ? `<mark>${linked}</mark>` : linked;
     html = html.replaceAll ? html.replaceAll(esc, wrapped) : html.replace(esc, wrapped);
   }
   {
@@ -221,7 +216,8 @@ export function buildCodeHtml({ component, selectedId, noteOverrides = {} }) {
   html = html.replace(/\b(repeat_interleave|GQA)\b/g, (m) => `<span data-action="open:gqa_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
   // LLaMA's SwiGLU MLP: the name.
   html = html.replace(/\bSwiGLU\b/g, (m) => `<span data-action="open:swiglu_notes" style="text-decoration: underline; cursor: pointer;">${m}</span>`);
-  // LLaMA's block: MLP(...) jumps to the MLP code.
+  // LLaMA's block: CausalSelfAttention(...) and MLP(...) jump to their code.
+  html = html.replace(/= (CausalSelfAttention)(?=\((?:<\/mark>)?n_embd=n_embd, n_head=n_head, n_kv_head)/g, '= <span data-action="select:attn_class" style="text-decoration: underline; cursor: pointer;">$1</span>');
   html = html.replace(/= (MLP)(?=\(n_embd=n_embd, hidden=hidden\))/g, '= <span data-action="select:mlp_subdiagram" style="text-decoration: underline; cursor: pointer;">$1</span>');
   // LLaMA's MLP class (GPT-2 has a class with the same name, so only when the code is the gated one).
   if (component.code.includes("gate_proj")) html = html.replace(/class\s+(MLP)(?=\(nn\.Module\))/g, 'class <span data-action="open:swiglu_notes" style="text-decoration: underline; cursor: pointer;">$1</span>');
@@ -237,6 +233,8 @@ export function buildCodeHtml({ component, selectedId, noteOverrides = {} }) {
 
   // 10) Presentation: links get a class instead of inline styles, then Python syntax colors.
   html = html.split('style="text-decoration: underline; cursor: pointer;"').join('class="code-link"');
+  // Links that jump to other code (select:) look different from links that open a note.
+  html = html.replace(/(data-action="select:[^"]*") class="code-link"/g, '$1 class="code-link code-jump" title="Jump to this code"');
   return highlightPython(html);
 }
 
